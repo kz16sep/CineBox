@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}CineBox{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+  </head>
+  <body class="theme-dark">
+    <header class="navbar">
+      <div class="container">
+        <a href="{{ url_for('main.home') }}" class="logo">Cine<span>Box</span></a>
+        <form class="search">
+          <input type="text" placeholder="Tìm kiếm phim, series.." />
+        </form>
+        <nav>
+          <a class="btn btn-secondary" href="{{ url_for('main.register') }}">Đăng ký</a>
+          <a class="btn btn-primary" href="{{ url_for('main.login') }}">Đăng nhập</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="container main-content">
+      {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+      <div class="container">© 2024 CINEBOX · Điều khoản sử dụng · Liên hệ</div>
+    </footer>
+  </body>
+  </html>
+
+

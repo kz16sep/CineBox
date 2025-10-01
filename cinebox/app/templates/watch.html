@@ -1,0 +1,26 @@
+{% extends 'base.html' %}
+{% block title %}Xem: {{ movie.title }} · CineBox{% endblock %}
+{% block content %}
+<section class="watch">
+  <h2>{{ movie.title }}</h2>
+  <video class="player" controls poster="{{ movie.backdrop }}">
+    {% for s in movie.sources %}
+    <source src="{{ s.url }}" type="video/mp4" />
+    {% endfor %}
+    Trình duyệt của bạn không hỗ trợ video.
+  </video>
+
+  <h3>Phim mới ra mắt</h3>
+  <div class="cards">
+    {% for m in [movie] %}
+    <a class="card" href="{{ url_for('main.detail', movie_id=m.id) }}">
+      <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
+      <div class="card-title">{{ m.title }}</div>
+      <div class="stars">★★★★★</div>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}
+
+

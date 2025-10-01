@@ -1,0 +1,45 @@
+{% extends 'base.html' %}
+{% block title %}Trang chủ · CineBox{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="hero-card">
+    <div class="hero-text">
+      <span class="badge">NEW</span>
+      <h2>{{ trending[0].title }}</h2>
+      <p>{{ trending[0].description }}</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="{{ url_for('main.watch', movie_id=trending[0].id) }}">Xem ngay</a>
+        <a class="btn btn-secondary" href="{{ url_for('main.detail', movie_id=trending[0].id) }}">Thêm vào danh sách</a>
+      </div>
+    </div>
+  </div>
+  </section>
+
+<section>
+  <h3>Phim đang thịnh hành</h3>
+  <div class="cards">
+    {% for m in trending %}
+    <a class="card" href="{{ url_for('main.detail', movie_id=m.id) }}">
+      <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
+      <div class="card-title">{{ m.title }}</div>
+      <div class="stars">★★★★★</div>
+    </a>
+    {% endfor %}
+  </div>
+  </section>
+
+<section>
+  <h3>Phim được đề xuất cho bạn</h3>
+  <div class="cards">
+    {% for m in recommended %}
+    <a class="card" href="{{ url_for('main.detail', movie_id=m.id) }}">
+      <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
+      <div class="card-title">{{ m.title }}</div>
+      <div class="stars">★★★★★</div>
+    </a>
+    {% endfor %}
+  </div>
+  </section>
+{% endblock %}
+
+
