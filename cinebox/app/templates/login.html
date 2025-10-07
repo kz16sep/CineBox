@@ -4,12 +4,15 @@
 <section class="auth-card">
   <h1>Đăng nhập</h1>
   <form method="post" class="form">
-    <label>Email</label>
-    <input type="email" name="email" required placeholder="email@domain.com" />
+    {% if error %}
+      <div class="error">{{ error }}</div>
+    {% endif %}
+    <label>Tài khoản hoặc email</label>
+    <input type="text" name="username" required placeholder="admin hoặc email@domain.com" />
     <label>Mật khẩu</label>
     <input type="password" name="password" required placeholder="••••••••" />
     <button class="btn btn-primary" type="submit">Đăng nhập</button>
-    <p class="muted">Chưa có tài khoản? <a href="{{ url_for('main.register') }}">Đăng ký ngay</a></p>
+    <p class="muted highlight">Chưa có tài khoản? <a class="highlight-link" href="{{ url_for('main.register') }}">Đăng ký ngay</a></p>
     <div class="divider"><span>Hoặc</span></div>
     <div class="social">
       <button type="button" class="btn btn-google">Đăng nhập bằng Google</button>

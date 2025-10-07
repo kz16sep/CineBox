@@ -4,6 +4,11 @@
 <section class="auth-card">
   <h1>Đăng ký</h1>
   <form method="post" class="form">
+    {% if error %}
+      <div class="error">{{ error }}</div>
+    {% elif success %}
+      <div class="success">{{ success }}</div>
+    {% endif %}
     <label>Họ tên</label>
     <input type="text" name="name" required placeholder="Nguyễn Văn A" />
     <label>Email</label>
@@ -11,7 +16,7 @@
     <label>Mật khẩu</label>
     <input type="password" name="password" required placeholder="••••••••" />
     <button class="btn btn-primary" type="submit">Tạo tài khoản</button>
-    <p class="muted">Đã có tài khoản? <a href="{{ url_for('main.login') }}">Đăng nhập</a></p>
+    <p class="muted highlight">Đã có tài khoản? <a class="highlight-link" href="{{ url_for('main.login') }}">Đăng nhập</a></p>
   </form>
   </section>
 {% endblock %}

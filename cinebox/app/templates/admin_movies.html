@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+{% block title %}Quản lý phim · CineBox{% endblock %}
+{% block content %}
+<div class="admin">
+  <h1>Quản lý phim</h1>
+  <a class="btn btn-primary" href="{{ url_for('main.admin_movie_create') }}">Thêm phim</a>
+  <table class="table">
+    <thead><tr><th>ID</th><th>Tiêu đề</th><th>Năm</th><th>Hành động</th></tr></thead>
+    <tbody>
+      {% for m in movies %}
+      <tr>
+        <td>{{ m.movieId }}</td>
+        <td>{{ m.title }}</td>
+        <td>{{ m.releaseYear or '' }}</td>
+        <td>
+          <a class="btn btn-primary" href="{{ url_for('main.admin_movie_edit', movie_id=m.movieId) }}">Sửa</a>
+          <form method="post" action="{{ url_for('main.admin_movie_delete', movie_id=m.movieId) }}" style="display:inline" onsubmit="return confirm('Xoá phim này?');">
+            <button class="btn btn-danger" type="submit">Xoá</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+

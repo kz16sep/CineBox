@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+{% block title %}{{ 'Sửa' if movie else 'Thêm' }} phim · CineBox{% endblock %}
+{% block content %}
+<div class="admin">
+  <h1>{{ 'Sửa' if movie else 'Thêm' }} phim</h1>
+  <form method="post" class="form">
+    <label>Tiêu đề</label>
+    <input type="text" name="title" value="{{ movie.title if movie else '' }}" required>
+    <label>Năm phát hành</label>
+    <input type="number" name="releaseYear" min="1800" max="2100" value="{{ movie.releaseYear if movie else '' }}">
+    <label>Quốc gia</label>
+    <input type="text" name="country" value="{{ movie.country if movie else '' }}" placeholder="VN, US, JP...">
+    <label>Mô tả</label>
+    <textarea name="overview" rows="4">{{ movie.overview if movie else '' }}</textarea>
+    <label>Đạo diễn</label>
+    <input type="text" name="director" value="{{ movie.director if movie else '' }}">
+    <label>Diễn viên</label>
+    <input type="text" name="cast" value="{{ movie.cast if movie else '' }}" placeholder="Tên diễn viên, cách nhau bởi dấu phẩy">
+    <label>Thời lượng (phút)</label>
+    <input type="number" name="durationMin" min="1" step="1" value="{{ movie.durationMin if movie else '' }}">
+    <label>Điểm IMDb</label>
+    <input type="number" name="imdbRating" min="0" max="10" step="0.1" value="{{ movie.imdbRating if movie else '' }}">
+    <label>Trailer URL</label>
+    <input type="text" name="trailerUrl" value="{{ movie.trailerUrl if movie else '' }}">
+    <label>Poster URL</label>
+    <input type="text" name="posterUrl" value="{{ movie.posterUrl if movie else '' }}">
+    <label>Backdrop URL</label>
+    <input type="text" name="backdropUrl" value="{{ movie.backdropUrl if movie else '' }}">
+    <label>Lượt xem (viewCount)</label>
+    <input type="number" name="viewCount" min="0" step="1" value="{{ movie.viewCount if movie else 0 }}">
+    <button class="btn btn-primary" type="submit">Lưu</button>
+    <a class="btn" href="{{ url_for('main.admin_movies') }}">Hủy</a>
+  </form>
+</div>
+{% endblock %}
+
+

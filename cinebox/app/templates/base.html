@@ -16,8 +16,19 @@
           <input type="text" placeholder="Tìm kiếm phim, series.." />
         </form>
         <nav>
-          <a class="btn btn-secondary" href="{{ url_for('main.register') }}">Đăng ký</a>
-          <a class="btn btn-primary" href="{{ url_for('main.login') }}">Đăng nhập</a>
+          {% if session.get('user_id') %}
+            {% if session.get('role') == 'Admin' %}
+              <a class="btn btn-secondary" href="{{ url_for('main.admin_movies') }}">Quản lý phim</a>
+              <a class="btn btn-secondary" href="{{ url_for('main.admin_users') }}">Quản lý tài khoản</a>
+            {% endif %}
+            <div class="user-box">
+              <img class="avatar" src="{{ session.get('avatar') or url_for('static', filename='img/avatar_default.png') }}" alt="avatar">
+              <span class="username">{{ session.get('username') or session.get('email') }}</span>
+              <a class="btn btn-secondary" href="{{ url_for('main.logout') }}">Đăng xuất</a>
+            </div>
+          {% else %}
+            
+          {% endif %}
         </nav>
       </div>
     </header>

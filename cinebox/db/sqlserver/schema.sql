@@ -1,6 +1,6 @@
--- Create database (run in master)
--- CREATE DATABASE CineBoxDB;
--- GO
+Create database (run in master)
+CREATE DATABASE CineBoxDB;
+GO
 
 USE CineBoxDB;
 GO
@@ -67,6 +67,19 @@ CREATE TABLE cine.Movie (
 );
 CREATE INDEX IX_Movie_title ON cine.Movie(title);
 CREATE INDEX IX_Movie_releaseYear ON cine.Movie(releaseYear);
+GO
+
+-- Extend Movie with common metadata if missing
+IF COL_LENGTH('cine.Movie','director') IS NULL
+  ALTER TABLE cine.Movie ADD director NVARCHAR(200) NULL;
+IF COL_LENGTH('cine.Movie','cast') IS NULL
+  ALTER TABLE cine.Movie ADD cast NVARCHAR(500) NULL;
+IF COL_LENGTH('cine.Movie','durationMin') IS NULL
+  ALTER TABLE cine.Movie ADD durationMin INT NULL;
+IF COL_LENGTH('cine.Movie','imdbRating') IS NULL
+  ALTER TABLE cine.Movie ADD imdbRating DECIMAL(3,1) NULL;
+IF COL_LENGTH('cine.Movie','trailerUrl') IS NULL
+  ALTER TABLE cine.Movie ADD trailerUrl NVARCHAR(500) NULL;
 GO
 
 -- MOVIEGENRE
@@ -152,83 +165,6 @@ CREATE UNIQUE INDEX UX_Recommendation ON cine.Recommendation(userId, movieId, al
 CREATE INDEX IX_Recommendation_rank ON cine.Recommendation(userId, algo, rank);
 GO
 
--- MOVIELENS INTEGRATION
--- Add external identifiers to Movie for mapping with MovieLens links.csv
-IF COL_LENGTH('cine.Movie', 'mlMovieId') IS NULL
-  ALTER TABLE cine.Movie ADD mlMovieId INT NULL CONSTRAINT UQ_Movie_mlMovieId UNIQUE;
-IF COL_LENGTH('cine.Movie', 'imdbId') IS NULL
-  ALTER TABLE cine.Movie ADD imdbId INT NULL;
-IF COL_LENGTH('cine.Movie', 'tmdbId') IS NULL
-  ALTER TABLE cine.Movie ADD tmdbId INT NULL;
-CREATE INDEX IX_Movie_mlMovieId ON cine.Movie(mlMovieId);
-CREATE INDEX IX_Movie_imdb_tmdb ON cine.Movie(imdbId, tmdbId);
-GO
-
--- MovieLens anonymous users
-IF OBJECT_ID('cine.MLUser','U') IS NOT NULL DROP TABLE cine.MLUser;
-CREATE TABLE cine.MLUser (
-  mlUserId   INT NOT NULL PRIMARY KEY,
-  createdAt  DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME()
-);
-GO
-
--- MovieLens ratings (supports 0.5 to 5.0 in 0.5 increments)
-IF OBJECT_ID('cine.MLRating','U') IS NOT NULL DROP TABLE cine.MLRating;
-CREATE TABLE cine.MLRating (
-  mlUserId  INT NOT NULL CONSTRAINT FK_MLRating_User REFERENCES cine.MLUser(mlUserId) ON DELETE CASCADE,
-  movieId   BIGINT NOT NULL CONSTRAINT FK_MLRating_Movie REFERENCES cine.Movie(movieId) ON DELETE CASCADE,
-  value     DECIMAL(2,1) NOT NULL,
-  ratedAt   DATETIME2(0) NOT NULL,
-  CONSTRAINT CK_MLRating_Value CHECK (value IN (0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0)),
-  CONSTRAINT PK_MLRating PRIMARY KEY (mlUserId, movieId)
-);
-CREATE INDEX IX_MLRating_movieId ON cine.MLRating(movieId);
-CREATE INDEX IX_MLRating_userId ON cine.MLRating(mlUserId);
-GO
-
--- MovieLens tags (free-text tagging per user/movie)
-IF OBJECT_ID('cine.MLTagging','U') IS NOT NULL DROP TABLE cine.MLTagging;
-CREATE TABLE cine.MLTagging (
-  taggingId  BIGINT IDENTITY(1,1) PRIMARY KEY,
-  mlUserId   INT NOT NULL CONSTRAINT FK_MLTagging_User REFERENCES cine.MLUser(mlUserId) ON DELETE CASCADE,
-  movieId    BIGINT NOT NULL CONSTRAINT FK_MLTagging_Movie REFERENCES cine.Movie(movieId) ON DELETE CASCADE,
-  tag        NVARCHAR(255) NOT NULL,
-  taggedAt   DATETIME2(0) NOT NULL
-);
-CREATE INDEX IX_MLTagging_movie ON cine.MLTagging(movieId, taggedAt DESC);
-CREATE INDEX IX_MLTagging_user ON cine.MLTagging(mlUserId, taggedAt DESC);
-CREATE INDEX IX_MLTagging_tag ON cine.MLTagging(tag);
-GO
-
--- Performance indexes for MovieLens scale
--- Fast lookups by movie, and by user with recent activity
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_MLRating_movie_value_time' AND object_id = OBJECT_ID('cine.MLRating'))
-  CREATE NONCLUSTERED INDEX IX_MLRating_movie_value_time ON cine.MLRating(movieId, ratedAt DESC) INCLUDE (value, mlUserId);
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_MLRating_user_time' AND object_id = OBJECT_ID('cine.MLRating'))
-  CREATE NONCLUSTERED INDEX IX_MLRating_user_time ON cine.MLRating(mlUserId, ratedAt DESC) INCLUDE (value, movieId);
-GO
-
--- Aggregation views for convenient queries
-IF OBJECT_ID('cine.vw_ML_RatingSummary','V') IS NOT NULL DROP VIEW cine.vw_ML_RatingSummary;
-GO
-EXEC('CREATE VIEW cine.vw_ML_RatingSummary AS
-SELECT m.movieId,
-       COUNT_BIG(r.value) AS ratingCount,
-       AVG(CAST(r.value AS FLOAT)) AS avgRating,
-       MAX(r.ratedAt) AS lastRatedAt
-FROM cine.Movie m
-LEFT JOIN cine.MLRating r ON r.movieId = m.movieId
-GROUP BY m.movieId');
-GO
-
-IF OBJECT_ID('cine.vw_ML_TopTags','V') IS NOT NULL DROP VIEW cine.vw_ML_TopTags;
-GO
-EXEC('CREATE VIEW cine.vw_ML_TopTags AS
-SELECT t.movieId,
-       t.tag,
-       COUNT_BIG(*) AS uses
-FROM cine.MLTagging t
-GROUP BY t.movieId, t.tag');
-GO
+-- MovieLens integration removed per project requirements
 
 
