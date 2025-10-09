@@ -1,5 +1,6 @@
-from flask import Blueprint, render_template, request, redirect, url_for, current_app, session
+from flask import Blueprint, render_template, request, redirect, url_for, current_app, session, jsonify
 from sqlalchemy import text
+from content_based_recommender import ContentBasedRecommender
 
 
 main_bp = Blueprint("main", __name__)
@@ -10,6 +11,8 @@ def home():
     # Lấy danh sách phim từ DB bằng engine (odbc_connect); nếu chưa đăng nhập, chuyển tới form đăng nhập
     if not session.get("user_id"):
         return redirect(url_for("main.login"))
+    
+    # Trending movies (phim phổ biến)
     try:
         with current_app.db_engine.connect() as conn:
             rows = conn.execute(text(
@@ -27,6 +30,40 @@ def home():
             ]
     except Exception:
         trending = []
+    
+    # Personal recommendations (gợi ý cá nhân)
+    user_id = session.get("user_id")
+    personal_recommendations = []
+    
+    if user_id:
+        try:
+            # Lấy gợi ý cá nhân từ PersonalRecommendation
+            with current_app.db_engine.connect() as conn:
+                personal_rows = conn.execute(text("""
+                    SELECT TOP 12 m.movieId, m.title, m.posterUrl, pr.score
+                    FROM cine.PersonalRecommendation pr
+                    JOIN cine.Movie m ON m.movieId = pr.movieId
+                    WHERE pr.userId = :user_id AND pr.expiresAt > GETDATE()
+                    ORDER BY pr.rank
+                """), {"user_id": user_id}).mappings().all()
+                
+                personal_recommendations = [
+                    {
+                        "id": row["movieId"],
+                        "title": row["title"],
+                        "poster": row.get("posterUrl") or "/static/img/dune2.jpg",
+                        "score": row["score"]
+                    }
+                    for row in personal_rows
+                ]
+        except Exception as e:
+            print(f"Error getting personal recommendations: {e}")
+            personal_recommendations = []
+    
+    # Fallback nếu không có gợi ý cá nhân
+    if not personal_recommendations:
+        personal_recommendations = trending
+    
     if not trending:
         # Fallback demo data to avoid empty list errors in templates
         trending = [
@@ -45,7 +82,10 @@ def home():
                 "description": "Bác sĩ Stephen Strange và phép thuật...",
             },
         ]
-    return render_template("home.html", trending=trending, recommended=trending)
+    
+    return render_template("home.html", 
+                         trending=trending, 
+                         recommended=personal_recommendations)
 
 
 @main_bp.route("/login", methods=["GET", "POST"])
@@ -108,6 +148,7 @@ def detail(movie_id: int):
         ), {"id": movie_id}).mappings().first()
     if not r:
         return redirect(url_for("main.home"))
+    
     movie = {
         "id": r["movieId"],
         "title": r["title"],
@@ -120,7 +161,32 @@ def detail(movie_id: int):
         "description": r.get("overview") or "",
         "sources": [{"label": "720p", "url": "https://www.w3schools.com/html/movie.mp4"}],
     }
+    
+    # CONTENT-BASED: Phim liên quan sử dụng ContentBasedRecommender
     related = []
+    try:
+        # Tạo recommender instance
+        recommender = ContentBasedRecommender(current_app.db_engine)
+        
+        # Lấy phim liên quan với hybrid approach
+        related_movies = recommender.get_related_movies_hybrid(movie_id, 6)
+        
+        # Format data cho template
+        related = [
+            {
+                "id": movie["movieId"],
+                "title": movie["title"],
+                "poster": movie["posterUrl"],
+                "similarity": movie["similarity"],
+                "overview": movie.get("overview", "")
+            }
+            for movie in related_movies
+        ]
+        
+    except Exception as e:
+        print(f"Error getting related movies: {e}")
+        related = []
+    
     return render_template("detail.html", movie=movie, related=related)
 
 
@@ -305,6 +371,139 @@ def admin_users():
     return render_template("admin_users.html", users=users)
     # Remove DB health/config endpoints in UI-only mode
 
+
+# API Endpoints for Content-based Recommendations
+@main_bp.route("/api/related-movies/<int:movie_id>")
+def api_related_movies(movie_id: int):
+    """
+    API endpoint để lấy phim liên quan
+    
+    Args:
+        movie_id: ID của phim đang xem
+        
+    Returns:
+        JSON response với danh sách phim liên quan
+    """
+    try:
+        # Tạo recommender instance
+        recommender = ContentBasedRecommender(current_app.db_engine)
+        
+        # Lấy phim liên quan
+        related_movies = recommender.get_related_movies_hybrid(movie_id, 6)
+        
+        return jsonify({
+            "success": True,
+            "movie_id": movie_id,
+            "related_movies": related_movies,
+            "count": len(related_movies)
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "movie_id": movie_id,
+            "related_movies": []
+        }), 500
+
+@main_bp.route("/api/movie-info/<int:movie_id>")
+def api_movie_info(movie_id: int):
+    """
+    API endpoint để lấy thông tin chi tiết phim
+    
+    Args:
+        movie_id: ID của phim
+        
+    Returns:
+        JSON response với thông tin phim
+    """
+    try:
+        # Tạo recommender instance
+        recommender = ContentBasedRecommender(current_app.db_engine)
+        
+        # Lấy thông tin phim
+        movie_info = recommender.get_movie_info(movie_id)
+        
+        if movie_info:
+            return jsonify({
+                "success": True,
+                "movie": movie_info
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Movie not found",
+                "movie_id": movie_id
+            }), 404
+            
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "movie_id": movie_id
+        }), 500
+
+@main_bp.route("/api/similarity/<int:movie_id1>/<int:movie_id2>")
+def api_similarity(movie_id1: int, movie_id2: int):
+    """
+    API endpoint để lấy điểm similarity giữa 2 phim
+    
+    Args:
+        movie_id1: ID phim thứ nhất
+        movie_id2: ID phim thứ hai
+        
+    Returns:
+        JSON response với điểm similarity
+    """
+    try:
+        # Tạo recommender instance
+        recommender = ContentBasedRecommender(current_app.db_engine)
+        
+        # Lấy điểm similarity
+        similarity = recommender.get_similarity_score(movie_id1, movie_id2)
+        
+        return jsonify({
+            "success": True,
+            "movie_id1": movie_id1,
+            "movie_id2": movie_id2,
+            "similarity": similarity
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "movie_id1": movie_id1,
+            "movie_id2": movie_id2
+        }), 500
+
+@main_bp.route("/api/recommendation-stats")
+def api_recommendation_stats():
+    """
+    API endpoint để lấy thống kê về hệ thống gợi ý
+    
+    Returns:
+        JSON response với thống kê
+    """
+    try:
+        # Tạo recommender instance
+        recommender = ContentBasedRecommender(current_app.db_engine)
+        
+        # Lấy thống kê
+        stats = recommender.get_statistics()
+        has_data = recommender.check_similarity_data_exists()
+        
+        return jsonify({
+            "success": True,
+            "has_similarity_data": has_data,
+            "statistics": stats
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 # DB health endpoints removed for UI-only build
 

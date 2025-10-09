@@ -1,6 +1,6 @@
-Create database (run in master)
-CREATE DATABASE CineBoxDB;
-GO
+-- Create database (run in master)
+-- CREATE DATABASE CineBoxDB;
+-- GO
 
 USE CineBoxDB;
 GO
@@ -149,22 +149,38 @@ CREATE TABLE cine.Comment (
 CREATE INDEX IX_Comment_movie ON cine.Comment(movieId, createdAt DESC);
 GO
 
--- RECOMMENDATION
-IF OBJECT_ID('cine.Recommendation','U') IS NOT NULL DROP TABLE cine.Recommendation;
-CREATE TABLE cine.Recommendation (
-  recId       BIGINT IDENTITY(1,1) PRIMARY KEY,
-  userId      BIGINT NOT NULL CONSTRAINT FK_Recommendation_User REFERENCES cine.[User](userId) ON DELETE CASCADE,
-  movieId     BIGINT NOT NULL CONSTRAINT FK_Recommendation_Movie REFERENCES cine.Movie(movieId) ON DELETE CASCADE,
-  algo        NVARCHAR(20) NOT NULL,
-  score       FLOAT NOT NULL,
-  rank        INT NOT NULL,
-  generatedAt DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME(),
-  expiresAt   DATETIME2(0) NULL
+-- MOVIE SIMILARITY (Content-based Filtering)
+IF OBJECT_ID('cine.MovieSimilarity','U') IS NOT NULL DROP TABLE cine.MovieSimilarity;
+CREATE TABLE cine.MovieSimilarity (
+  movieId1 BIGINT NOT NULL CONSTRAINT FK_MovieSimilarity_Movie1 REFERENCES cine.Movie(movieId) ON DELETE CASCADE,
+  movieId2 BIGINT NOT NULL CONSTRAINT FK_MovieSimilarity_Movie2 REFERENCES cine.Movie(movieId) ON DELETE NO ACTION,
+  similarity FLOAT NOT NULL CONSTRAINT CK_MovieSimilarity_Value CHECK (similarity BETWEEN 0 AND 1),
+  createdAt DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME(),
+  CONSTRAINT PK_MovieSimilarity PRIMARY KEY (movieId1, movieId2)
 );
-CREATE UNIQUE INDEX UX_Recommendation ON cine.Recommendation(userId, movieId, algo);
-CREATE INDEX IX_Recommendation_rank ON cine.Recommendation(userId, algo, rank);
+CREATE INDEX IX_MovieSimilarity_movie1 ON cine.MovieSimilarity(movieId1, similarity DESC);
+CREATE INDEX IX_MovieSimilarity_movie2 ON cine.MovieSimilarity(movieId2, similarity DESC);
+GO
+
+-- PERSONAL RECOMMENDATION (Collaborative Filtering)
+IF OBJECT_ID('cine.PersonalRecommendation','U') IS NOT NULL DROP TABLE cine.PersonalRecommendation;
+CREATE TABLE cine.PersonalRecommendation (
+  recId BIGINT IDENTITY(1,1) PRIMARY KEY,
+  userId BIGINT NOT NULL CONSTRAINT FK_PersonalRecommendation_User REFERENCES cine.[User](userId) ON DELETE CASCADE,
+  movieId BIGINT NOT NULL CONSTRAINT FK_PersonalRecommendation_Movie REFERENCES cine.Movie(movieId) ON DELETE CASCADE,
+  score FLOAT NOT NULL,
+  rank INT NOT NULL,
+  algo NVARCHAR(20) NOT NULL DEFAULT 'collaborative',
+  generatedAt DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME(),
+  expiresAt DATETIME2(0) NOT NULL DEFAULT DATEADD(day, 7, SYSUTCDATETIME())
+);
+CREATE UNIQUE INDEX UX_PersonalRecommendation ON cine.PersonalRecommendation(userId, movieId);
+CREATE INDEX IX_PersonalRecommendation_rank ON cine.PersonalRecommendation(userId, rank);
+CREATE INDEX IX_PersonalRecommendation_expires ON cine.PersonalRecommendation(expiresAt);
 GO
 
 -- MovieLens integration removed per project requirements
+
+
 
 
