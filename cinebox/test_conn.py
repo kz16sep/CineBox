@@ -4,7 +4,7 @@ from sqlalchemy.engine import URL
 odbc_str = (
     "DRIVER=ODBC Driver 17 for SQL Server;"
     "SERVER=localhost,1433;"
-    "DATABASE=CineBoxDB;"     # giữ CineBoxDB
+    "DATABASE=CineBoxDB;"     
     "UID=sa;"
     "PWD=sapassword;"
     "Encrypt=yes;"

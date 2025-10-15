@@ -1,5 +1,8 @@
 from flask import Blueprint, render_template, request, redirect, url_for, current_app, session, jsonify
 from sqlalchemy import text
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from content_based_recommender import ContentBasedRecommender
 
 
@@ -280,14 +283,32 @@ def admin_movie_create():
             "viewCount": request.form.get("viewCount", type=int) or 0,
         }
         with current_app.db_engine.begin() as conn:
-            conn.execute(text(
+            # Tạo phim mới
+            result = conn.execute(text(
                 """
                 INSERT INTO cine.Movie(title, releaseYear, country, overview, director, cast, durationMin, imdbRating, trailerUrl, posterUrl, backdropUrl, viewCount)
                 VALUES (:title, :releaseYear, :country, :overview, :director, :cast, :durationMin, :imdbRating, :trailerUrl, :posterUrl, :backdropUrl, :viewCount)
                 """
             ), data)
+            
+            # Lấy movieId vừa tạo
+            movie_id = result.lastrowid
+            
+            # Thêm thể loại cho phim mới
+            selected_genres = request.form.getlist("genres")
+            for genre_id in selected_genres:
+                if genre_id:  # Kiểm tra không rỗng
+                    conn.execute(text(
+                        "INSERT INTO cine.MovieGenre (movieId, genreId) VALUES (:movieId, :genreId)"
+                    ), {"movieId": movie_id, "genreId": int(genre_id)})
+        
         return redirect(url_for("main.admin_movies"))
-    return render_template("admin_movie_form.html", movie=None)
+    
+    # GET request - hiển thị form tạo phim mới với danh sách thể loại
+    with current_app.db_engine.connect() as conn:
+        all_genres = conn.execute(text("SELECT genreId, name FROM cine.Genre ORDER BY name")).mappings().all()
+    
+    return render_template("admin_movie_form.html", movie=None, all_genres=all_genres)
 
 
 @main_bp.route("/admin/movies/<int:movie_id>/edit", methods=["GET", "POST"])
@@ -332,6 +353,7 @@ def admin_movie_edit(movie_id: int):
             "viewCount": request.form.get("viewCount", type=int) or 0,
         }
         with current_app.db_engine.begin() as conn:
+            # Cập nhật thông tin phim
             conn.execute(text(
                 """
                 UPDATE cine.Movie
@@ -341,10 +363,47 @@ def admin_movie_edit(movie_id: int):
                 WHERE movieId=:movieId
                 """
             ), data)
+            
+            # Xử lý thể loại
+            selected_genres = request.form.getlist("genres")  # Lấy danh sách thể loại được chọn
+            
+            # Xóa tất cả thể loại cũ
+            conn.execute(text("DELETE FROM cine.MovieGenre WHERE movieId = :movieId"), {"movieId": movie_id})
+            
+            # Thêm thể loại mới
+            for genre_id in selected_genres:
+                if genre_id:  # Kiểm tra không rỗng
+                    conn.execute(text(
+                        "INSERT INTO cine.MovieGenre (movieId, genreId) VALUES (:movieId, :genreId)"
+                    ), {"movieId": movie_id, "genreId": int(genre_id)})
+        
         return redirect(url_for("main.admin_movies"))
+    
+    # GET request - hiển thị form edit với thông tin thể loại
     with current_app.db_engine.connect() as conn:
-        r = conn.execute(text("SELECT * FROM cine.Movie WHERE movieId=:id"), {"id": movie_id}).mappings().first()
-    return render_template("admin_movie_form.html", movie=r)
+        # Lấy thông tin phim
+        movie = conn.execute(text("SELECT * FROM cine.Movie WHERE movieId=:id"), {"id": movie_id}).mappings().first()
+        
+        # Lấy thể loại hiện tại của phim
+        current_genres = conn.execute(text("""
+            SELECT g.genreId, g.name 
+            FROM cine.Genre g 
+            JOIN cine.MovieGenre mg ON g.genreId = mg.genreId 
+            WHERE mg.movieId = :movie_id
+            ORDER BY g.name
+        """), {"movie_id": movie_id}).mappings().all()
+        
+        # Lấy tất cả thể loại có sẵn
+        all_genres = conn.execute(text("SELECT genreId, name FROM cine.Genre ORDER BY name")).mappings().all()
+        
+        # Tạo danh sách ID thể loại hiện tại để check checkbox
+        current_genre_ids = [genre.genreId for genre in current_genres]
+    
+    return render_template("admin_movie_form.html", 
+                         movie=movie, 
+                         current_genres=current_genres,
+                         all_genres=all_genres,
+                         current_genre_ids=current_genre_ids)
 
 
 @main_bp.route("/admin/movies/<int:movie_id>/delete", methods=["POST"]) 

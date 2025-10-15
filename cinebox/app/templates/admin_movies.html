@@ -15,7 +15,7 @@
         <td>
           <a class="btn btn-primary" href="{{ url_for('main.admin_movie_edit', movie_id=m.movieId) }}">Sửa</a>
           <form method="post" action="{{ url_for('main.admin_movie_delete', movie_id=m.movieId) }}" style="display:inline" onsubmit="return confirm('Xoá phim này?');">
-            <button class="btn btn-danger" type="submit">Xoá</button>
+            <button class="btn btn-danger btn-delete" type="submit">Xoá</button>
           </form>
         </td>
       </tr>

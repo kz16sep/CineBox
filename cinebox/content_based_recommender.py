@@ -1,285 +1,216 @@
 #!/usr/bin/env python3
 """
-Content-based Recommendation Service
-Serving logic for content-based movie recommendations
+Content-Based Recommender Service
+Service class để phục vụ content-based recommendations cho web app
 """
 
-import logging
-from typing import List, Dict, Optional
+import pandas as pd
+import numpy as np
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
-import pandas as pd
+import logging
+from typing import List, Dict, Tuple
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class ContentBasedRecommender:
     """
-    Content-based Recommendation Service
-    Gợi ý phim liên quan dựa trên đặc điểm của phim đang xem
+    Content-Based Recommender Service
+    Phục vụ recommendations cho web application
     """
     
     def __init__(self, db_engine):
+        self.db_engine = db_engine
+    
+    def get_related_movies(self, movie_id: int, limit: int = 5) -> List[Dict]:
         """
-        Initialize Content-based Recommender
+        Lấy danh sách phim liên quan cho một phim cụ thể
         
         Args:
-            db_engine: SQLAlchemy database engine
-        """
-        self.db_engine = db_engine
-        self.is_trained = False
-    
-    def check_similarity_data_exists(self) -> bool:
-        """Check if similarity data exists in database"""
-        try:
-            with self.db_engine.connect() as conn:
-                result = conn.execute(text("SELECT COUNT(*) FROM cine.MovieSimilarity")).scalar()
-                return result > 0
-        except Exception as e:
-            logger.error(f"Error checking similarity data: {e}")
-            return False
-    
-    def get_movie_info(self, movie_id: int) -> Optional[Dict]:
-        """Get movie information"""
-        try:
-            with self.db_engine.connect() as conn:
-                result = conn.execute(
-                    text("""
-                        SELECT m.movieId, m.title, m.releaseYear, m.overview, m.posterUrl, m.backdropUrl,
-                               STRING_AGG(g.name, ', ') as genres
-                        FROM cine.Movie m
-                        LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
-                        LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
-                        WHERE m.movieId = ?
-                        GROUP BY m.movieId, m.title, m.releaseYear, m.overview, m.posterUrl, m.backdropUrl
-                    """),
-                    [movie_id]
-                ).fetchone()
-                
-                if result:
-                    return {
-                        'movieId': result[0],
-                        'title': result[1],
-                        'releaseYear': result[2],
-                        'overview': result[3] or '',
-                        'posterUrl': result[4],
-                        'backdropUrl': result[5],
-                        'genres': result[6].split(', ') if result[6] else []
-                    }
-                return None
-        except Exception as e:
-            logger.error(f"Error getting movie info: {e}")
-            return None
-    
-    def get_related_movies(self, movie_id: int, limit: int = 10) -> List[Dict]:
-        """Get related movies based on content similarity"""
-        try:
-            logger.info(f"Getting {limit} related movies for movie ID: {movie_id}")
+            movie_id: ID của phim cần tìm phim liên quan
+            limit: Số lượng phim liên quan tối đa
             
+        Returns:
+            List[Dict]: Danh sách phim liên quan với thông tin chi tiết
+        """
+        try:
             with self.db_engine.connect() as conn:
-                # Use string formatting for TOP clause since SQL Server doesn't support parameterized TOP
-                query = f"""
-                    SELECT TOP {limit} m.movieId, m.title, m.posterUrl, m.overview, ms.similarity
+                # Lấy phim liên quan từ MovieSimilarity
+                query = text(f"""
+                    SELECT TOP {limit}
+                        m.movieId, m.title, m.releaseYear, m.country, m.posterUrl,
+                        ms.similarity,
+                        STRING_AGG(g.name, ', ') as genres
                     FROM cine.MovieSimilarity ms
-                    JOIN cine.Movie m ON m.movieId = ms.movieId2
-                    WHERE ms.movieId1 = ?
+                    JOIN cine.Movie m ON ms.movieId2 = m.movieId
+                    LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                    LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
+                    WHERE ms.movieId1 = :movie_id
+                    GROUP BY m.movieId, m.title, m.releaseYear, m.country, m.posterUrl, ms.similarity
                     ORDER BY ms.similarity DESC
-                """
+                """)
                 
-                result = conn.execute(text(query), [movie_id]).fetchall()
+                result = conn.execute(query, {'movie_id': movie_id})
+                rows = result.fetchall()
                 
                 related_movies = []
-                for row in result:
+                for row in rows:
+                    # Clean genres (remove duplicates)
+                    genres = row[6] or 'No genres'
+                    if genres != 'No genres':
+                        genre_list = list(set(genres.split(', ')))
+                        genres = ', '.join(genre_list)
+                    
                     related_movies.append({
                         'movieId': row[0],
                         'title': row[1],
-                        'posterUrl': row[2],
-                        'overview': row[3] or '',
-                        'similarity': float(row[4])
+                        'releaseYear': row[2],
+                        'country': row[3] or 'Unknown',
+                        'posterUrl': row[4],
+                        'similarity': float(row[5]),
+                        'genres': genres
                     })
                 
-                logger.info(f"Found {len(related_movies)} related movies")
+                logger.info(f"Found {len(related_movies)} related movies for movie {movie_id}")
                 return related_movies
                 
         except Exception as e:
-            logger.error(f"Error getting related movies: {e}")
+            logger.error(f"Error getting related movies for {movie_id}: {e}")
             return []
     
-    def get_related_movies_by_genres(self, movie_id: int, limit: int = 10) -> List[Dict]:
-        """Get related movies based on genre similarity"""
+    def get_movie_info(self, movie_id: int) -> Dict:
+        """
+        Lấy thông tin chi tiết của một phim
+        
+        Args:
+            movie_id: ID của phim
+            
+        Returns:
+            Dict: Thông tin chi tiết của phim
+        """
         try:
             with self.db_engine.connect() as conn:
-                query = f"""
-                    SELECT TOP {limit} m.movieId, m.title, m.posterUrl, m.overview
+                query = text("""
+                    SELECT m.movieId, m.title, m.releaseYear, m.country, m.overview, 
+                           m.posterUrl, m.backdropUrl, m.viewCount,
+                           STRING_AGG(g.name, ', ') as genres
                     FROM cine.Movie m
-                    WHERE m.movieId != ? 
-                    AND m.movieId IN (
-                        SELECT mg2.movieId 
-                        FROM cine.MovieGenre mg1
-                        JOIN cine.MovieGenre mg2 ON mg1.genreId = mg2.genreId
-                        WHERE mg1.movieId = ? AND mg2.movieId != ?
-                    )
-                    ORDER BY m.viewCount DESC
-                """
+                    LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                    LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
+                    WHERE m.movieId = :movie_id
+                    GROUP BY m.movieId, m.title, m.releaseYear, m.country, 
+                             m.overview, m.posterUrl, m.backdropUrl, m.viewCount
+                """)
                 
-                result = conn.execute(text(query), movie_id, movie_id, movie_id).fetchall()
+                result = conn.execute(query, {'movie_id': movie_id})
+                row = result.fetchone()
                 
-                related_movies = []
-                for row in result:
-                    related_movies.append({
-                        'movieId': row[0],
-                        'title': row[1],
-                        'posterUrl': row[2],
-                        'overview': row[3] or '',
-                        'similarity': 0.8  # Default similarity for genre-based
-                    })
+                if not row:
+                    return None
                 
-                return related_movies
-                
-        except Exception as e:
-            logger.error(f"Error getting genre-based related movies: {e}")
-            return []
-    
-    def get_related_movies_hybrid(self, movie_id: int, limit: int = 10) -> List[Dict]:
-        """Get related movies using hybrid approach (content + genre fallback)"""
-        # Try content-based first
-        related = self.get_related_movies(movie_id, limit)
-        
-        # If not enough results, supplement with genre-based
-        if len(related) < limit:
-            genre_based = self.get_related_movies_by_genres(movie_id, limit - len(related))
-            # Avoid duplicates
-            existing_ids = {m['movieId'] for m in related}
-            for movie in genre_based:
-                if movie['movieId'] not in existing_ids:
-                    related.append(movie)
-        
-        return related[:limit]
-    
-    def get_similarity_score(self, movie_id1: int, movie_id2: int) -> float:
-        """Get similarity score between two movies"""
-        try:
-            with self.db_engine.connect() as conn:
-                result = conn.execute(
-                    text("""
-                        SELECT similarity 
-                        FROM cine.MovieSimilarity 
-                        WHERE movieId1 = ? AND movieId2 = ?
-                    """),
-                    [movie_id1, movie_id2]
-                ).scalar()
-                
-                return float(result) if result is not None else 0.0
-                
-        except Exception as e:
-            logger.error(f"Error getting similarity score: {e}")
-            return 0.0
-    
-    def get_top_similar_movies(self, limit: int = 5) -> List[Dict]:
-        """Get top similar movie pairs"""
-        try:
-            with self.db_engine.connect() as conn:
-                query = f"""
-                    SELECT TOP {limit} 
-                           m1.title as movie1_title,
-                           m2.title as movie2_title,
-                           ms.similarity
-                    FROM cine.MovieSimilarity ms
-                    JOIN cine.Movie m1 ON ms.movieId1 = m1.movieId
-                    JOIN cine.Movie m2 ON ms.movieId2 = m2.movieId
-                    ORDER BY ms.similarity DESC
-                """
-                
-                result = conn.execute(text(query)).fetchall()
-                
-                top_pairs = []
-                for row in result:
-                    top_pairs.append({
-                        'movie1_title': row[0],
-                        'movie2_title': row[1],
-                        'similarity': float(row[2])
-                    })
-                
-                return top_pairs
-                
-        except Exception as e:
-            logger.error(f"Error getting top similar movies: {e}")
-            return []
-    
-    def get_statistics(self) -> Dict:
-        """Get recommendation system statistics"""
-        try:
-            with self.db_engine.connect() as conn:
-                # Total similarities
-                total_similarities = conn.execute(text("SELECT COUNT(*) FROM cine.MovieSimilarity")).scalar()
-                
-                # Unique movies
-                unique_movies = conn.execute(text("""
-                    SELECT COUNT(DISTINCT movieId1) + COUNT(DISTINCT movieId2) - COUNT(DISTINCT CASE WHEN movieId1 = movieId2 THEN movieId1 END)
-                    FROM cine.MovieSimilarity
-                """)).scalar()
-                
-                # Average similarity
-                avg_similarity = conn.execute(text("SELECT AVG(similarity) FROM cine.MovieSimilarity")).scalar()
-                
-                # Max similarity
-                max_similarity = conn.execute(text("SELECT MAX(similarity) FROM cine.MovieSimilarity")).scalar()
-                
-                # Min similarity
-                min_similarity = conn.execute(text("SELECT MIN(similarity) FROM cine.MovieSimilarity")).scalar()
+                # Clean genres
+                genres = row[8] or 'No genres'
+                if genres != 'No genres':
+                    genre_list = list(set(genres.split(', ')))
+                    genres = ', '.join(genre_list)
                 
                 return {
-                    'total_similarities': total_similarities,
-                    'unique_movies': unique_movies,
-                    'avg_similarity': float(avg_similarity) if avg_similarity else 0.0,
-                    'max_similarity': float(max_similarity) if max_similarity else 0.0,
-                    'min_similarity': float(min_similarity) if min_similarity else 0.0
+                    'movieId': row[0],
+                    'title': row[1],
+                    'releaseYear': row[2],
+                    'country': row[3] or 'Unknown',
+                    'overview': row[4] or 'No overview available',
+                    'posterUrl': row[5],
+                    'backdropUrl': row[6],
+                    'viewCount': row[7] or 0,
+                    'genres': genres
                 }
                 
         except Exception as e:
-            logger.error(f"Error getting statistics: {e}")
-            return {}
-
-def create_content_recommender(db_engine=None):
-    """Factory function to create ContentBasedRecommender"""
-    if db_engine is None:
-        # Create default engine
-        odbc_str = (
-            "DRIVER=ODBC Driver 17 for SQL Server;"
-            "SERVER=localhost,1433;"
-            "DATABASE=CineBoxDB;"     
-            "UID=sa;"
-            "PWD=sapassword;"
-            "Encrypt=yes;"
-            "TrustServerCertificate=yes;"
-        )
-        connection_url = URL.create("mssql+pyodbc", query={"odbc_connect": odbc_str})
-        db_engine = create_engine(connection_url, fast_executemany=True)
+            logger.error(f"Error getting movie info for {movie_id}: {e}")
+            return None
     
-    return ContentBasedRecommender(db_engine)
-
-if __name__ == "__main__":
-    # Test the recommender
-    print("Content-based Recommendation Service")
-    print("=" * 50)
-    
-    recommender = create_content_recommender()
-    
-    if recommender.check_similarity_data_exists():
-        print("Similarity data found! Testing recommendations...")
+    def get_similarity_score(self, movie_id1: int, movie_id2: int) -> float:
+        """
+        Lấy điểm similarity giữa hai phim
         
-        # Test with movie ID 1
-        related = recommender.get_related_movies(1, 5)
-        print(f"\nRelated movies for movie ID 1:")
-        for i, movie in enumerate(related, 1):
-            print(f"{i}. {movie['title']} (similarity: {movie['similarity']:.3f})")
+        Args:
+            movie_id1: ID phim thứ nhất
+            movie_id2: ID phim thứ hai
+            
+        Returns:
+            float: Điểm similarity (0.0 - 1.0)
+        """
+        try:
+            with self.db_engine.connect() as conn:
+                query = text("""
+                    SELECT similarity FROM cine.MovieSimilarity 
+                    WHERE movieId1 = :movie_id1 AND movieId2 = :movie_id2
+                """)
+                
+                result = conn.execute(query, {
+                    'movie_id1': movie_id1,
+                    'movie_id2': movie_id2
+                })
+                row = result.fetchone()
+                
+                if row:
+                    return float(row[0])
+                else:
+                    return 0.0
+                    
+        except Exception as e:
+            logger.error(f"Error getting similarity between {movie_id1} and {movie_id2}: {e}")
+            return 0.0
+    
+    def get_recommendation_stats(self) -> Dict:
+        """
+        Lấy thống kê về hệ thống recommendation
         
-        # Get statistics
-        stats = recommender.get_statistics()
-        print(f"\nStatistics:")
-        print(f"Total similarities: {stats.get('total_similarities', 0)}")
-        print(f"Unique movies: {stats.get('unique_movies', 0)}")
-        print(f"Average similarity: {stats.get('avg_similarity', 0):.3f}")
-    else:
-        print("No similarity data found. Please run training first:")
-        print("python train_content_based.py")
+        Returns:
+            Dict: Thống kê chi tiết
+        """
+        try:
+            with self.db_engine.connect() as conn:
+                # Tổng số phim
+                total_movies = conn.execute(text("SELECT COUNT(*) FROM cine.Movie")).scalar()
+                
+                # Tổng số similarity pairs
+                total_similarities = conn.execute(text("SELECT COUNT(*) FROM cine.MovieSimilarity")).scalar()
+                
+                # Thống kê similarity
+                similarity_stats = conn.execute(text("""
+                    SELECT 
+                        AVG(similarity) as avg_similarity,
+                        MIN(similarity) as min_similarity,
+                        MAX(similarity) as max_similarity,
+                        COUNT(CASE WHEN similarity >= 0.9 THEN 1 END) as high_sim,
+                        COUNT(CASE WHEN similarity >= 0.7 AND similarity < 0.9 THEN 1 END) as medium_sim,
+                        COUNT(CASE WHEN similarity < 0.7 THEN 1 END) as low_sim
+                    FROM cine.MovieSimilarity
+                """)).fetchone()
+                
+                return {
+                    'total_movies': total_movies,
+                    'total_similarities': total_similarities,
+                    'avg_similarity': float(similarity_stats[0]) if similarity_stats[0] else 0.0,
+                    'min_similarity': float(similarity_stats[1]) if similarity_stats[1] else 0.0,
+                    'max_similarity': float(similarity_stats[2]) if similarity_stats[2] else 0.0,
+                    'high_similarity_count': similarity_stats[3],
+                    'medium_similarity_count': similarity_stats[4],
+                    'low_similarity_count': similarity_stats[5]
+                }
+                
+        except Exception as e:
+            logger.error(f"Error getting recommendation stats: {e}")
+            return {
+                'total_movies': 0,
+                'total_similarities': 0,
+                'avg_similarity': 0.0,
+                'min_similarity': 0.0,
+                'max_similarity': 0.0,
+                'high_similarity_count': 0,
+                'medium_similarity_count': 0,
+                'low_similarity_count': 0
+            }

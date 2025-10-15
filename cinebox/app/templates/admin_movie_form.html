@@ -28,6 +28,39 @@
     <input type="text" name="backdropUrl" value="{{ movie.backdropUrl if movie else '' }}">
     <label>Lượt xem (viewCount)</label>
     <input type="number" name="viewCount" min="0" step="1" value="{{ movie.viewCount if movie else 0 }}">
+    
+    <!-- Thể loại phim -->
+    <label>Thể loại</label>
+    <div class="genres-section">
+      {% if movie %}
+        <div class="current-genres">
+          <h4>Thể loại hiện tại:</h4>
+          {% if current_genres %}
+            <div class="genre-tags">
+              {% for genre in current_genres %}
+                <span class="genre-tag">{{ genre.name }}</span>
+              {% endfor %}
+            </div>
+          {% else %}
+            <p class="no-genres">Chưa có thể loại nào</p>
+          {% endif %}
+        </div>
+      {% endif %}
+      
+      <div class="available-genres">
+        <h4>{{ 'Thêm thể loại:' if movie else 'Chọn thể loại:' }}</h4>
+        <div class="genre-checkboxes">
+          {% for genre in all_genres %}
+            <label class="genre-checkbox">
+              <input type="checkbox" name="genres" value="{{ genre.genreId }}" 
+                     {% if movie and genre.genreId in current_genre_ids %}checked{% endif %}>
+              {{ genre.name }}
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    
     <button class="btn btn-primary" type="submit">Lưu</button>
     <a class="btn" href="{{ url_for('main.admin_movies') }}">Hủy</a>
   </form>

@@ -47,3 +47,28 @@ h3{margin:24px 0 12px}
 
 .footer{border-top:1px solid rgba(255,255,255,.06);padding:20px 0;color:var(--muted)}
 
+/* Admin styles */
+.admin{margin:24px 0}
+.admin h1{margin-bottom:16px}
+.table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid rgba(255,255,255,.06);border-radius:12px;overflow:hidden}
+.table th,.table td{padding:12px;text-align:left;border-bottom:1px solid rgba(255,255,255,.06)}
+.table th{background:var(--panel-2);font-weight:600}
+.table tr:hover{background:rgba(255,255,255,.02)}
+
+/* Genre management styles */
+.genres-section{margin:16px 0;padding:16px;background:var(--panel-2);border:1px solid rgba(255,255,255,.06);border-radius:12px}
+.current-genres{margin-bottom:16px}
+.current-genres h4{margin:0 0 8px;color:var(--text)}
+.genre-tags{display:flex;flex-wrap:wrap;gap:6px}
+.genre-tag{background:var(--primary);color:white;padding:4px 8px;border-radius:6px;font-size:12px;font-weight:500}
+.no-genres{color:var(--muted);font-style:italic;margin:0}
+.available-genres h4{margin:0 0 8px;color:var(--text)}
+.genre-checkboxes{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.genre-checkbox{display:flex;align-items:center;gap:6px;padding:6px;border-radius:6px;cursor:pointer;transition:background 0.2s}
+.genre-checkbox:hover{background:rgba(255,255,255,.05)}
+.genre-checkbox input[type="checkbox"]{margin:0}
+
+/* Delete button styles */
+.btn-delete{background-color:#dc3545!important;color:white!important;border:1px solid #dc3545!important}
+.btn-delete:hover{background-color:#c82333!important;border-color:#bd2130!important}
+
