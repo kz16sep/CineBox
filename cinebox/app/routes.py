@@ -16,43 +16,31 @@ def home():
     if not session.get("user_id"):
         return redirect(url_for("main.login"))
     
-    # Lấy page parameter cho phim mới nhất và genre filter
+    # Lấy page parameter cho tất cả phim và genre filter
     page = request.args.get('page', 1, type=int)
     per_page = 12  # Số phim mỗi trang
     genre_filter = request.args.get('genre', '', type=str)  # Lọc theo thể loại
     
-    # Trending movies (phim phổ biến) - có thể lọc theo thể loại
+    # 1. Phim mới nhất (12 phim, không phân trang) - thay thế trending
     try:
         with current_app.db_engine.connect() as conn:
-            if genre_filter:
-                # Lọc theo thể loại nếu được chọn
-                query = text("""
-                    SELECT TOP 12 m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview
-                    FROM cine.Movie m
-                    JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
-                    JOIN cine.Genre g ON mg.genreId = g.genreId
-                    WHERE g.genreName = :genre
-                    ORDER BY m.viewCount DESC, m.movieId DESC
-                """)
-                rows = conn.execute(query, {"genre": genre_filter}).mappings().all()
-            else:
-                # Lấy tất cả phim phổ biến
-                rows = conn.execute(text(
-                    "SELECT TOP 12 movieId, title, posterUrl, backdropUrl, overview FROM cine.Movie ORDER BY viewCount DESC, movieId DESC"
-                )).mappings().all()
+            rows = conn.execute(text(
+                "SELECT TOP 12 movieId, title, posterUrl, backdropUrl, overview, createdAt FROM cine.Movie ORDER BY createdAt DESC, movieId DESC"
+            )).mappings().all()
             
-            trending = [
+            latest_movies = [
                 {
                     "id": r["movieId"],
                     "title": r["title"],
                     "poster": r.get("posterUrl") or "/static/img/dune2.jpg",
                     "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
                     "description": (r.get("overview") or "")[:160],
+                    "createdAt": r.get("createdAt"),
                 }
                 for r in rows
             ]
     except Exception:
-        trending = []
+        latest_movies = []
     
     # Personal recommendations (gợi ý cá nhân)
     user_id = session.get("user_id")
@@ -85,36 +73,66 @@ def home():
     
     # Fallback nếu không có gợi ý cá nhân
     if not personal_recommendations:
-        personal_recommendations = trending
+        personal_recommendations = latest_movies
     
-    # Phim mới nhất (theo thời gian upload)
-    latest_movies = []
+    # 3. Tất cả phim (có phân trang) - thay thế latest_movies cũ
+    all_movies = []
     total_movies = 0
     pagination = None
     
     try:
         with current_app.db_engine.connect() as conn:
-            # Đếm tổng số phim
-            total_count = conn.execute(text("SELECT COUNT(*) FROM cine.Movie")).scalar()
-            total_movies = total_count
+            if genre_filter:
+                # Lọc theo thể loại nếu được chọn
+                # Đếm tổng số phim theo thể loại
+                total_count = conn.execute(text("""
+                    SELECT COUNT(DISTINCT m.movieId)
+                    FROM cine.Movie m
+                    JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                    JOIN cine.Genre g ON mg.genreId = g.genreId
+                    WHERE g.name = :genre
+                """), {"genre": genre_filter}).scalar()
+                total_movies = total_count
+                
+                # Tính toán phân trang
+                total_pages = (total_movies + per_page - 1) // per_page
+                offset = (page - 1) * per_page
+                
+                # Lấy phim theo thể loại với phân trang
+                all_rows = conn.execute(text("""
+                    SELECT m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear
+                    FROM (
+                        SELECT DISTINCT m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear,
+                               ROW_NUMBER() OVER (ORDER BY m.movieId DESC) as rn
+                        FROM cine.Movie m
+                        JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                        JOIN cine.Genre g ON mg.genreId = g.genreId
+                        WHERE g.name = :genre
+                    ) t
+                    WHERE rn > :offset AND rn <= :offset + :per_page
+                """), {"genre": genre_filter, "offset": offset, "per_page": per_page}).mappings().all()
+            else:
+                # Lấy tất cả phim
+                # Đếm tổng số phim
+                total_count = conn.execute(text("SELECT COUNT(*) FROM cine.Movie")).scalar()
+                total_movies = total_count
+                
+                # Tính toán phân trang
+                total_pages = (total_movies + per_page - 1) // per_page
+                offset = (page - 1) * per_page
+                
+                # Lấy tất cả phim với phân trang
+                all_rows = conn.execute(text("""
+                    SELECT movieId, title, posterUrl, backdropUrl, overview, releaseYear
+                    FROM (
+                        SELECT movieId, title, posterUrl, backdropUrl, overview, releaseYear,
+                               ROW_NUMBER() OVER (ORDER BY movieId DESC) as rn
+                        FROM cine.Movie
+                    ) t
+                    WHERE rn > :offset AND rn <= :offset + :per_page
+                """), {"offset": offset, "per_page": per_page}).mappings().all()
             
-            # Tính toán phân trang
-            total_pages = (total_movies + per_page - 1) // per_page
-            offset = (page - 1) * per_page
-            
-            # Lấy phim mới nhất với phân trang
-            # Sử dụng movieId DESC để giả lập thời gian upload (movieId cao hơn = mới hơn)
-            latest_rows = conn.execute(text("""
-                SELECT movieId, title, posterUrl, backdropUrl, overview, releaseYear
-                FROM (
-                    SELECT movieId, title, posterUrl, backdropUrl, overview, releaseYear,
-                           ROW_NUMBER() OVER (ORDER BY movieId DESC) as rn
-                    FROM cine.Movie
-                ) t
-                WHERE rn > :offset AND rn <= :offset + :per_page
-            """), {"offset": offset, "per_page": per_page}).mappings().all()
-            
-            latest_movies = [
+            all_movies = [
                 {
                     "id": r["movieId"],
                     "title": r["title"],
@@ -123,7 +141,7 @@ def home():
                     "description": (r.get("overview") or "")[:160],
                     "year": r.get("releaseYear")
                 }
-                for r in latest_rows
+                for r in all_rows
             ]
             
             # Tạo pagination info
@@ -139,19 +157,20 @@ def home():
             }
             
     except Exception as e:
-        print(f"Error getting latest movies: {e}")
-        latest_movies = []
+        print(f"Error getting all movies: {e}")
+        all_movies = []
         pagination = None
     
-    if not trending:
+    if not latest_movies:
         # Fallback demo data to avoid empty list errors in templates
-        trending = [
+        latest_movies = [
             {
                 "id": 1,
                 "title": "Hành Tinh Cát: Phần 2",
                 "poster": "/static/img/dune2.jpg",
                 "backdrop": "/static/img/dune2_backdrop.jpg",
                 "description": "Paul và số phận trên Arrakis...",
+                "createdAt": "2025-01-01"
             },
             {
                 "id": 2,
@@ -159,13 +178,14 @@ def home():
                 "poster": "/static/img/doctorstrange.jpg",
                 "backdrop": "/static/img/doctorstrange_backdrop.jpg",
                 "description": "Bác sĩ Stephen Strange và phép thuật...",
+                "createdAt": "2025-01-01"
             },
         ]
     
     return render_template("home.html", 
-                         trending=trending, 
-                         recommended=personal_recommendations,
-                         latest_movies=latest_movies,
+                         latest_movies=latest_movies,  # Phim mới nhất (12 phim, không phân trang)
+                         recommended=personal_recommendations,  # Phim đề xuất
+                         all_movies=all_movies,  # Tất cả phim (có phân trang)
                          pagination=pagination,
                          genre_filter=genre_filter)
 

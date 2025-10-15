@@ -5,11 +5,11 @@
   <div class="hero-card">
     <div class="hero-text">
       <span class="badge">NEW</span>
-      <h2>{{ trending[0].title }}</h2>
-      <p>{{ trending[0].description }}</p>
+      <h2>{{ latest_movies[0].title }}</h2>
+      <p>{{ latest_movies[0].description }}</p>
       <div class="actions">
-        <a class="btn btn-primary" href="{{ url_for('main.watch', movie_id=trending[0].id) }}">Xem ngay</a>
-        <a class="btn btn-secondary" href="{{ url_for('main.detail', movie_id=trending[0].id) }}">Thêm vào danh sách</a>
+        <a class="btn btn-primary" href="{{ url_for('main.watch', movie_id=latest_movies[0].id) }}">Xem ngay</a>
+        <a class="btn btn-secondary" href="{{ url_for('main.detail', movie_id=latest_movies[0].id) }}">Thêm vào danh sách</a>
       </div>
     </div>
   </div>
@@ -44,10 +44,11 @@
   </div>
 </section>
 
+<!-- 1. Phim mới nhất (12 phim, không phân trang) -->
 <section>
-  <h3>Phim đang thịnh hành{% if genre_filter %} - {{ genre_filter }}{% endif %}</h3>
+  <h3>🆕 Phim mới nhất</h3>
   <div class="cards">
-    {% for m in trending %}
+    {% for m in latest_movies %}
     <a class="card" href="{{ url_for('main.detail', movie_id=m.id) }}">
       <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
       <div class="card-title">{{ m.title }}</div>
@@ -57,6 +58,7 @@
   </div>
 </section>
 
+<!-- 2. Phim được đề xuất cho bạn -->
 <section>
   <h3>Phim được đề xuất cho bạn</h3>
   <div class="cards">
@@ -70,24 +72,24 @@
   </div>
 </section>
 
-<!-- Phim mới nhất với phân trang -->
-{% if latest_movies %}
-<section class="latest-movies">
+<!-- 3. Tất cả phim (có phân trang) -->
+{% if all_movies %}
+<section class="all-movies">
   <div class="section-header">
-    <h3>🆕 Phim mới nhất</h3>
+    <h3>🎬 Tất cả phim{% if genre_filter %} - {{ genre_filter }}{% endif %}</h3>
     <div class="section-info">
-      <span class="movie-count">Hiển thị {{ latest_movies|length }} / {{ pagination.total }} phim</span>
+      <span class="movie-count">Hiển thị {{ all_movies|length }} / {{ pagination.total }} phim</span>
     </div>
   </div>
   
   <div class="cards">
-    {% for m in latest_movies %}
+    {% for m in all_movies %}
     <a class="card" href="{{ url_for('main.detail', movie_id=m.id) }}">
       <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
       <div class="card-content">
         <div class="card-title">{{ m.title }}{% if m.year %} ({{ m.year }}){% endif %}</div>
         <div class="card-meta">
-          <span class="upload-time">Mới upload</span>
+          <span class="upload-time">Phim {{ m.id }}</span>
         </div>
         <div class="stars">★★★★★</div>
       </div>
@@ -234,8 +236,8 @@
   }
 }
 
-/* Latest Movies Section */
-.latest-movies {
+/* All Movies Section */
+.all-movies {
   margin: 40px 0;
 }
 
