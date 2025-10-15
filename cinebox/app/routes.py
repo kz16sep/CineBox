@@ -16,16 +16,31 @@ def home():
     if not session.get("user_id"):
         return redirect(url_for("main.login"))
     
-    # Lấy page parameter cho phim mới nhất
+    # Lấy page parameter cho phim mới nhất và genre filter
     page = request.args.get('page', 1, type=int)
     per_page = 12  # Số phim mỗi trang
+    genre_filter = request.args.get('genre', '', type=str)  # Lọc theo thể loại
     
-    # Trending movies (phim phổ biến)
+    # Trending movies (phim phổ biến) - có thể lọc theo thể loại
     try:
         with current_app.db_engine.connect() as conn:
-            rows = conn.execute(text(
-                "SELECT TOP 12 movieId, title, posterUrl, backdropUrl, overview FROM cine.Movie ORDER BY viewCount DESC, movieId DESC"
-            )).mappings().all()
+            if genre_filter:
+                # Lọc theo thể loại nếu được chọn
+                query = text("""
+                    SELECT TOP 12 m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview
+                    FROM cine.Movie m
+                    JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                    JOIN cine.Genre g ON mg.genreId = g.genreId
+                    WHERE g.genreName = :genre
+                    ORDER BY m.viewCount DESC, m.movieId DESC
+                """)
+                rows = conn.execute(query, {"genre": genre_filter}).mappings().all()
+            else:
+                # Lấy tất cả phim phổ biến
+                rows = conn.execute(text(
+                    "SELECT TOP 12 movieId, title, posterUrl, backdropUrl, overview FROM cine.Movie ORDER BY viewCount DESC, movieId DESC"
+                )).mappings().all()
+            
             trending = [
                 {
                     "id": r["movieId"],
@@ -151,7 +166,8 @@ def home():
                          trending=trending, 
                          recommended=personal_recommendations,
                          latest_movies=latest_movies,
-                         pagination=pagination)
+                         pagination=pagination,
+                         genre_filter=genre_filter)
 
 
 @main_bp.route("/login", methods=["GET", "POST"])
@@ -160,25 +176,44 @@ def login():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
+        
+        print(f"🔍 Login attempt: username='{username}', password='{password}'")
+        
         with current_app.db_engine.connect() as conn:
-            row = conn.execute(text(
-                """
-                SELECT TOP 1 u.userId, u.email, r.roleName
+            # Test query đơn giản trước
+            test_query = text("""
+                SELECT u.userId, u.email, r.roleName
                 FROM cine.Account a
                 JOIN cine.[User] u ON u.userId = a.userId
                 JOIN cine.Role r ON r.roleId = u.roleId
                 WHERE (
                     a.username = :u OR u.email = :u
                 ) AND a.passwordHash = HASHBYTES('SHA2_256', CONVERT(VARBINARY(512), :p))
-                """
-            ), {"u": username, "p": password}).mappings().first()
-        if row:
-            session["user_id"] = int(row["userId"])
-            session["role"] = row["roleName"]
-            session["username"] = username
-            session["email"] = row["email"]
-            return redirect(url_for("main.home"))
-        error = "Sai tài khoản hoặc mật khẩu"
+            """)
+            
+            print(f"🔍 Executing query with params: u='{username}', p='{password}'")
+            
+            try:
+                result = conn.execute(test_query, {"u": username, "p": password})
+                rows = result.fetchall()
+                print(f"🔍 Query result: {len(rows)} rows")
+                
+                if rows:
+                    row = rows[0]
+                    print(f"🔍 Found user: ID={row[0]}, Email={row[1]}, Role={row[2]}")
+                    
+                    session["user_id"] = int(row[0])
+                    session["role"] = row[2]
+                    session["username"] = username
+                    session["email"] = row[1]
+                    print(f"🔍 Session set: user_id={session['user_id']}, role={session['role']}")
+                    return redirect(url_for("main.home"))
+                else:
+                    print("🔍 No user found with these credentials")
+                    error = "Sai tài khoản hoặc mật khẩu"
+            except Exception as e:
+                print(f"🔍 Database error: {e}")
+                error = f"Lỗi database: {str(e)}"
     return render_template("login.html", error=error)
 
 
@@ -599,7 +634,7 @@ def remove_favorite(movie_id):
 
 @main_bp.route("/avatar/<path:filename>")
 def serve_avatar(filename):
-    """Serve avatar files from D:\N5\KLTN\WebXemPhim\avatar"""
+    """Serve avatar files from D:/N5/KLTN/WebXemPhim/avatar"""
     from flask import send_file
     import os
     

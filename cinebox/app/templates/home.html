@@ -15,8 +15,37 @@
   </div>
 </section>
 
+<!-- Genre Filter Menu -->
+<section class="genre-filter">
+  <div class="genre-filter-container">
+    <h3>🎬 Lọc theo thể loại</h3>
+    <div class="genre-buttons">
+      <a href="{{ url_for('main.home') }}" 
+         class="genre-btn {{ 'active' if not genre_filter else '' }}">
+        Tất cả
+      </a>
+      <a href="{{ url_for('main.home', genre='Action') }}" 
+         class="genre-btn {{ 'active' if genre_filter == 'Action' else '' }}">
+        🎬 Action
+      </a>
+      <a href="{{ url_for('main.home', genre='Adventure') }}" 
+         class="genre-btn {{ 'active' if genre_filter == 'Adventure' else '' }}">
+        🗺️ Adventure
+      </a>
+      <a href="{{ url_for('main.home', genre='Comedy') }}" 
+         class="genre-btn {{ 'active' if genre_filter == 'Comedy' else '' }}">
+        😂 Comedy
+      </a>
+      <a href="{{ url_for('main.home', genre='Horror') }}" 
+         class="genre-btn {{ 'active' if genre_filter == 'Horror' else '' }}">
+        👻 Horror
+      </a>
+    </div>
+  </div>
+</section>
+
 <section>
-  <h3>Phim đang thịnh hành</h3>
+  <h3>Phim đang thịnh hành{% if genre_filter %} - {{ genre_filter }}{% endif %}</h3>
   <div class="cards">
     {% for m in trending %}
     <a class="card" href="{{ url_for('main.detail', movie_id=m.id) }}">
@@ -120,6 +149,91 @@
 {% endif %}
 
 <style>
+/* Genre Filter Section */
+.genre-filter {
+  margin: 30px 0;
+  padding: 20px 0;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+  border-radius: 15px;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.genre-filter-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+.genre-filter h3 {
+  color: #fff;
+  font-size: 1.3rem;
+  margin: 0 0 20px 0;
+  text-align: center;
+  font-weight: 600;
+}
+
+.genre-buttons {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.genre-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  text-decoration: none;
+  border-radius: 25px;
+  font-weight: 500;
+  font-size: 0.95rem;
+  transition: all 0.3s ease;
+  border: 2px solid transparent;
+  backdrop-filter: blur(10px);
+}
+
+.genre-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+  color: #fff;
+  text-decoration: none;
+}
+
+.genre-btn.active {
+  background: linear-gradient(135deg, #ff6b35, #f7931e);
+  border-color: #ff6b35;
+  box-shadow: 0 4px 15px rgba(255, 107, 53, 0.4);
+  color: #fff;
+  font-weight: 600;
+}
+
+.genre-btn.active:hover {
+  background: linear-gradient(135deg, #ff7b45, #ffa31e);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(255, 107, 53, 0.5);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .genre-buttons {
+    gap: 8px;
+  }
+  
+  .genre-btn {
+    padding: 10px 16px;
+    font-size: 0.9rem;
+  }
+  
+  .genre-filter h3 {
+    font-size: 1.1rem;
+  }
+}
+
 /* Latest Movies Section */
 .latest-movies {
   margin: 40px 0;
