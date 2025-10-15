@@ -13,7 +13,7 @@
       </div>
     </div>
   </div>
-  </section>
+</section>
 
 <section>
   <h3>Phim đang thịnh hành</h3>
@@ -26,7 +26,7 @@
     </a>
     {% endfor %}
   </div>
-  </section>
+</section>
 
 <section>
   <h3>Phim được đề xuất cho bạn</h3>
@@ -39,7 +39,244 @@
     </a>
     {% endfor %}
   </div>
-  </section>
+</section>
+
+<!-- Phim mới nhất với phân trang -->
+{% if latest_movies %}
+<section class="latest-movies">
+  <div class="section-header">
+    <h3>🆕 Phim mới nhất</h3>
+    <div class="section-info">
+      <span class="movie-count">Hiển thị {{ latest_movies|length }} / {{ pagination.total }} phim</span>
+    </div>
+  </div>
+  
+  <div class="cards">
+    {% for m in latest_movies %}
+    <a class="card" href="{{ url_for('main.detail', movie_id=m.id) }}">
+      <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
+      <div class="card-content">
+        <div class="card-title">{{ m.title }}{% if m.year %} ({{ m.year }}){% endif %}</div>
+        <div class="card-meta">
+          <span class="upload-time">Mới upload</span>
+        </div>
+        <div class="stars">★★★★★</div>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  
+  <!-- Pagination -->
+  {% if pagination and pagination.pages > 1 %}
+  <div class="pagination">
+    <div class="pagination-info">
+      <span>Trang {{ pagination.page }} / {{ pagination.pages }}</span>
+      <span>({{ pagination.total }} phim)</span>
+    </div>
+    
+    <div class="pagination-controls">
+      {% if pagination.has_prev %}
+        <a href="{{ url_for('main.home', page=pagination.prev_num) }}" class="btn btn-pagination">
+          ← Trang trước
+        </a>
+      {% endif %}
+      
+      <div class="page-numbers">
+        {% set start_page = [1, pagination.page - 2]|max %}
+        {% set end_page = [pagination.pages, pagination.page + 2]|min %}
+        
+        {% if start_page > 1 %}
+          <a href="{{ url_for('main.home', page=1) }}" class="page-number">1</a>
+          {% if start_page > 2 %}
+            <span class="page-ellipsis">...</span>
+          {% endif %}
+        {% endif %}
+        
+        {% for page_num in range(start_page, end_page + 1) %}
+          {% if page_num == pagination.page %}
+            <span class="page-number current">{{ page_num }}</span>
+          {% else %}
+            <a href="{{ url_for('main.home', page=page_num) }}" class="page-number">{{ page_num }}</a>
+          {% endif %}
+        {% endfor %}
+        
+        {% if end_page < pagination.pages %}
+          {% if end_page < pagination.pages - 1 %}
+            <span class="page-ellipsis">...</span>
+          {% endif %}
+          <a href="{{ url_for('main.home', page=pagination.pages) }}" class="page-number">{{ pagination.pages }}</a>
+        {% endif %}
+      </div>
+      
+      {% if pagination.has_next %}
+        <a href="{{ url_for('main.home', page=pagination.next_num) }}" class="btn btn-pagination">
+          Trang sau →
+        </a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
+<style>
+/* Latest Movies Section */
+.latest-movies {
+  margin: 40px 0;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.section-header h3 {
+  color: #fff;
+  font-size: 1.5rem;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.section-info {
+  color: #888;
+  font-size: 0.9rem;
+}
+
+.movie-count {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 4px 12px;
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+}
+
+.card-content {
+  padding: 12px;
+}
+
+.card-meta {
+  margin: 5px 0;
+  font-size: 0.8rem;
+}
+
+.upload-time {
+  color: #4CAF50;
+  font-weight: bold;
+  background: rgba(76, 175, 80, 0.1);
+  padding: 2px 8px;
+  border-radius: 8px;
+}
+
+/* Pagination Styles */
+.pagination {
+  margin-top: 30px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.pagination-info {
+  color: #888;
+  font-size: 0.9rem;
+  display: flex;
+  gap: 10px;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.btn-pagination {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 6px;
+  text-decoration: none;
+  font-size: 0.9rem;
+  transition: all 0.3s ease;
+  backdrop-filter: blur(10px);
+}
+
+.btn-pagination:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.4);
+  transform: translateY(-1px);
+}
+
+.page-numbers {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.page-number {
+  display: inline-block;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  text-decoration: none;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  transition: all 0.3s ease;
+  backdrop-filter: blur(10px);
+  min-width: 40px;
+  text-align: center;
+}
+
+.page-number:hover {
+  background: rgba(255, 255, 255, 0.2);
+  transform: translateY(-1px);
+}
+
+.page-number.current {
+  background: #e50914;
+  color: #fff;
+  font-weight: bold;
+}
+
+.page-ellipsis {
+  color: #888;
+  padding: 8px 4px;
+  font-size: 0.9rem;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .section-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  
+  .pagination-controls {
+    flex-direction: column;
+    gap: 10px;
+  }
+  
+  .page-numbers {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  
+  .btn-pagination {
+    padding: 6px 12px;
+    font-size: 0.8rem;
+  }
+  
+  .page-number {
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    min-width: 35px;
+  }
+}
+</style>
 {% endblock %}
 
 

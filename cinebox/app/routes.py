@@ -2,6 +2,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, curren
 from sqlalchemy import text
 import sys
 import os
+import time
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from content_based_recommender import ContentBasedRecommender
 
@@ -14,6 +15,10 @@ def home():
     # Lấy danh sách phim từ DB bằng engine (odbc_connect); nếu chưa đăng nhập, chuyển tới form đăng nhập
     if not session.get("user_id"):
         return redirect(url_for("main.login"))
+    
+    # Lấy page parameter cho phim mới nhất
+    page = request.args.get('page', 1, type=int)
+    per_page = 12  # Số phim mỗi trang
     
     # Trending movies (phim phổ biến)
     try:
@@ -67,6 +72,62 @@ def home():
     if not personal_recommendations:
         personal_recommendations = trending
     
+    # Phim mới nhất (theo thời gian upload)
+    latest_movies = []
+    total_movies = 0
+    pagination = None
+    
+    try:
+        with current_app.db_engine.connect() as conn:
+            # Đếm tổng số phim
+            total_count = conn.execute(text("SELECT COUNT(*) FROM cine.Movie")).scalar()
+            total_movies = total_count
+            
+            # Tính toán phân trang
+            total_pages = (total_movies + per_page - 1) // per_page
+            offset = (page - 1) * per_page
+            
+            # Lấy phim mới nhất với phân trang
+            # Sử dụng movieId DESC để giả lập thời gian upload (movieId cao hơn = mới hơn)
+            latest_rows = conn.execute(text("""
+                SELECT movieId, title, posterUrl, backdropUrl, overview, releaseYear
+                FROM (
+                    SELECT movieId, title, posterUrl, backdropUrl, overview, releaseYear,
+                           ROW_NUMBER() OVER (ORDER BY movieId DESC) as rn
+                    FROM cine.Movie
+                ) t
+                WHERE rn > :offset AND rn <= :offset + :per_page
+            """), {"offset": offset, "per_page": per_page}).mappings().all()
+            
+            latest_movies = [
+                {
+                    "id": r["movieId"],
+                    "title": r["title"],
+                    "poster": r.get("posterUrl") or "/static/img/dune2.jpg",
+                    "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
+                    "description": (r.get("overview") or "")[:160],
+                    "year": r.get("releaseYear")
+                }
+                for r in latest_rows
+            ]
+            
+            # Tạo pagination info
+            pagination = {
+                "page": page,
+                "per_page": per_page,
+                "total": total_movies,
+                "pages": total_pages,
+                "has_prev": page > 1,
+                "has_next": page < total_pages,
+                "prev_num": page - 1 if page > 1 else None,
+                "next_num": page + 1 if page < total_pages else None
+            }
+            
+    except Exception as e:
+        print(f"Error getting latest movies: {e}")
+        latest_movies = []
+        pagination = None
+    
     if not trending:
         # Fallback demo data to avoid empty list errors in templates
         trending = [
@@ -88,7 +149,9 @@ def home():
     
     return render_template("home.html", 
                          trending=trending, 
-                         recommended=personal_recommendations)
+                         recommended=personal_recommendations,
+                         latest_movies=latest_movies,
+                         pagination=pagination)
 
 
 @main_bp.route("/login", methods=["GET", "POST"])
@@ -146,24 +209,36 @@ def register():
 @main_bp.route("/movie/<int:movie_id>")
 def detail(movie_id: int):
     with current_app.db_engine.connect() as conn:
+        # Lấy thông tin phim chính
         r = conn.execute(text(
             "SELECT movieId, title, releaseYear, posterUrl, backdropUrl, overview FROM cine.Movie WHERE movieId=:id"
         ), {"id": movie_id}).mappings().first()
-    if not r:
-        return redirect(url_for("main.home"))
-    
-    movie = {
-        "id": r["movieId"],
-        "title": r["title"],
-        "year": r.get("releaseYear"),
-        "duration": "",
-        "genres": [],
-        "rating": 0,
-        "poster": r.get("posterUrl") or "/static/img/dune2.jpg",
-        "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
-        "description": r.get("overview") or "",
-        "sources": [{"label": "720p", "url": "https://www.w3schools.com/html/movie.mp4"}],
-    }
+        
+        if not r:
+            return redirect(url_for("main.home"))
+        
+        # Lấy genres của phim
+        genres_query = text("""
+            SELECT g.name
+            FROM cine.MovieGenre mg
+            JOIN cine.Genre g ON mg.genreId = g.genreId
+            WHERE mg.movieId = :movie_id
+        """)
+        genres_result = conn.execute(genres_query, {"movie_id": movie_id}).fetchall()
+        genres = [genre[0] for genre in genres_result]
+        
+        movie = {
+            "id": r["movieId"],
+            "title": r["title"],
+            "year": r.get("releaseYear"),
+            "duration": "120 phút",  # Default duration
+            "genres": genres,
+            "rating": 5.0,  # Default rating
+            "poster": r.get("posterUrl") or "/static/img/dune2.jpg",
+            "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
+            "description": r.get("overview") or "",
+            "sources": [{"label": "720p", "url": "https://www.w3schools.com/html/movie.mp4"}],
+        }
     
     # CONTENT-BASED: Phim liên quan sử dụng ContentBasedRecommender
     related = []
@@ -171,24 +246,47 @@ def detail(movie_id: int):
         # Tạo recommender instance
         recommender = ContentBasedRecommender(current_app.db_engine)
         
-        # Lấy phim liên quan với hybrid approach
-        related_movies = recommender.get_related_movies_hybrid(movie_id, 6)
+        # Lấy phim liên quan từ model AI
+        related_movies = recommender.get_related_movies(movie_id, limit=6)
         
         # Format data cho template
         related = [
             {
-                "id": movie["movieId"],
+                "movieId": movie["movieId"],
                 "title": movie["title"],
-                "poster": movie["posterUrl"],
-                "similarity": movie["similarity"],
-                "overview": movie.get("overview", "")
+                "posterUrl": movie["posterUrl"],
+                "similarity": movie.get("similarity", 0.0),
+                "overview": movie.get("overview", ""),
+                "releaseYear": movie.get("releaseYear")
             }
             for movie in related_movies
         ]
         
     except Exception as e:
         print(f"Error getting related movies: {e}")
-        related = []
+        # Fallback: lấy phim ngẫu nhiên
+        try:
+            fallback_rows = conn.execute(text("""
+                SELECT TOP 6 movieId, title, posterUrl, releaseYear
+                FROM cine.Movie 
+                WHERE movieId != :id
+                ORDER BY NEWID()
+            """), {"id": movie_id}).mappings().all()
+            
+            related = [
+                {
+                    "movieId": row["movieId"],
+                    "title": row["title"],
+                    "posterUrl": row.get("posterUrl") or "/static/img/dune2.jpg",
+                    "similarity": 0.0,
+                    "overview": "",
+                    "releaseYear": row.get("releaseYear")
+                }
+                for row in fallback_rows
+            ]
+        except Exception as fallback_error:
+            print(f"Fallback error: {fallback_error}")
+            related = []
     
     return render_template("detail.html", movie=movie, related=related)
 
@@ -196,25 +294,322 @@ def detail(movie_id: int):
 @main_bp.route("/watch/<int:movie_id>")
 def watch(movie_id: int):
     with current_app.db_engine.connect() as conn:
+        # Lấy thông tin phim chính
         r = conn.execute(text(
-            "SELECT movieId, title, posterUrl, backdropUrl FROM cine.Movie WHERE movieId=:id"
+            "SELECT movieId, title, posterUrl, backdropUrl, releaseYear, overview FROM cine.Movie WHERE movieId=:id"
         ), {"id": movie_id}).mappings().first()
-    if not r:
-        return redirect(url_for("main.home"))
-    movie = {
-        "id": r["movieId"],
-        "title": r["title"],
-        "poster": r.get("posterUrl") or "/static/img/dune2.jpg",
-        "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
-        "sources": [{"label": "720p", "url": "https://www.w3schools.com/html/movie.mp4"}],
-    }
-    return render_template("watch.html", movie=movie)
+        
+        if not r:
+            return redirect(url_for("main.home"))
+        
+        movie = {
+            "id": r["movieId"],
+            "title": r["title"],
+            "poster": r.get("posterUrl") or "/static/img/dune2.jpg",
+            "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
+            "year": r.get("releaseYear"),
+            "overview": r.get("overview") or "",
+            "sources": [{"label": "720p", "url": "https://www.w3schools.com/html/movie.mp4"}],
+        }
+        
+        # Lấy phim liên quan từ model đã train
+        related_movies = []
+        try:
+            # Sử dụng ContentBasedRecommender để lấy phim liên quan
+            recommender = ContentBasedRecommender(current_app.db_engine)
+            related_movies_raw = recommender.get_related_movies(movie_id, limit=8)
+            
+            # Format data cho template
+            related_movies = [
+                {
+                    "movieId": movie["movieId"],
+                    "title": movie["title"],
+                    "posterUrl": movie["posterUrl"],
+                    "similarity": movie.get("similarity", 0.0),
+                    "releaseYear": movie.get("releaseYear")
+                }
+                for movie in related_movies_raw
+            ]
+        except Exception as e:
+            print(f"Error getting related movies: {e}")
+            # Fallback: lấy phim ngẫu nhiên nếu không có recommendations
+            try:
+                fallback_rows = conn.execute(text("""
+                    SELECT TOP 8 movieId, title, posterUrl, releaseYear
+                    FROM cine.Movie 
+                    WHERE movieId != :id
+                    ORDER BY NEWID()
+                """), {"id": movie_id}).mappings().all()
+                
+                related_movies = [
+                    {
+                        "movieId": row["movieId"],
+                        "title": row["title"],
+                        "posterUrl": row.get("posterUrl") or "/static/img/dune2.jpg",
+                        "releaseYear": row.get("releaseYear"),
+                        "similarity": 0.0
+                    }
+                    for row in fallback_rows
+                ]
+            except Exception as fallback_error:
+                print(f"Fallback error: {fallback_error}")
+                related_movies = []
+        
+        # Lấy phim mới ra mắt (giữ nguyên logic cũ)
+        try:
+            new_releases_rows = conn.execute(text("""
+                SELECT TOP 8 movieId, title, posterUrl, releaseYear
+                FROM cine.Movie 
+                ORDER BY releaseYear DESC, movieId DESC
+            """)).mappings().all()
+            
+            new_releases = [
+                {
+                    "movieId": row["movieId"],
+                    "title": row["title"],
+                    "posterUrl": row.get("posterUrl") or "/static/img/dune2.jpg",
+                    "releaseYear": row.get("releaseYear")
+                }
+                for row in new_releases_rows
+            ]
+        except Exception:
+            new_releases = []
+    
+    return render_template("watch.html", 
+                         movie=movie, 
+                         related_movies=related_movies,
+                         new_releases=new_releases)
 
 
 @main_bp.route("/logout")
 def logout():
     session.clear()
     return redirect(url_for("main.home"))
+
+
+@main_bp.route("/account")
+def account():
+    """Trang tài khoản của tôi"""
+    if not session.get("user_id"):
+        return redirect(url_for("main.login"))
+    
+    user_id = session.get("user_id")
+    
+    # Lấy thông tin user
+    try:
+        with current_app.db_engine.connect() as conn:
+            user_info = conn.execute(text("""
+                SELECT u.userId, u.email, u.avatarUrl, u.phone, u.status, u.createdAt, u.lastLoginAt, r.roleName
+                FROM [cine].[User] u
+                JOIN [cine].[Role] r ON u.roleId = r.roleId
+                WHERE u.userId = :user_id
+            """), {"user_id": user_id}).mappings().first()
+            
+            # Cập nhật session với avatar mới nhất
+            if user_info and user_info.avatarUrl:
+                session['avatar'] = user_info.avatarUrl
+            
+            if not user_info:
+                return redirect(url_for("main.login"))
+            
+            # Lấy danh sách xem sau (watchlist)
+            watchlist = conn.execute(text("""
+                SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, wl.addedAt
+                FROM [cine].[WatchList] wl
+                JOIN [cine].[Movie] m ON wl.movieId = m.movieId
+                WHERE wl.userId = :user_id
+                ORDER BY wl.addedAt DESC
+            """), {"user_id": user_id}).mappings().all()
+            
+            # Lấy danh sách yêu thích (favorites)
+            favorites = conn.execute(text("""
+                SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, f.addedAt
+                FROM [cine].[Favorite] f
+                JOIN [cine].[Movie] m ON f.movieId = m.movieId
+                WHERE f.userId = :user_id
+                ORDER BY f.addedAt DESC
+            """), {"user_id": user_id}).mappings().all()
+            
+    except Exception as e:
+        print(f"Error getting account info: {e}")
+        user_info = None
+        watchlist = []
+        favorites = []
+    
+    return render_template("account.html", 
+                         user=user_info,
+                         watchlist=watchlist,
+                         favorites=favorites)
+
+
+@main_bp.route("/update-profile", methods=["POST"])
+def update_profile():
+    """Cập nhật thông tin profile"""
+    if not session.get("user_id"):
+        return redirect(url_for("main.login"))
+    
+    user_id = session.get("user_id")
+    phone = request.form.get("phone", "").strip()
+    
+    try:
+        with current_app.db_engine.begin() as conn:
+            # Cập nhật thông tin cơ bản
+            conn.execute(text("""
+                UPDATE [cine].[User] 
+                SET phone = :phone
+                WHERE userId = :user_id
+            """), {"phone": phone if phone else None, "user_id": user_id})
+            
+            # Xử lý upload avatar nếu có
+            if 'avatar' in request.files:
+                avatar_file = request.files['avatar']
+                if avatar_file and avatar_file.filename:
+                    # Lưu file avatar vào thư mục D:\N5\KLTN\WebXemPhim\avatar
+                    filename = f"avatar_{user_id}_{int(time.time())}.jpg"
+                    avatar_dir = r"D:\N5\KLTN\WebXemPhim\avatar"
+                    avatar_file_path = os.path.join(avatar_dir, filename)
+                    
+                    # Tạo thư mục nếu chưa có
+                    os.makedirs(avatar_dir, exist_ok=True)
+                    avatar_file.save(avatar_file_path)
+                    
+                    # Cập nhật đường dẫn avatar trong database (lưu tên file để serve qua route)
+                    avatar_url = f"/avatar/{filename}"
+                    conn.execute(text("""
+                        UPDATE [cine].[User] 
+                        SET avatarUrl = :avatar_url
+                        WHERE userId = :user_id
+                    """), {"avatar_url": avatar_url, "user_id": user_id})
+                    
+                    # Cập nhật session với avatar mới
+                    session['avatar'] = avatar_url
+        
+        return redirect(url_for("main.account"))
+        
+    except Exception as e:
+        print(f"Error updating profile: {e}")
+        return redirect(url_for("main.account"))
+
+
+@main_bp.route("/add-watchlist/<int:movie_id>", methods=["POST"])
+def add_watchlist(movie_id):
+    """Thêm phim vào danh sách xem sau"""
+    if not session.get("user_id"):
+        return jsonify({"success": False, "message": "Chưa đăng nhập"})
+    
+    user_id = session.get("user_id")
+    
+    try:
+        with current_app.db_engine.begin() as conn:
+            # Kiểm tra xem phim đã có trong watchlist chưa
+            existing = conn.execute(text("""
+                SELECT 1 FROM [cine].[WatchList] 
+                WHERE userId = :user_id AND movieId = :movie_id
+            """), {"user_id": user_id, "movie_id": movie_id}).scalar()
+            
+            if not existing:
+                conn.execute(text("""
+                    INSERT INTO [cine].[WatchList] (userId, movieId, addedAt)
+                    VALUES (:user_id, :movie_id, GETDATE())
+                """), {"user_id": user_id, "movie_id": movie_id})
+                
+                return jsonify({"success": True, "message": "Đã thêm vào danh sách xem sau"})
+            else:
+                return jsonify({"success": False, "message": "Phim đã có trong danh sách xem sau"})
+                
+    except Exception as e:
+        print(f"Error adding to watchlist: {e}")
+        return jsonify({"success": False, "message": "Có lỗi xảy ra"})
+
+
+@main_bp.route("/remove-watchlist/<int:movie_id>", methods=["POST"])
+def remove_watchlist(movie_id):
+    """Xóa phim khỏi danh sách xem sau"""
+    if not session.get("user_id"):
+        return jsonify({"success": False, "message": "Chưa đăng nhập"})
+    
+    user_id = session.get("user_id")
+    
+    try:
+        with current_app.db_engine.begin() as conn:
+            conn.execute(text("""
+                DELETE FROM [cine].[WatchList] 
+                WHERE userId = :user_id AND movieId = :movie_id
+            """), {"user_id": user_id, "movie_id": movie_id})
+            
+            return jsonify({"success": True, "message": "Đã xóa khỏi danh sách xem sau"})
+            
+    except Exception as e:
+        print(f"Error removing from watchlist: {e}")
+        return jsonify({"success": False, "message": "Có lỗi xảy ra"})
+
+
+@main_bp.route("/add-favorite/<int:movie_id>", methods=["POST"])
+def add_favorite(movie_id):
+    """Thêm phim vào danh sách yêu thích"""
+    if not session.get("user_id"):
+        return jsonify({"success": False, "message": "Chưa đăng nhập"})
+    
+    user_id = session.get("user_id")
+    
+    try:
+        with current_app.db_engine.begin() as conn:
+            # Kiểm tra xem phim đã có trong favorites chưa
+            existing = conn.execute(text("""
+                SELECT 1 FROM [cine].[Favorite] 
+                WHERE userId = :user_id AND movieId = :movie_id
+            """), {"user_id": user_id, "movie_id": movie_id}).scalar()
+            
+            if not existing:
+                conn.execute(text("""
+                    INSERT INTO [cine].[Favorite] (userId, movieId, addedAt)
+                    VALUES (:user_id, :movie_id, GETDATE())
+                """), {"user_id": user_id, "movie_id": movie_id})
+                
+                return jsonify({"success": True, "message": "Đã thêm vào danh sách yêu thích"})
+            else:
+                return jsonify({"success": False, "message": "Phim đã có trong danh sách yêu thích"})
+                
+    except Exception as e:
+        print(f"Error adding to favorites: {e}")
+        return jsonify({"success": False, "message": "Có lỗi xảy ra"})
+
+
+@main_bp.route("/remove-favorite/<int:movie_id>", methods=["POST"])
+def remove_favorite(movie_id):
+    """Xóa phim khỏi danh sách yêu thích"""
+    if not session.get("user_id"):
+        return jsonify({"success": False, "message": "Chưa đăng nhập"})
+    
+    user_id = session.get("user_id")
+    
+    try:
+        with current_app.db_engine.begin() as conn:
+            conn.execute(text("""
+                DELETE FROM [cine].[Favorite] 
+                WHERE userId = :user_id AND movieId = :movie_id
+            """), {"user_id": user_id, "movie_id": movie_id})
+            
+            return jsonify({"success": True, "message": "Đã xóa khỏi danh sách yêu thích"})
+            
+    except Exception as e:
+        print(f"Error removing from favorites: {e}")
+        return jsonify({"success": False, "message": "Có lỗi xảy ra"})
+
+
+@main_bp.route("/avatar/<path:filename>")
+def serve_avatar(filename):
+    """Serve avatar files from D:\N5\KLTN\WebXemPhim\avatar"""
+    from flask import send_file
+    import os
+    
+    avatar_path = os.path.join(r"D:\N5\KLTN\WebXemPhim\avatar", filename)
+    
+    if os.path.exists(avatar_path):
+        return send_file(avatar_path)
+    else:
+        # Return default avatar if file not found
+        return send_file(os.path.join(current_app.static_folder, "img", "avatar_default.png"))
 
 
 def require_role(role_name: str):

@@ -179,6 +179,28 @@ CREATE INDEX IX_PersonalRecommendation_rank ON cine.PersonalRecommendation(userI
 CREATE INDEX IX_PersonalRecommendation_expires ON cine.PersonalRecommendation(expiresAt);
 GO
 
+-- FAVORITE
+IF OBJECT_ID('cine.Favorite','U') IS NOT NULL DROP TABLE cine.Favorite;
+CREATE TABLE cine.Favorite (
+  favoriteId  BIGINT IDENTITY(1,1) PRIMARY KEY,
+  userId      BIGINT NOT NULL CONSTRAINT FK_Favorite_User REFERENCES cine.[User](userId) ON DELETE CASCADE,
+  movieId     BIGINT NOT NULL CONSTRAINT FK_Favorite_Movie REFERENCES cine.Movie(movieId) ON DELETE CASCADE,
+  addedAt     DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME(),
+  CONSTRAINT UK_Favorite_User_Movie UNIQUE (userId, movieId)
+);
+GO
+
+-- WATCHLIST
+IF OBJECT_ID('cine.WatchList','U') IS NOT NULL DROP TABLE cine.WatchList;
+CREATE TABLE cine.WatchList (
+  watchListId BIGINT IDENTITY(1,1) PRIMARY KEY,
+  userId      BIGINT NOT NULL CONSTRAINT FK_WatchList_User REFERENCES cine.[User](userId) ON DELETE CASCADE,
+  movieId     BIGINT NOT NULL CONSTRAINT FK_WatchList_Movie REFERENCES cine.Movie(movieId) ON DELETE CASCADE,
+  addedAt     DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME(),
+  CONSTRAINT UK_WatchList_User_Movie UNIQUE (userId, movieId)
+);
+GO
+
 -- MovieLens integration removed per project requirements
 
 

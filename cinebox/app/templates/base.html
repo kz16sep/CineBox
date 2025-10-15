@@ -22,9 +22,13 @@
               <a class="btn btn-secondary" href="{{ url_for('main.admin_users') }}">Quản lý tài khoản</a>
             {% endif %}
             <div class="user-box">
-              <img class="avatar" src="{{ session.get('avatar') or url_for('static', filename='img/avatar_default.png') }}" alt="avatar">
+              {% if session.get('avatar') and session.get('avatar').startswith('/avatar/') %}
+                <img class="avatar" src="{{ session.get('avatar') }}" alt="avatar">
+              {% else %}
+                <img class="avatar" src="{{ session.get('avatar') or url_for('static', filename='img/avatar_default.png') }}" alt="avatar">
+              {% endif %}
               <span class="username">{{ session.get('username') or session.get('email') }}</span>
-              <a class="btn btn-secondary" href="{{ url_for('main.logout') }}">Đăng xuất</a>
+              <a class="btn btn-secondary" href="{{ url_for('main.account') }}">Tài khoản của tôi</a>
             </div>
           {% else %}
             

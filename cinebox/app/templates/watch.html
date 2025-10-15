@@ -2,7 +2,9 @@
 {% block title %}Xem: {{ movie.title }} · CineBox{% endblock %}
 {% block content %}
 <section class="watch">
-  <h2>{{ movie.title }}</h2>
+  <h2>{{ movie.title }}{% if movie.year %} ({{ movie.year }}){% endif %}</h2>
+  
+  <!-- Video Player -->
   <video class="player" controls poster="{{ movie.backdrop }}">
     {% for s in movie.sources %}
     <source src="{{ s.url }}" type="video/mp4" />
@@ -10,17 +12,154 @@
     Trình duyệt của bạn không hỗ trợ video.
   </video>
 
-  <h3>Phim mới ra mắt</h3>
-  <div class="cards">
-    {% for m in [movie] %}
-    <a class="card" href="{{ url_for('main.detail', movie_id=m.id) }}">
-      <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
-      <div class="card-title">{{ m.title }}</div>
-      <div class="stars">★★★★★</div>
-    </a>
-    {% endfor %}
+  <!-- Movie Overview -->
+  {% if movie.overview %}
+  <div class="movie-overview">
+    <h3>Nội dung phim</h3>
+    <p>{{ movie.overview }}</p>
   </div>
+  {% endif %}
+
+  <!-- Phim liên quan (Related Movies) -->
+  {% if related_movies %}
+  <div class="related-section">
+    <h3>🎬 Phim liên quan</h3>
+    <div class="cards">
+      {% for m in related_movies %}
+      <a class="card" href="{{ url_for('main.watch', movie_id=m.movieId) }}">
+        <div class="poster" style="background-image:url('{{ m.posterUrl }}')"></div>
+        <div class="card-title">{{ m.title }}{% if m.releaseYear %} ({{ m.releaseYear }}){% endif %}</div>
+        {% if m.similarity %}
+        <div class="similarity-score">
+          <span class="similarity-label">Độ tương đồng:</span>
+          <span class="similarity-value">{{ "%.1f"|format(m.similarity * 100) }}%</span>
+        </div>
+        {% endif %}
+        <div class="stars">★★★★★</div>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Phim mới ra mắt -->
+  {% if new_releases %}
+  <div class="new-releases-section">
+    <h3>🆕 Phim mới ra mắt</h3>
+    <div class="cards">
+      {% for m in new_releases %}
+      <a class="card" href="{{ url_for('main.watch', movie_id=m.movieId) }}">
+        <div class="poster" style="background-image:url('{{ m.posterUrl }}')"></div>
+        <div class="card-title">{{ m.title }}{% if m.releaseYear %} ({{ m.releaseYear }}){% endif %}</div>
+        <div class="stars">★★★★★</div>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
 </section>
+
+<style>
+.movie-overview {
+  margin: 20px 0;
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+}
+
+.movie-overview h3 {
+  color: #fff;
+  margin-bottom: 10px;
+  font-size: 1.2em;
+}
+
+.movie-overview p {
+  color: #ccc;
+  line-height: 1.6;
+}
+
+.related-section, .new-releases-section {
+  margin: 30px 0;
+}
+
+.related-section h3, .new-releases-section h3 {
+  color: #fff;
+  margin-bottom: 15px;
+  font-size: 1.3em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.similarity-score {
+  margin: 5px 0;
+  font-size: 0.9em;
+}
+
+.similarity-label {
+  color: #888;
+}
+
+.similarity-value {
+  color: #4CAF50;
+  font-weight: bold;
+}
+
+.cards {
+  display: flex;
+  gap: 15px;
+  overflow-x: auto;
+  padding: 10px 0;
+}
+
+.card {
+  flex: 0 0 200px;
+  text-decoration: none;
+  color: inherit;
+  transition: transform 0.2s ease;
+}
+
+.card:hover {
+  transform: translateY(-5px);
+}
+
+.poster {
+  width: 100%;
+  height: 280px;
+  background-size: cover;
+  background-position: center;
+  border-radius: 8px;
+  margin-bottom: 10px;
+}
+
+.card-title {
+  color: #fff;
+  font-weight: bold;
+  margin-bottom: 5px;
+  font-size: 0.9em;
+  line-height: 1.3;
+}
+
+.stars {
+  color: #ffd700;
+  font-size: 0.8em;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .cards {
+    gap: 10px;
+  }
+  
+  .card {
+    flex: 0 0 150px;
+  }
+  
+  .poster {
+    height: 200px;
+  }
+}
+</style>
 {% endblock %}
 
 
