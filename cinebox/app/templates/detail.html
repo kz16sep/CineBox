@@ -46,7 +46,9 @@
 {% if related %}
 <section class="related-section">
   <h3>🎬 Phim liên quan & Gợi ý cho bạn</h3>
-  <div class="cards">
+  <div class="cards-container">
+    <button class="scroll-btn scroll-left" onclick="scrollCards('left')">‹</button>
+    <div class="cards" id="relatedCards">
     {% for m in related %}
     <a class="card" href="{{ url_for('main.detail', movie_id=m.movieId) }}">
       <div class="poster" style="background-image:url('{{ m.posterUrl }}')"></div>
@@ -62,6 +64,8 @@
       </div>
     </a>
     {% endfor %}
+    </div>
+    <button class="scroll-btn scroll-right" onclick="scrollCards('right')">›</button>
   </div>
 </section>
 {% endif %}
@@ -213,7 +217,103 @@
   display: flex;
   gap: 20px;
   overflow-x: auto;
-  padding: 10px 0;
+  padding: 10px 0 20px 0;
+  scrollbar-width: thin;
+  scrollbar-color: #4CAF50 #2a2a2a;
+}
+
+/* Custom scrollbar for WebKit browsers (Chrome, Safari, Edge) */
+.cards::-webkit-scrollbar {
+  height: 8px;
+}
+
+.cards::-webkit-scrollbar-track {
+  background: #2a2a2a;
+  border-radius: 4px;
+  box-shadow: inset 0 0 2px rgba(0, 0, 0, 0.3);
+}
+
+.cards::-webkit-scrollbar-thumb {
+  background: linear-gradient(90deg, #4CAF50, #45a049);
+  border-radius: 4px;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.cards::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(90deg, #45a049, #4CAF50);
+  box-shadow: 0 2px 8px rgba(76, 175, 80, 0.3);
+  transform: scaleY(1.2);
+}
+
+.cards::-webkit-scrollbar-thumb:active {
+  background: linear-gradient(90deg, #3d8b40, #4CAF50);
+}
+
+.cards::-webkit-scrollbar-corner {
+  background: #2a2a2a;
+}
+
+/* Smooth scrolling */
+.cards {
+  scroll-behavior: smooth;
+}
+
+/* Cards container with scroll buttons */
+.cards-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.scroll-btn {
+  background: rgba(76, 175, 80, 0.8);
+  border: none;
+  color: white;
+  font-size: 24px;
+  font-weight: bold;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.scroll-btn:hover {
+  background: rgba(76, 175, 80, 1);
+  transform: scale(1.1);
+  box-shadow: 0 6px 16px rgba(76, 175, 80, 0.4);
+}
+
+.scroll-btn:active {
+  transform: scale(0.95);
+}
+
+.scroll-left {
+  position: absolute;
+  left: -50px;
+}
+
+.scroll-right {
+  position: absolute;
+  right: -50px;
+}
+
+/* Hide scroll buttons on mobile */
+@media (max-width: 768px) {
+  .scroll-btn {
+    display: none;
+  }
+  
+  .cards-container {
+    gap: 0;
+  }
 }
 
 .card {
@@ -348,6 +448,62 @@ function addToFavorites(movieId) {
     alert('❌ Có lỗi xảy ra khi thêm vào danh sách yêu thích');
   });
 }
+
+// Scroll cards function
+function scrollCards(direction) {
+  const cardsContainer = document.getElementById('relatedCards');
+  const scrollAmount = 300; // pixels to scroll
+  
+  if (direction === 'left') {
+    cardsContainer.scrollBy({
+      left: -scrollAmount,
+      behavior: 'smooth'
+    });
+  } else if (direction === 'right') {
+    cardsContainer.scrollBy({
+      left: scrollAmount,
+      behavior: 'smooth'
+    });
+  }
+}
+
+// Auto-hide scroll buttons based on scroll position
+document.addEventListener('DOMContentLoaded', function() {
+  const cardsContainer = document.getElementById('relatedCards');
+  const leftBtn = document.querySelector('.scroll-left');
+  const rightBtn = document.querySelector('.scroll-right');
+  
+  if (cardsContainer && leftBtn && rightBtn) {
+    function updateScrollButtons() {
+      const scrollLeft = cardsContainer.scrollLeft;
+      const maxScroll = cardsContainer.scrollWidth - cardsContainer.clientWidth;
+      
+      // Show/hide left button
+      if (scrollLeft <= 0) {
+        leftBtn.style.opacity = '0.3';
+        leftBtn.style.pointerEvents = 'none';
+      } else {
+        leftBtn.style.opacity = '1';
+        leftBtn.style.pointerEvents = 'auto';
+      }
+      
+      // Show/hide right button
+      if (scrollLeft >= maxScroll - 10) { // 10px tolerance
+        rightBtn.style.opacity = '0.3';
+        rightBtn.style.pointerEvents = 'none';
+      } else {
+        rightBtn.style.opacity = '1';
+        rightBtn.style.pointerEvents = 'auto';
+      }
+    }
+    
+    // Update buttons on scroll
+    cardsContainer.addEventListener('scroll', updateScrollButtons);
+    
+    // Initial update
+    updateScrollButtons();
+  }
+});
 </script>
 {% endblock %}
 

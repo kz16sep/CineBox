@@ -372,7 +372,7 @@ def watch(movie_id: int):
         try:
             # Sử dụng ContentBasedRecommender để lấy phim liên quan
             recommender = ContentBasedRecommender(current_app.db_engine)
-            related_movies_raw = recommender.get_related_movies(movie_id, limit=8)
+            related_movies_raw = recommender.get_related_movies(movie_id, limit=12)
             
             # Format data cho template
             related_movies = [
@@ -410,30 +410,12 @@ def watch(movie_id: int):
                 print(f"Fallback error: {fallback_error}")
                 related_movies = []
         
-        # Lấy phim mới ra mắt (giữ nguyên logic cũ)
-        try:
-            new_releases_rows = conn.execute(text("""
-                SELECT TOP 8 movieId, title, posterUrl, releaseYear
-                FROM cine.Movie 
-                ORDER BY releaseYear DESC, movieId DESC
-            """)).mappings().all()
-            
-            new_releases = [
-                {
-                    "movieId": row["movieId"],
-                    "title": row["title"],
-                    "posterUrl": row.get("posterUrl") or "/static/img/dune2.jpg",
-                    "releaseYear": row.get("releaseYear")
-                }
-                for row in new_releases_rows
-            ]
-        except Exception:
-            new_releases = []
+        # Chỉ sử dụng phim liên quan từ mô hình improved_train.py
+        # Không cần "Phim mới ra mắt" nữa
     
     return render_template("watch.html", 
                          movie=movie, 
-                         related_movies=related_movies,
-                         new_releases=new_releases)
+                         related_movies=related_movies)
 
 
 @main_bp.route("/logout")
