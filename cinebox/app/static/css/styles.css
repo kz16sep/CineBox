@@ -104,6 +104,17 @@ h3{margin:24px 0 12px}
 
 /* Tất cả thể loại đều có style giống nhau - đã loại bỏ style màu đỏ */
 
+/* User Box Styles */
+.user-box {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-box .btn {
+  margin: 0;
+}
+
 /* Avatar Styles */
 .avatar-container {
   position: relative;

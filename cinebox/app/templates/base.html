@@ -36,12 +36,10 @@
         </form>
         <nav>
           {% if session.get('user_id') %}
-            {% if session.get('role') == 'Admin' %}
-              <a class="btn btn-primary" href="{{ url_for('main.admin_dashboard') }}">Admin</a>
-              <a class="btn btn-secondary" href="{{ url_for('main.admin_movies') }}">Phim</a>
-              <a class="btn btn-secondary" href="{{ url_for('main.admin_users') }}">Người dùng</a>
-            {% endif %}
             <div class="user-box">
+              {% if session.get('role') == 'Admin' %}
+                <a class="btn btn-primary" href="{{ url_for('main.admin_dashboard') }}">Admin</a>
+              {% endif %}
               <div class="avatar-container">
                 <input type="file" id="avatar-upload" accept="image/*" style="display: none;" onchange="uploadAvatar(this)">
                 {% if session.get('avatar') and session.get('avatar').startswith('/avatar/') %}
