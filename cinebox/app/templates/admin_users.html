@@ -1,23 +1,491 @@
 {% extends 'base.html' %}
-{% block title %}Quản lý tài khoản · CineBox{% endblock %}
+{% block title %}Quản lý người dùng · CineBox{% endblock %}
 {% block content %}
 <div class="admin">
-  <h1>Quản lý tài khoản</h1>
-  <table class="table">
-    <thead><tr><th>ID</th><th>Email</th><th>Vai trò</th><th>Trạng thái</th><th>Tạo lúc</th></tr></thead>
+  <div class="form-header">
+    <h1>👥 Quản lý người dùng</h1>
+    <p class="form-subtitle">Quản lý tài khoản và quyền truy cập người dùng</p>
+  </div>
+
+  <!-- Thanh tìm kiếm -->
+  <div class="admin-search-bar">
+    <form method="GET" action="{{ url_for('main.admin_users') }}" class="search-form">
+      <div class="search-input-group">
+        <input 
+          type="text" 
+          name="q" 
+          value="{{ search_query or '' }}"
+          placeholder="Tìm kiếm theo ID hoặc email..." 
+          class="search-input"
+        />
+        <button type="submit" class="search-btn">
+          <span>🔍</span>
+        </button>
+        {% if search_query %}
+        <a href="{{ url_for('main.admin_users') }}" class="clear-search-btn">✕</a>
+        {% endif %}
+      </div>
+    </form>
+    <div class="search-hint">
+      💡 <strong>Hướng dẫn tìm kiếm:</strong> Nhập ID số (ví dụ: 1, 2, 3) hoặc email để tìm kiếm người dùng
+    </div>
+  </div>
+
+  <!-- Thống kê -->
+  <div class="admin-stats">
+    <div class="stat-item">
+      <span class="stat-label">Tổng số người dùng:</span>
+      <span class="stat-value">{{ pagination.total if pagination else users|length }}</span>
+    </div>
+    {% if search_query %}
+    <div class="stat-item">
+      <span class="stat-label">Kết quả tìm kiếm:</span>
+      <span class="stat-value">{{ users|length }}</span>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Bảng người dùng -->
+  <div class="admin-table-container">
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Email</th>
+          <th>Username</th>
+          <th>Vai trò</th>
+          <th>Trạng thái</th>
+          <th>Ngày tạo</th>
+          <th>Đăng nhập cuối</th>
+          <th>Hành động</th>
+        </tr>
+      </thead>
     <tbody>
-      {% for u in users %}
-      <tr>
-        <td>{{ u.userId }}</td>
-        <td>{{ u.email }}</td>
-        <td>{{ u.roleName }}</td>
-        <td>{{ u.status }}</td>
-        <td>{{ u.createdAt }}</td>
+        {% for user in users %}
+        <tr>
+          <td class="user-id">{{ user.userId }}</td>
+          <td class="user-email">{{ user.email }}</td>
+          <td class="user-username">{{ user.username or '-' }}</td>
+          <td class="user-role">
+            <span class="role-badge role-{{ user.roleName.lower() }}">
+              {{ user.roleName }}
+            </span>
+          </td>
+          <td class="user-status">
+            <span class="status-badge status-{{ user.status }}">
+              {% if user.status == 'active' %}
+                ✅ Hoạt động
+              {% else %}
+                ❌ Không hoạt động
+              {% endif %}
+            </span>
+          </td>
+          <td class="user-date">{{ user.createdAt.strftime('%d/%m/%Y') if user.createdAt else '-' }}</td>
+          <td class="user-lastlogin">
+            {% if user.lastLoginAt %}
+              {{ user.lastLoginAt.strftime('%d/%m/%Y %H:%M') }}
+            {% else %}
+              Chưa đăng nhập
+            {% endif %}
+          </td>
+          <td class="user-actions">
+            {% if user.roleName != 'Admin' %}
+              <form method="post" action="{{ url_for('main.admin_user_toggle_status', user_id=user.userId) }}" 
+                    style="display:inline" 
+                    onsubmit="return confirm('Bạn có chắc muốn thay đổi trạng thái tài khoản {{ user.email }}?');">
+                <button class="btn btn-sm btn-toggle" type="submit" 
+                        title="{% if user.status == 'active' %}Chặn tài khoản{% else %}Kích hoạt tài khoản{% endif %}">
+                  {% if user.status == 'active' %}
+                    🚫 Chặn
+                  {% else %}
+                    ✅ Kích hoạt
+                  {% endif %}
+                </button>
+              </form>
+              
+              <form method="post" action="{{ url_for('main.admin_user_delete', user_id=user.userId) }}" 
+                    style="display:inline" 
+                    onsubmit="return confirm('⚠️ CẢNH BÁO: Bạn có chắc muốn XÓA VĨNH VIỄN tài khoản {{ user.email }}?\n\nHành động này không thể hoàn tác!');">
+                <button class="btn btn-sm btn-delete" type="submit" title="Xóa tài khoản">
+                  🗑️ Xóa
+                </button>
+              </form>
+            {% else %}
+              <span class="admin-protected">🔒 Bảo vệ</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="8" class="no-data">
+            {% if search_query %}
+              Không tìm thấy người dùng nào với từ khóa "{{ search_query }}"
+            {% else %}
+              Chưa có người dùng nào trong hệ thống
+            {% endif %}
+          </td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
+
+  <!-- Phân trang -->
+  {% if pagination and pagination.pages > 1 %}
+  <div class="pagination">
+    <div class="pagination-info">
+      Hiển thị {{ ((pagination.page - 1) * pagination.per_page + 1) }} - 
+      {{ pagination.page * pagination.per_page if pagination.page * pagination.per_page < pagination.total else pagination.total }} 
+      trong tổng số {{ pagination.total }} người dùng
+    </div>
+    
+    <div class="pagination-controls">
+      {% if pagination.has_prev %}
+        <a href="{{ url_for('main.admin_users', page=pagination.prev_num, q=search_query) }}" 
+           class="btn btn-secondary">‹ Trước</a>
+      {% endif %}
+      
+      <span class="page-info">
+        Trang {{ pagination.page }} / {{ pagination.pages }}
+      </span>
+      
+      {% if pagination.has_next %}
+        <a href="{{ url_for('main.admin_users', page=pagination.next_num, q=search_query) }}" 
+           class="btn btn-secondary">Tiếp ›</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<style>
+.admin {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.form-header {
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.form-header h1 {
+  color: #fff;
+  font-size: 2.5rem;
+  margin-bottom: 10px;
+}
+
+.form-subtitle {
+  color: var(--muted);
+  font-size: 1.1rem;
+}
+
+.admin-search-bar {
+  margin-bottom: 20px;
+}
+
+.search-form {
+  max-width: 500px;
+  margin: 0 auto;
+}
+
+.search-input-group {
+  display: flex;
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 8px;
+  position: relative;
+}
+
+.search-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #fff;
+  padding: 12px 16px;
+  font-size: 16px;
+  outline: none;
+}
+
+.search-input::placeholder {
+  color: var(--muted);
+}
+
+.search-btn {
+  background: var(--primary);
+  border: none;
+  color: #fff;
+  padding: 12px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: all 0.3s ease;
+}
+
+.search-btn:hover {
+  background: var(--primary-2);
+}
+
+.clear-search-btn {
+  position: absolute;
+  right: 60px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 18px;
+  padding: 8px;
+  border-radius: 50%;
+  transition: all 0.3s ease;
+}
+
+.clear-search-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.search-hint {
+  text-align: center;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 8px;
+  padding: 8px 16px;
+  max-width: 500px;
+  margin: 10px auto 0;
+}
+
+.admin-stats {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 20px;
+  justify-content: center;
+}
+
+.stat-item {
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 15px 20px;
+  text-align: center;
+}
+
+.stat-label {
+  color: var(--muted);
+  font-size: 0.9rem;
+  display: block;
+  margin-bottom: 5px;
+}
+
+.stat-value {
+  color: var(--primary);
+  font-size: 1.5rem;
+  font-weight: bold;
+}
+
+.admin-table-container {
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.admin-table th {
+  background: var(--panel-2);
+  color: #fff;
+  padding: 15px 12px;
+  text-align: left;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.admin-table td {
+  padding: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  color: #fff;
+  vertical-align: middle;
+}
+
+.admin-table tr:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.user-id {
+  width: 60px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.user-email {
+  font-weight: 600;
+  max-width: 200px;
+  word-break: break-all;
+}
+
+.user-username {
+  color: var(--muted);
+  max-width: 150px;
+}
+
+.user-role {
+  text-align: center;
+}
+
+.role-badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.role-admin {
+  background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+  color: #fff;
+}
+
+.role-user {
+  background: linear-gradient(135deg, #74b9ff, #0984e3);
+  color: #fff;
+}
+
+.user-status {
+  text-align: center;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.status-active {
+  background: linear-gradient(135deg, #00b894, #00a085);
+  color: #fff;
+}
+
+.status-inactive {
+  background: linear-gradient(135deg, #d63031, #b71c1c);
+  color: #fff;
+}
+
+.user-date, .user-lastlogin {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.user-actions {
+  text-align: center;
+}
+
+.user-actions .btn {
+  margin: 0 2px;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.btn-toggle {
+  background: #f39c12 !important;
+  color: #fff !important;
+  border: 1px solid #e67e22 !important;
+}
+
+.btn-toggle:hover {
+  background: #e67e22 !important;
+  border-color: #d35400 !important;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(243, 156, 18, 0.3);
+}
+
+.btn-delete {
+  background: #ef4444 !important;
+  color: #fff !important;
+  border: 1px solid #dc2626 !important;
+}
+
+.btn-delete:hover {
+  background: #dc2626 !important;
+  border-color: #b91c1c !important;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+}
+
+.admin-protected {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+.no-data {
+  text-align: center;
+  color: var(--muted);
+  font-style: italic;
+  padding: 40px !important;
+}
+
+.pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 20px;
+  padding: 20px;
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+}
+
+.pagination-info {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.page-info {
+  color: #fff;
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .admin {
+    padding: 15px;
+  }
+  
+  .admin-table-container {
+    overflow-x: auto;
+  }
+  
+  .admin-table {
+    min-width: 1000px;
+  }
+  
+  .pagination {
+    flex-direction: column;
+    gap: 15px;
+    text-align: center;
+  }
+  
+  .admin-stats {
+    flex-direction: column;
+    align-items: center;
+  }
+}
+</style>
 {% endblock %}
-
-

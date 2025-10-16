@@ -328,9 +328,9 @@ def login():
         print(f"Login attempt: username='{username}', password='{password}'")
         
         with current_app.db_engine.connect() as conn:
-            # Test query đơn giản trước
+            # Query kiểm tra đăng nhập với trạng thái user
             test_query = text("""
-                SELECT u.userId, u.email, r.roleName
+                SELECT u.userId, u.email, u.status, r.roleName
                 FROM cine.Account a
                 JOIN cine.[User] u ON u.userId = a.userId
                 JOIN cine.Role r ON r.roleId = u.roleId
@@ -348,14 +348,19 @@ def login():
                 
                 if rows:
                     row = rows[0]
-                    print(f"Found user: ID={row[0]}, Email={row[1]}, Role={row[2]}")
+                    print(f"Found user: ID={row[0]}, Email={row[1]}, Status={row[2]}, Role={row[3]}")
                     
-                    session["user_id"] = int(row[0])
-                    session["role"] = row[2]
-                    session["username"] = username
-                    session["email"] = row[1]
-                    print(f"Session set: user_id={session['user_id']}, role={session['role']}")
-                    return redirect(url_for("main.home"))
+                    # Kiểm tra trạng thái user
+                    if row[2] != "active":
+                        print(f"User account is {row[2]}, login blocked")
+                        error = "Tài khoản của bạn đã bị chặn. Vui lòng liên hệ quản trị viên."
+                    else:
+                        session["user_id"] = int(row[0])
+                        session["role"] = row[3]
+                        session["username"] = username
+                        session["email"] = row[1]
+                        print(f"Session set: user_id={session['user_id']}, role={session['role']}")
+                        return redirect(url_for("main.home"))
                 else:
                     print("No user found with these credentials")
                     error = "Sai tài khoản hoặc mật khẩu"
@@ -557,22 +562,22 @@ def watch(movie_id: int):
         try:
             with current_app.db_engine.connect() as conn:
                 fallback_rows = conn.execute(text("""
-                SELECT TOP 8 movieId, title, posterUrl, releaseYear
-                FROM cine.Movie 
-                WHERE movieId != :id
-                ORDER BY NEWID()
-            """), {"id": movie_id}).mappings().all()
-            
-            related_movies = [
-                {
-                    "movieId": row["movieId"],
-                    "title": row["title"],
-                    "posterUrl": row.get("posterUrl") if row.get("posterUrl") and row.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={row['title'][:20].replace(' ', '+')}",
-                    "releaseYear": row.get("releaseYear"),
-                    "similarity": 0.0
-                }
-                for row in fallback_rows
-            ]
+                    SELECT TOP 8 movieId, title, posterUrl, releaseYear
+                    FROM cine.Movie 
+                    WHERE movieId != :id
+                    ORDER BY NEWID()
+                """), {"id": movie_id}).mappings().all()
+                
+                related_movies = [
+                    {
+                        "movieId": row["movieId"],
+                        "title": row["title"],
+                        "posterUrl": row.get("posterUrl") if row.get("posterUrl") and row.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={row['title'][:20].replace(' ', '+')}",
+                        "releaseYear": row.get("releaseYear"),
+                        "similarity": 0.0
+                    }
+                    for row in fallback_rows
+                ]
         except Exception as fallback_error:
             print(f"Fallback error: {fallback_error}")
             # Fallback cuối cùng - tạo dữ liệu demo
@@ -1133,7 +1138,7 @@ def admin_movie_create():
                     "backdrop": backdrop_url if backdrop_url else None,
                     "views": views
                 })
-                
+            
                 # Lấy movieId vừa tạo
                 movie_id = result.lastrowid
                 
@@ -1145,17 +1150,17 @@ def admin_movie_create():
                             VALUES (:movieId, :genreId)
                         """), {"movieId": movie_id, "genreId": int(genre_id)})
                 
-            flash("✅ Thêm phim thành công!", "success")
+                flash("✅ Thêm phim thành công!", "success")
             return redirect(url_for("main.admin_movies"))
-            
+    
         except Exception as e:
             flash(f"❌ Lỗi khi thêm phim: {str(e)}", "error")
             try:
                 with current_app.db_engine.connect() as conn:
                     all_genres = conn.execute(text("SELECT genreId, name FROM cine.Genre ORDER BY name")).mappings().all()
-                return render_template("admin_movie_form.html", 
-                                     all_genres=all_genres,
-                                     form_data=request.form)
+                    return render_template("admin_movie_form.html", 
+                                         all_genres=all_genres,
+                                         form_data=request.form)
             except:
                 return render_template("admin_movie_form.html", form_data=request.form)
     
@@ -1186,7 +1191,7 @@ def admin_movie_edit(movie_id):
         try:
             with current_app.db_engine.begin() as conn:
                 conn.execute(text("""
-                    UPDATE cine.Movie 
+                    UPDATE cine.Movie
                     SET title = :title, releaseYear = :year, overview = :overview, 
                         posterUrl = :poster, backdropUrl = :backdrop
                     WHERE movieId = :id
@@ -1198,8 +1203,8 @@ def admin_movie_edit(movie_id):
                     "poster": poster_url,
                     "backdrop": backdrop_url
                 })
-            
-            flash("Cập nhật phim thành công!", "success")
+                
+                flash("Cập nhật phim thành công!", "success")
             return redirect(url_for("main.admin_movies"))
         except Exception as e:
             flash(f"Lỗi khi cập nhật phim: {str(e)}", "error")
@@ -1221,37 +1226,237 @@ def admin_movie_edit(movie_id):
         flash(f"Lỗi khi tải thông tin phim: {str(e)}", "error")
         return redirect(url_for("main.admin_movies"))
 
-@main_bp.route("/admin/movies/<int:movie_id>/delete", methods=["POST"])
+@main_bp.route("/admin/movies/<int:movie_id>/delete", methods=["POST"]) 
 @admin_required
 def admin_movie_delete(movie_id):
     """Xóa phim"""
     try:
         with current_app.db_engine.begin() as conn:
             conn.execute(text("DELETE FROM cine.Movie WHERE movieId = :id"), {"id": movie_id})
-        
+
         flash("Xóa phim thành công!", "success")
     except Exception as e:
         flash(f"Lỗi khi xóa phim: {str(e)}", "error")
-    
+
     return redirect(url_for("main.admin_movies"))
+
+@main_bp.route("/admin/users/test")
+@admin_required
+def admin_users_test():
+    """Test route để kiểm tra database"""
+    try:
+        with current_app.db_engine.connect() as conn:
+            # Test query đơn giản
+            result = conn.execute(text("SELECT COUNT(*) FROM cine.[User]")).scalar()
+            print(f"Total users in database: {result}")
+            
+            # Test query với JOIN
+            users = conn.execute(text("""
+                SELECT u.userId, u.email, u.status, r.roleName
+                FROM cine.[User] u
+                JOIN cine.Role r ON r.roleId = u.roleId
+                ORDER BY u.userId
+            """)).mappings().all()
+            
+            print(f"Found {len(users)} users with roles:")
+            for user in users:
+                print(f"  - ID: {user.userId}, Email: {user.email}, Status: {user.status}, Role: {user.roleName}")
+            
+            return f"Test successful! Found {len(users)} users. Check console for details."
+    except Exception as e:
+        print(f"Database error: {e}")
+        return f"Database error: {str(e)}"
+
+@main_bp.route("/debug/users")
+def debug_users():
+    """Debug route không cần admin để test database"""
+    try:
+        with current_app.db_engine.connect() as conn:
+            users = conn.execute(text("""
+                SELECT u.userId, u.email, u.status, u.createdAt, u.lastLoginAt, r.roleName,
+                       a.username
+                FROM cine.[User] u
+                JOIN cine.Role r ON r.roleId = u.roleId
+                LEFT JOIN cine.Account a ON a.userId = u.userId
+                ORDER BY u.createdAt DESC
+            """)).mappings().all()
+            
+            result = f"<h1>Debug Users</h1><p>Found {len(users)} users:</p><ul>"
+            for user in users:
+                result += f"<li>ID: {user.userId}, Email: {user.email}, Status: {user.status}, Role: {user.roleName}, Username: {user.username or 'None'}</li>"
+            result += "</ul>"
+            return result
+    except Exception as e:
+        return f"<h1>Error</h1><p>{str(e)}</p>"
+
+@main_bp.route("/admin/users/simple")
+@admin_required
+def admin_users_simple():
+    """Route đơn giản để test template"""
+    try:
+        with current_app.db_engine.connect() as conn:
+            users = conn.execute(text("""
+                SELECT u.userId, u.email, u.status, u.createdAt, u.lastLoginAt, r.roleName,
+                       a.username
+                FROM cine.[User] u
+                JOIN cine.Role r ON r.roleId = u.roleId
+                LEFT JOIN cine.Account a ON a.userId = u.userId
+                ORDER BY u.createdAt DESC
+            """)).mappings().all()
+            
+            print(f"Simple query found {len(users)} users")
+            for user in users:
+                print(f"User: {dict(user)}")
+            
+            return render_template("admin_users.html", 
+                                 users=users, 
+                                 pagination=None,
+                                 search_query="")
+    except Exception as e:
+        print(f"Simple query error: {e}")
+        return f"Error: {str(e)}"
 
 @main_bp.route("/admin/users")
 @admin_required
 def admin_users():
-    """Quản lý người dùng"""
+    """Quản lý người dùng với tìm kiếm và phân trang"""
+    # Lấy tham số từ URL
+    page = request.args.get('page', 1, type=int)
+    per_page = 20  # Hiển thị 20 user mỗi trang
+    search_query = request.args.get('q', '').strip()
+    
     try:
+        print(f"Admin users - page: {page}, per_page: {per_page}, search_query: '{search_query}'")
         with current_app.db_engine.connect() as conn:
-            users = conn.execute(text("""
-                SELECT u.userId, u.email, u.status, u.createdAt, u.lastLoginAt, r.roleName
-                FROM cine.[User] u
-                JOIN cine.Role r ON r.roleId = u.roleId
-                ORDER BY u.createdAt DESC
-            """)).mappings().all()
+            if search_query:
+                # Kiểm tra xem search_query có phải là số (ID) không
+                is_numeric = search_query.isdigit()
+                
+                if is_numeric:
+                    # Tìm kiếm theo ID (exact match)
+                    user_id = int(search_query)
+                    total_count = conn.execute(text("""
+                        SELECT COUNT(*) 
+                        FROM cine.[User] u
+                        JOIN cine.Role r ON r.roleId = u.roleId
+                        WHERE u.userId = :user_id
+                    """), {"user_id": user_id}).scalar()
+                    
+                    # Tính toán phân trang
+                    total_pages = (total_count + per_page - 1) // per_page
+                    offset = (page - 1) * per_page
+                    
+                    # Lấy kết quả tìm kiếm theo ID
+                    users = conn.execute(text("""
+                        SELECT u.userId, u.email, u.status, u.createdAt, u.lastLoginAt, r.roleName,
+                               a.username
+                        FROM (
+                            SELECT u.userId, u.email, u.status, u.createdAt, u.lastLoginAt, u.roleId,
+                                   ROW_NUMBER() OVER (ORDER BY u.createdAt DESC) as rn
+                            FROM cine.[User] u
+                            WHERE u.userId = :user_id
+                        ) t
+                        JOIN cine.Role r ON r.roleId = t.roleId
+                        LEFT JOIN cine.Account a ON a.userId = t.userId
+                        WHERE t.rn > :offset AND t.rn <= :offset + :per_page
+                    """), {
+                        "user_id": user_id,
+                        "offset": offset,
+                        "per_page": per_page
+                    }).mappings().all()
+                else:
+                    # Tìm kiếm theo email hoặc username
+                    # Đếm tổng số kết quả tìm kiếm
+                    total_count = conn.execute(text("""
+                        SELECT COUNT(*) 
+                        FROM cine.[User] u
+                        JOIN cine.Role r ON r.roleId = u.roleId
+                        LEFT JOIN cine.Account a ON a.userId = u.userId
+                        WHERE u.email LIKE :query OR a.username LIKE :query
+                    """), {"query": f"%{search_query}%"}).scalar()
+                    
+                    # Tính toán phân trang
+                    total_pages = (total_count + per_page - 1) // per_page
+                    offset = (page - 1) * per_page
+                    
+                    # Lấy kết quả tìm kiếm theo email hoặc username
+                    users = conn.execute(text("""
+                        SELECT u.userId, u.email, u.status, u.createdAt, u.lastLoginAt, r.roleName,
+                               a.username
+                        FROM (
+                            SELECT u.userId, u.email, u.status, u.createdAt, u.lastLoginAt, u.roleId,
+                                   ROW_NUMBER() OVER (
+                                       ORDER BY 
+                                           CASE 
+                                               WHEN u.email LIKE :exact_query THEN 1
+                                               WHEN a.username LIKE :exact_query THEN 2
+                                               WHEN u.email LIKE :start_query THEN 3
+                                               WHEN a.username LIKE :start_query THEN 4
+                                               ELSE 5
+                                           END,
+                                           u.createdAt DESC
+                                   ) as rn
+                            FROM cine.[User] u
+                            LEFT JOIN cine.Account a ON a.userId = u.userId
+                            WHERE u.email LIKE :query OR a.username LIKE :query
+                        ) t
+                        JOIN cine.Role r ON r.roleId = t.roleId
+                        LEFT JOIN cine.Account a ON a.userId = t.userId
+                        WHERE t.rn > :offset AND t.rn <= :offset + :per_page
+                    """), {
+                        "query": f"%{search_query}%",
+                        "exact_query": f"{search_query}%",
+                        "start_query": f"{search_query}%",
+                        "offset": offset,
+                        "per_page": per_page
+                    }).mappings().all()
+            else:
+                # Lấy user mới nhất với phân trang (đơn giản hóa)
+                # Đếm tổng số user
+                total_count = conn.execute(text("SELECT COUNT(*) FROM cine.[User]")).scalar()
+                
+                # Tính toán phân trang
+                total_pages = (total_count + per_page - 1) // per_page
+                offset = (page - 1) * per_page
+                
+                # Lấy user với phân trang (query đơn giản)
+                users = conn.execute(text("""
+                    SELECT u.userId, u.email, u.status, u.createdAt, u.lastLoginAt, r.roleName,
+                           a.username
+                    FROM cine.[User] u
+                    JOIN cine.Role r ON r.roleId = u.roleId
+                    LEFT JOIN cine.Account a ON a.userId = u.userId
+                    ORDER BY u.createdAt DESC, u.userId DESC
+                    OFFSET :offset ROWS
+                    FETCH NEXT :per_page ROWS ONLY
+                """), {"offset": offset, "per_page": per_page}).mappings().all()
             
-        return render_template("admin_users.html", users=users)
+            print(f"Found {len(users)} users, total_count: {total_count}")
+            for user in users:
+                print(f"User: {dict(user)}")
+            
+            # Tạo pagination info
+            pagination = {
+                "page": page,
+                "per_page": per_page,
+                "total": total_count,
+                "pages": total_pages,
+                "has_prev": page > 1,
+                "has_next": page < total_pages,
+                "prev_num": page - 1 if page > 1 else None,
+                "next_num": page + 1 if page < total_pages else None
+            }
+            
+        return render_template("admin_users.html", 
+                             users=users, 
+                             pagination=pagination,
+                             search_query=search_query)
     except Exception as e:
         flash(f"Lỗi khi tải danh sách người dùng: {str(e)}", "error")
-        return render_template("admin_users.html", users=[])
+        return render_template("admin_users.html", 
+                             users=[], 
+                             pagination=None,
+                             search_query=search_query)
 
 @main_bp.route("/admin/users/<int:user_id>/toggle-status", methods=["POST"])
 @admin_required
@@ -1259,20 +1464,66 @@ def admin_user_toggle_status(user_id):
     """Thay đổi trạng thái người dùng"""
     try:
         with current_app.db_engine.begin() as conn:
-            # Lấy trạng thái hiện tại
-            current_status = conn.execute(text("""
-                SELECT status FROM cine.[User] WHERE userId = :id
-            """), {"id": user_id}).scalar()
+            # Lấy thông tin user
+            user_info = conn.execute(text("""
+                SELECT u.email, u.status, r.roleName
+                FROM cine.[User] u
+                JOIN cine.Role r ON r.roleId = u.roleId
+                WHERE u.userId = :id
+            """), {"id": user_id}).mappings().first()
             
+            if not user_info:
+                flash("Không tìm thấy người dùng.", "error")
+                return redirect(url_for("main.admin_users"))
+            
+            # Không cho phép thay đổi trạng thái admin
+            if user_info.roleName == "Admin":
+                flash("Không thể thay đổi trạng thái tài khoản Admin!", "error")
+                return redirect(url_for("main.admin_users"))
+            
+            current_status = user_info.status
             new_status = "inactive" if current_status == "active" else "active"
             
             conn.execute(text("""
                 UPDATE cine.[User] SET status = :status WHERE userId = :id
             """), {"id": user_id, "status": new_status})
         
-        flash(f"Đã thay đổi trạng thái người dùng thành {new_status}!", "success")
+        status_text = "không hoạt động" if new_status == "inactive" else "hoạt động"
+        flash(f"✅ Đã thay đổi trạng thái {user_info.email} thành {status_text}!", "success")
     except Exception as e:
-        flash(f"Lỗi khi thay đổi trạng thái: {str(e)}", "error")
+        flash(f"❌ Lỗi khi thay đổi trạng thái: {str(e)}", "error")
+    
+    return redirect(url_for("main.admin_users"))
+
+@main_bp.route("/admin/users/<int:user_id>/delete", methods=["POST"])
+@admin_required
+def admin_user_delete(user_id):
+    """Xóa người dùng"""
+    try:
+        with current_app.db_engine.begin() as conn:
+            # Lấy thông tin user
+            user_info = conn.execute(text("""
+                SELECT u.email, r.roleName
+                FROM cine.[User] u
+                JOIN cine.Role r ON r.roleId = u.roleId
+                WHERE u.userId = :id
+            """), {"id": user_id}).mappings().first()
+            
+            if not user_info:
+                flash("Không tìm thấy người dùng.", "error")
+                return redirect(url_for("main.admin_users"))
+            
+            # Không cho phép xóa admin
+            if user_info.roleName == "Admin":
+                flash("❌ Không thể xóa tài khoản Admin!", "error")
+                return redirect(url_for("main.admin_users"))
+            
+            # Xóa user (cascade sẽ xóa account và rating)
+            conn.execute(text("DELETE FROM cine.[User] WHERE userId = :id"), {"id": user_id})
+            
+            flash(f"✅ Đã xóa tài khoản {user_info.email} thành công!", "success")
+    except Exception as e:
+        flash(f"❌ Lỗi khi xóa người dùng: {str(e)}", "error")
     
     return redirect(url_for("main.admin_users"))
 
