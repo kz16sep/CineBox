@@ -912,71 +912,493 @@ def admin_dashboard():
 @main_bp.route("/admin/movies")
 @admin_required
 def admin_movies():
-    """Quản lý phim với tìm kiếm và phân trang"""
-    # Lấy tham số từ URL
+    """Quản lý phim"""
+    try:
+        with current_app.db_engine.connect() as conn:
+            movies = conn.execute(text("""
+                SELECT movieId, title, releaseYear, posterUrl, viewCount, createdAt
+                FROM cine.Movie 
+                ORDER BY createdAt DESC
+            """)).mappings().all()
+            
+        return render_template("admin_movies.html", movies=movies)
+    except Exception as e:
+        flash(f"Lỗi khi tải danh sách phim: {str(e)}", "error")
+        return render_template("admin_movies.html", movies=[])
+
+@main_bp.route("/admin/movies/create", methods=["GET", "POST"])
+@admin_required
+def admin_movie_create():
+    """Tạo phim mới"""
+    if request.method == "POST":
+        # basic validation
+        title = request.form.get("title", "").strip()
+        releaseYear = request.form.get("releaseYear", type=int)
+        durationMin = request.form.get("durationMin", type=int)
+        imdbRating = request.form.get("imdbRating", type=float)
+        if not title:
+            return render_template("admin_movie_form.html", movie=None, error="Tiêu đề là bắt buộc")
+        if releaseYear is not None and (releaseYear < 1800 or releaseYear > 2100):
+            return render_template("admin_movie_form.html", movie=None, error="Năm phát hành phải trong khoảng 1800-2100")
+        if durationMin is not None and durationMin <= 0:
+            return render_template("admin_movie_form.html", movie=None, error="Thời lượng phải > 0 phút")
+        if imdbRating is not None and (imdbRating < 0 or imdbRating > 10):
+            return render_template("admin_movie_form.html", movie=None, error="Điểm IMDb phải từ 0 đến 10")
+
+        data = {
+            "title": request.form.get("title"),
+            "releaseYear": releaseYear,
+            "country": request.form.get("country"),
+            "overview": request.form.get("overview"),
+            "director": request.form.get("director"),
+            "cast": request.form.get("cast"),
+            "durationMin": durationMin,
+            "imdbRating": imdbRating,
+            "trailerUrl": request.form.get("trailerUrl"),
+            "posterUrl": request.form.get("posterUrl"),
+            "backdropUrl": request.form.get("backdropUrl"),
+            "viewCount": request.form.get("viewCount", type=int) or 0,
+        }
+        with current_app.db_engine.begin() as conn:
+            # Tạo phim mới
+            result = conn.execute(text(
+                """
+                INSERT INTO cine.Movie(title, releaseYear, country, overview, director, cast, durationMin, imdbRating, trailerUrl, posterUrl, backdropUrl, viewCount)
+                VALUES (:title, :releaseYear, :country, :overview, :director, :cast, :durationMin, :imdbRating, :trailerUrl, :posterUrl, :backdropUrl, :viewCount)
+                """
+            ), data)
+            
+            # Lấy movieId vừa tạo
+            movie_id = result.lastrowid
+            
+            # Thêm thể loại cho phim mới
+            selected_genres = request.form.getlist("genres")
+            for genre_id in selected_genres:
+                if genre_id:  # Kiểm tra không rỗng
+                    conn.execute(text(
+                        "INSERT INTO cine.MovieGenre (movieId, genreId) VALUES (:movieId, :genreId)"
+                    ), {"movieId": movie_id, "genreId": int(genre_id)})
+        
+        return redirect(url_for("main.admin_movies"))
+    
+    # GET request - hiển thị form tạo phim mới với danh sách thể loại
+    with current_app.db_engine.connect() as conn:
+        all_genres = conn.execute(text("SELECT genreId, name FROM cine.Genre ORDER BY name")).mappings().all()
+    
+    return render_template("admin_movie_form.html", movie=None, all_genres=all_genres)
+
+
+@main_bp.route("/admin/movies/<int:movie_id>/edit", methods=["GET", "POST"])
+@admin_required
+def admin_movie_edit(movie_id: int):
+    if request.method == "POST":
+        # basic validation
+        title = request.form.get("title", "").strip()
+        releaseYear = request.form.get("releaseYear", type=int)
+        durationMin = request.form.get("durationMin", type=int)
+        imdbRating = request.form.get("imdbRating", type=float)
+        if not title:
+            with current_app.db_engine.connect() as conn:
+                existing = conn.execute(text("SELECT * FROM cine.Movie WHERE movieId=:id"), {"id": movie_id}).mappings().first()
+            return render_template("admin_movie_form.html", movie=existing, error="Tiêu đề là bắt buộc")
+        if releaseYear is not None and (releaseYear < 1800 or releaseYear > 2100):
+            with current_app.db_engine.connect() as conn:
+                existing = conn.execute(text("SELECT * FROM cine.Movie WHERE movieId=:id"), {"id": movie_id}).mappings().first()
+            return render_template("admin_movie_form.html", movie=existing, error="Năm phát hành phải trong khoảng 1800-2100")
+        if durationMin is not None and durationMin <= 0:
+            with current_app.db_engine.connect() as conn:
+                existing = conn.execute(text("SELECT * FROM cine.Movie WHERE movieId=:id"), {"id": movie_id}).mappings().first()
+            return render_template("admin_movie_form.html", movie=existing, error="Thời lượng phải > 0 phút")
+        if imdbRating is not None and (imdbRating < 0 or imdbRating > 10):
+            with current_app.db_engine.connect() as conn:
+                existing = conn.execute(text("SELECT * FROM cine.Movie WHERE movieId=:id"), {"id": movie_id}).mappings().first()
+            return render_template("admin_movie_form.html", movie=existing, error="Điểm IMDb phải từ 0 đến 10")
+
+        data = {
+            "movieId": movie_id,
+            "title": title,
+            "releaseYear": releaseYear,
+            "country": request.form.get("country"),
+            "overview": request.form.get("overview"),
+            "director": request.form.get("director"),
+            "cast": request.form.get("cast"),
+            "durationMin": durationMin,
+            "imdbRating": imdbRating,
+            "trailerUrl": request.form.get("trailerUrl"),
+            "posterUrl": request.form.get("posterUrl"),
+            "backdropUrl": request.form.get("backdropUrl"),
+            "viewCount": request.form.get("viewCount", type=int) or 0,
+        }
+        with current_app.db_engine.begin() as conn:
+            # Cập nhật thông tin phim
+            conn.execute(text(
+                """
+                UPDATE cine.Movie
+                SET title=:title, releaseYear=:releaseYear, country=:country, overview=:overview,
+                    director=:director, cast=:cast, durationMin=:durationMin, imdbRating=:imdbRating, trailerUrl=:trailerUrl,
+                    posterUrl=:posterUrl, backdropUrl=:backdropUrl, viewCount=:viewCount
+                WHERE movieId=:movieId
+                """
+            ), data)
+            
+            # Xử lý thể loại
+            selected_genres = request.form.getlist("genres")  # Lấy danh sách thể loại được chọn
+            
+            # Xóa tất cả thể loại cũ
+            conn.execute(text("DELETE FROM cine.MovieGenre WHERE movieId = :movieId"), {"movieId": movie_id})
+            
+            # Thêm thể loại mới
+            for genre_id in selected_genres:
+                if genre_id:  # Kiểm tra không rỗng
+                    conn.execute(text(
+                        "INSERT INTO cine.MovieGenre (movieId, genreId) VALUES (:movieId, :genreId)"
+                    ), {"movieId": movie_id, "genreId": int(genre_id)})
+        
+        return redirect(url_for("main.admin_movies"))
+    
+    # GET request - hiển thị form edit với thông tin thể loại
+    with current_app.db_engine.connect() as conn:
+        # Lấy thông tin phim
+        movie = conn.execute(text("SELECT * FROM cine.Movie WHERE movieId=:id"), {"id": movie_id}).mappings().first()
+        
+        # Lấy thể loại hiện tại của phim
+        current_genres = conn.execute(text("""
+            SELECT g.genreId, g.name 
+            FROM cine.Genre g 
+            JOIN cine.MovieGenre mg ON g.genreId = mg.genreId 
+            WHERE mg.movieId = :movie_id
+            ORDER BY g.name
+        """), {"movie_id": movie_id}).mappings().all()
+        
+        # Lấy tất cả thể loại có sẵn
+        all_genres = conn.execute(text("SELECT genreId, name FROM cine.Genre ORDER BY name")).mappings().all()
+        
+        # Tạo danh sách ID thể loại hiện tại để check checkbox
+        current_genre_ids = [genre.genreId for genre in current_genres]
+    
+    return render_template("admin_movie_form.html", 
+                         movie=movie, 
+                         current_genres=current_genres,
+                         all_genres=all_genres,
+                         current_genre_ids=current_genre_ids)
+
+
+@main_bp.route("/admin/movies/<int:movie_id>/delete", methods=["POST"]) 
+@admin_required
+def admin_movie_delete(movie_id: int):
+    with current_app.db_engine.begin() as conn:
+        conn.execute(text("DELETE FROM cine.Movie WHERE movieId=:id"), {"id": movie_id})
+    return redirect(url_for("main.admin_movies"))
+
+
+# Admin: users management (placeholder list)
+@main_bp.route("/admin/users")
+@admin_required
+def admin_users():
+    with current_app.db_engine.connect() as conn:
+        rows = conn.execute(text(
+            """
+            SELECT u.userId, u.email, r.roleName, u.status, u.createdAt
+            FROM cine.[User] u JOIN cine.Role r ON r.roleId = u.roleId
+            ORDER BY u.userId DESC
+            """
+        ))
+        users = [dict(r._mapping) for r in rows]
+    return render_template("admin_users.html", users=users)
+    # Remove DB health/config endpoints in UI-only mode
+
+
+# API Endpoints for Content-based Recommendations
+@main_bp.route("/api/related-movies/<int:movie_id>")
+def api_related_movies(movie_id: int):
+    """
+    API endpoint để lấy phim liên quan
+    
+    Args:
+        movie_id: ID của phim đang xem
+        
+    Returns:
+        JSON response với danh sách phim liên quan
+    """
+    try:
+        # Tạo recommender instance
+        recommender = ContentBasedRecommender(current_app.db_engine)
+        
+        # Lấy phim liên quan
+        related_movies = recommender.get_related_movies_hybrid(movie_id, 6)
+        
+        return jsonify({
+            "success": True,
+            "movie_id": movie_id,
+            "related_movies": related_movies,
+            "count": len(related_movies)
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "movie_id": movie_id,
+            "related_movies": []
+        }), 500
+
+@main_bp.route("/api/movie-info/<int:movie_id>")
+def api_movie_info(movie_id: int):
+    """
+    API endpoint để lấy thông tin chi tiết phim
+    
+    Args:
+        movie_id: ID của phim
+        
+    Returns:
+        JSON response với thông tin phim
+    """
+    try:
+        # Tạo recommender instance
+        recommender = ContentBasedRecommender(current_app.db_engine)
+        
+        # Lấy thông tin phim
+        movie_info = recommender.get_movie_info(movie_id)
+        
+        if movie_info:
+            return jsonify({
+                "success": True,
+                "movie": movie_info
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Movie not found",
+                "movie_id": movie_id
+            }), 404
+            
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "movie_id": movie_id
+        }), 500
+
+@main_bp.route("/api/similarity/<int:movie_id1>/<int:movie_id2>")
+def api_similarity(movie_id1: int, movie_id2: int):
+    """
+    API endpoint để lấy điểm similarity giữa 2 phim
+    
+    Args:
+        movie_id1: ID phim thứ nhất
+        movie_id2: ID phim thứ hai
+        
+    Returns:
+        JSON response với điểm similarity
+    """
+    try:
+        # Tạo recommender instance
+        recommender = ContentBasedRecommender(current_app.db_engine)
+        
+        # Lấy điểm similarity
+        similarity = recommender.get_similarity_score(movie_id1, movie_id2)
+        
+        return jsonify({
+            "success": True,
+            "movie_id1": movie_id1,
+            "movie_id2": movie_id2,
+            "similarity": similarity
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "movie_id1": movie_id1,
+            "movie_id2": movie_id2
+        }), 500
+
+@main_bp.route("/api/recommendation-stats")
+def api_recommendation_stats():
+    """
+    API endpoint để lấy thống kê về hệ thống gợi ý
+    
+    Returns:
+        JSON response với thống kê
+    """
+    try:
+        # Tạo recommender instance
+        recommender = ContentBasedRecommender(current_app.db_engine)
+        
+        # Lấy thống kê
+        stats = recommender.get_statistics()
+        has_data = recommender.check_similarity_data_exists()
+        
+        return jsonify({
+            "success": True,
+            "has_similarity_data": has_data,
+            "statistics": stats
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+# Search API endpoints
+@main_bp.route("/api/search/suggestions")
+def search_suggestions():
+    """API endpoint để lấy gợi ý tìm kiếm phim"""
+    try:
+        query = request.args.get('q', '').strip()
+        limit = request.args.get('limit', 10, type=int)
+        
+        if not query or len(query) < 2:
+            return jsonify({
+                "success": True,
+                "suggestions": []
+            })
+        
+        with current_app.db_engine.connect() as conn:
+            # Tìm kiếm phim theo title (case-insensitive)
+            suggestions = conn.execute(text(f"""
+                SELECT TOP {limit} movieId, title, releaseYear, posterUrl
+                FROM cine.Movie 
+                WHERE title LIKE :query
+                ORDER BY 
+                    CASE 
+                        WHEN title LIKE :exact_query THEN 1
+                        WHEN title LIKE :start_query THEN 2
+                        ELSE 3
+                    END,
+                    title
+            """), {
+                "query": f"%{query}%",
+                "exact_query": f"{query}%",
+                "start_query": f"{query}%"
+            }).mappings().all()
+            
+            results = []
+            for row in suggestions:
+                results.append({
+                    "id": row["movieId"],
+                    "title": row["title"],
+                    "year": row.get("releaseYear"),
+                    "poster": row.get("posterUrl") if row.get("posterUrl") and row.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={row['title'][:20].replace(' ', '+')}"
+                })
+            
+            return jsonify({
+                "success": True,
+                "suggestions": results
+            })
+            
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@main_bp.route("/the-loai/<string:genre_slug>")
+def genre_page(genre_slug):
+    """Redirect đến trang chủ với filter thể loại"""
+    if not session.get("user_id"):
+        return redirect(url_for("main.login"))
+    
+    # Mapping từ slug sang tên thể loại (4 thể loại chính)
+    main_genre_mapping = {
+        'action': 'Action',
+        'adventure': 'Adventure', 
+        'comedy': 'Comedy',
+        'horror': 'Horror'
+    }
+    
+    # Kiểm tra 4 thể loại chính trước
+    genre_name = main_genre_mapping.get(genre_slug)
+    
+    # Nếu không tìm thấy trong 4 thể loại chính, tìm trong database
+    if not genre_name:
+        try:
+            with current_app.db_engine.connect() as conn:
+                # Tìm thể loại theo slug trong database
+                result = conn.execute(text("""
+                    SELECT name FROM cine.Genre 
+                    WHERE LOWER(REPLACE(name, ' ', '-')) = :slug
+                """), {"slug": genre_slug.lower()}).fetchone()
+                
+                if result:
+                    genre_name = result[0]
+                else:
+                    return redirect(url_for('main.home'))
+        except Exception as e:
+            print(f"Error finding genre: {e}")
+        return redirect(url_for('main.home'))
+    
+    # Redirect về trang chủ với genre filter
+    return redirect(url_for('main.home', genre=genre_name))
+
+@main_bp.route("/search")
+def search():
+    """Trang kết quả tìm kiếm"""
+    if not session.get("user_id"):
+        return redirect(url_for("main.login"))
+    
+    query = request.args.get('q', '').strip()
     page = request.args.get('page', 1, type=int)
-    per_page = 50  # Chỉ hiển thị 50 phim mỗi trang
-    search_query = request.args.get('q', '').strip()
+    per_page = 12
+    
+    if not query:
+        return render_template('search.html', 
+                             query=query, 
+                             movies=[], 
+                             pagination=None,
+                             total_results=0)
     
     try:
         with current_app.db_engine.connect() as conn:
-            if search_query:
-                # Tìm kiếm phim theo từ khóa
-                # Đếm tổng số kết quả tìm kiếm
-                total_count = conn.execute(text("""
-                    SELECT COUNT(*) 
+            # Đếm tổng số kết quả
+            total_count = conn.execute(text("""
+                SELECT COUNT(*) 
+                FROM cine.Movie 
+                WHERE title LIKE :query
+            """), {"query": f"%{query}%"}).scalar()
+            
+            # Tính toán phân trang
+            total_pages = (total_count + per_page - 1) // per_page
+            offset = (page - 1) * per_page
+            
+            # Lấy kết quả tìm kiếm
+            movies = conn.execute(text("""
+                SELECT movieId, title, posterUrl, backdropUrl, overview, releaseYear
+                FROM (
+                    SELECT movieId, title, posterUrl, backdropUrl, overview, releaseYear,
+                           ROW_NUMBER() OVER (
+                               ORDER BY 
+                                   CASE 
+                                       WHEN title LIKE :exact_query THEN 1
+                                       WHEN title LIKE :start_query THEN 2
+                                       ELSE 3
+                                   END,
+                                   title
+                           ) as rn
                     FROM cine.Movie 
                     WHERE title LIKE :query
-                """), {"query": f"%{search_query}%"}).scalar()
-                
-                # Tính toán phân trang
-                total_pages = (total_count + per_page - 1) // per_page
-                offset = (page - 1) * per_page
-                
-                # Lấy kết quả tìm kiếm
-                movies = conn.execute(text("""
-                    SELECT movieId, title, releaseYear, posterUrl, viewCount, createdAt
-                    FROM (
-                        SELECT movieId, title, releaseYear, posterUrl, viewCount, createdAt,
-                               ROW_NUMBER() OVER (
-                                   ORDER BY 
-                                       CASE 
-                                           WHEN title LIKE :exact_query THEN 1
-                                           WHEN title LIKE :start_query THEN 2
-                                           ELSE 3
-                                       END,
-                                       createdAt DESC
-                               ) as rn
-                        FROM cine.Movie 
-                        WHERE title LIKE :query
-                    ) t
-                    WHERE rn > :offset AND rn <= :offset + :per_page
-                """), {
-                    "query": f"%{search_query}%",
-                    "exact_query": f"{search_query}%",
-                    "start_query": f"{search_query}%",
-                    "offset": offset,
-                    "per_page": per_page
-                }).mappings().all()
-            else:
-                # Lấy phim mới nhất với phân trang
-                # Đếm tổng số phim
-                total_count = conn.execute(text("SELECT COUNT(*) FROM cine.Movie")).scalar()
-                
-                # Tính toán phân trang
-                total_pages = (total_count + per_page - 1) // per_page
-                offset = (page - 1) * per_page
-                
-                # Lấy phim với phân trang
-                movies = conn.execute(text("""
-                    SELECT movieId, title, releaseYear, posterUrl, viewCount, createdAt
-                    FROM (
-                        SELECT movieId, title, releaseYear, posterUrl, viewCount, createdAt,
-                               ROW_NUMBER() OVER (ORDER BY createdAt DESC, movieId DESC) as rn
-                        FROM cine.Movie
-                    ) t
-                    WHERE rn > :offset AND rn <= :offset + :per_page
-                """), {"offset": offset, "per_page": per_page}).mappings().all()
+                ) t
+                WHERE rn > :offset AND rn <= :offset + :per_page
+            """), {
+                "query": f"%{query}%",
+                "exact_query": f"{query}%",
+                "start_query": f"{query}%",
+                "offset": offset,
+                "per_page": per_page
+            }).mappings().all()
+            
+            movie_list = [
+                {
+                    "id": r["movieId"],
+                    "title": r["title"],
+                    "poster": r.get("posterUrl") if r.get("posterUrl") and r.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={r['title'][:20].replace(' ', '+')}",
+                    "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
+                    "description": (r.get("overview") or "")[:160],
+                    "year": r.get("releaseYear")
+                }
+                for r in movies
+            ]
             
             # Tạo pagination info
             pagination = {
@@ -990,183 +1412,79 @@ def admin_movies():
                 "next_num": page + 1 if page < total_pages else None
             }
             
-        return render_template("admin_movies.html", 
-                             movies=movies, 
-                             pagination=pagination,
-                             search_query=search_query)
+            return render_template('search.html', 
+                                 query=query, 
+                                 movies=movie_list, 
+                                 pagination=pagination,
+                                 total_results=total_count)
+            
     except Exception as e:
-        flash(f"Lỗi khi tải danh sách phim: {str(e)}", "error")
-        return render_template("admin_movies.html", 
+        return render_template('search.html', 
+                             query=query, 
                              movies=[], 
                              pagination=None,
-                             search_query=search_query)
+                             total_results=0,
+                             error=str(e))
+
+# ==================== ADMIN ROUTES ====================
+
+@main_bp.route("/admin")
+@admin_required
+def admin_dashboard():
+    """Trang chủ admin"""
+    return render_template("admin_dashboard.html")
+
+@main_bp.route("/admin/movies")
+@admin_required
+def admin_movies():
+    """Quản lý phim"""
+    try:
+        with current_app.db_engine.connect() as conn:
+            movies = conn.execute(text("""
+                SELECT movieId, title, releaseYear, posterUrl, viewCount, createdAt
+                FROM cine.Movie 
+                ORDER BY createdAt DESC
+            """)).mappings().all()
+            
+        return render_template("admin_movies.html", movies=movies)
+    except Exception as e:
+        flash(f"Lỗi khi tải danh sách phim: {str(e)}", "error")
+        return render_template("admin_movies.html", movies=[])
 
 @main_bp.route("/admin/movies/create", methods=["GET", "POST"])
 @admin_required
 def admin_movie_create():
-    """Tạo phim mới với validation đầy đủ"""
-    import re
-    from datetime import datetime
-    
+    """Tạo phim mới"""
     if request.method == "POST":
-        # Lấy dữ liệu từ form
         title = request.form.get("title", "").strip()
         release_year = request.form.get("release_year", "").strip()
-        country = request.form.get("country", "").strip()
         overview = request.form.get("overview", "").strip()
-        director = request.form.get("director", "").strip()
-        cast = request.form.get("cast", "").strip()
-        imdb_rating = request.form.get("imdb_rating", "").strip()
-        trailer_url = request.form.get("trailer_url", "").strip()
         poster_url = request.form.get("poster_url", "").strip()
         backdrop_url = request.form.get("backdrop_url", "").strip()
-        view_count = request.form.get("view_count", "0").strip()
-        selected_genres = request.form.getlist("genres")
         
-        # Validation
-        errors = []
-        
-        # 1. Title validation (required, max 300 chars, no special chars except basic punctuation)
         if not title:
-            errors.append("Tiêu đề phim là bắt buộc")
-        elif len(title) > 300:
-            errors.append("Tiêu đề phim không được quá 300 ký tự")
-        elif not re.match(r'^[a-zA-Z0-9\s\-.,:!?()]+$', title):
-            errors.append("Tiêu đề phim chỉ được chứa chữ cái, số và dấu câu cơ bản")
+            flash("Vui lòng nhập tên phim.", "error")
+            return render_template("admin_movie_form.html")
         
-        # 2. Release Year validation (1900-2030)
-        if release_year:
-            try:
-                year = int(release_year)
-                if year < 1900 or year > 2030:
-                    errors.append("Năm phát hành phải trong khoảng 1900-2030")
-            except ValueError:
-                errors.append("Năm phát hành phải là số hợp lệ")
-        else:
-            year = None
-        
-        # 3. Country validation (max 80 chars, letters and spaces only)
-        if country and len(country) > 80:
-            errors.append("Tên quốc gia không được quá 80 ký tự")
-        elif country and not re.match(r'^[a-zA-Z\s]+$', country):
-            errors.append("Tên quốc gia chỉ được chứa chữ cái và khoảng trắng")
-        
-        # 4. Director validation (max 200 chars)
-        if director and len(director) > 200:
-            errors.append("Tên đạo diễn không được quá 200 ký tự")
-        elif director and not re.match(r'^[a-zA-Z\s.,]+$', director):
-            errors.append("Tên đạo diễn chỉ được chứa chữ cái, khoảng trắng và dấu câu")
-        
-        # 5. Cast validation (max 500 chars)
-        if cast and len(cast) > 500:
-            errors.append("Tên diễn viên không được quá 500 ký tự")
-        elif cast and not re.match(r'^[a-zA-Z\s.,]+$', cast):
-            errors.append("Tên diễn viên chỉ được chứa chữ cái, khoảng trắng và dấu câu")
-        
-        # 6. IMDb Rating validation (0.0-10.0)
-        if imdb_rating:
-            try:
-                rating = float(imdb_rating)
-                if rating < 0.0 or rating > 10.0:
-                    errors.append("Điểm IMDb phải trong khoảng 0.0-10.0")
-            except ValueError:
-                errors.append("Điểm IMDb phải là số thập phân hợp lệ")
-        else:
-            rating = None
-        
-        # 7. URL validation
-        url_pattern = r'^https?://[^\s/$.?#].[^\s]*$'
-        
-        if trailer_url and not re.match(url_pattern, trailer_url):
-            errors.append("Trailer URL phải là địa chỉ web hợp lệ (bắt đầu bằng http:// hoặc https://)")
-        
-        if poster_url and not re.match(url_pattern, poster_url):
-            errors.append("Poster URL phải là địa chỉ web hợp lệ (bắt đầu bằng http:// hoặc https://)")
-        
-        if backdrop_url and not re.match(url_pattern, backdrop_url):
-            errors.append("Backdrop URL phải là địa chỉ web hợp lệ (bắt đầu bằng http:// hoặc https://)")
-        
-        # 8. View Count validation
-        try:
-            views = int(view_count) if view_count else 0
-            if views < 0:
-                errors.append("Lượt xem phải là số dương")
-        except ValueError:
-            errors.append("Lượt xem phải là số hợp lệ")
-        
-        # 9. Genres validation
-        if not selected_genres:
-            errors.append("Vui lòng chọn ít nhất một thể loại")
-        
-        # Nếu có lỗi, hiển thị lại form với lỗi
-        if errors:
-            try:
-                with current_app.db_engine.connect() as conn:
-                    all_genres = conn.execute(text("SELECT genreId, name FROM cine.Genre ORDER BY name")).mappings().all()
-                return render_template("admin_movie_form.html", 
-                                     all_genres=all_genres,
-                                     errors=errors,
-                                     form_data=request.form)
-            except Exception as e:
-                flash(f"Lỗi khi tải thể loại: {str(e)}", "error")
-                return render_template("admin_movie_form.html", errors=errors, form_data=request.form)
-        
-        # Lưu vào database
         try:
             with current_app.db_engine.begin() as conn:
-                # Tạo phim mới
-                result = conn.execute(text("""
-                    INSERT INTO cine.Movie (title, releaseYear, country, overview, director, cast, 
-                                          imdbRating, trailerUrl, posterUrl, backdropUrl, viewCount)
-                    VALUES (:title, :year, :country, :overview, :director, :cast, 
-                            :rating, :trailer, :poster, :backdrop, :views)
+                conn.execute(text("""
+                    INSERT INTO cine.Movie (title, releaseYear, overview, posterUrl, backdropUrl)
+                    VALUES (:title, :year, :overview, :poster, :backdrop)
                 """), {
                     "title": title,
-                    "year": year,
-                    "country": country if country else None,
-                    "overview": overview if overview else None,
-                    "director": director if director else None,
-                    "cast": cast if cast else None,
-                    "rating": rating,
-                    "trailer": trailer_url if trailer_url else None,
-                    "poster": poster_url if poster_url else None,
-                    "backdrop": backdrop_url if backdrop_url else None,
-                    "views": views
+                    "year": int(release_year) if release_year else None,
+                    "overview": overview,
+                    "poster": poster_url,
+                    "backdrop": backdrop_url
                 })
-                
-                # Lấy movieId vừa tạo
-                movie_id = result.lastrowid
-                
-                # Thêm thể loại cho phim
-                for genre_id in selected_genres:
-                    if genre_id:
-                        conn.execute(text("""
-                            INSERT INTO cine.MovieGenre (movieId, genreId) 
-                            VALUES (:movieId, :genreId)
-                        """), {"movieId": movie_id, "genreId": int(genre_id)})
-                
-            flash("✅ Thêm phim thành công!", "success")
-            return redirect(url_for("main.admin_movies"))
             
+            flash("Thêm phim thành công!", "success")
+            return redirect(url_for("main.admin_movies"))
         except Exception as e:
-            flash(f"❌ Lỗi khi thêm phim: {str(e)}", "error")
-            try:
-                with current_app.db_engine.connect() as conn:
-                    all_genres = conn.execute(text("SELECT genreId, name FROM cine.Genre ORDER BY name")).mappings().all()
-                return render_template("admin_movie_form.html", 
-                                     all_genres=all_genres,
-                                     form_data=request.form)
-            except:
-                return render_template("admin_movie_form.html", form_data=request.form)
+            flash(f"Lỗi khi thêm phim: {str(e)}", "error")
     
-    # GET request - hiển thị form tạo mới
-    try:
-        with current_app.db_engine.connect() as conn:
-            all_genres = conn.execute(text("SELECT genreId, name FROM cine.Genre ORDER BY name")).mappings().all()
-        return render_template("admin_movie_form.html", all_genres=all_genres)
-    except Exception as e:
-        flash(f"Lỗi khi tải thể loại: {str(e)}", "error")
-        return render_template("admin_movie_form.html", all_genres=[])
+    return render_template("admin_movie_form.html")
 
 @main_bp.route("/admin/movies/<int:movie_id>/edit", methods=["GET", "POST"])
 @admin_required
@@ -1275,139 +1593,5 @@ def admin_user_toggle_status(user_id):
         flash(f"Lỗi khi thay đổi trạng thái: {str(e)}", "error")
     
     return redirect(url_for("main.admin_users"))
-
-
-@main_bp.route("/search")
-def search():
-    """Trang kết quả tìm kiếm"""
-    if not session.get("user_id"):
-        return redirect(url_for("main.login"))
-    
-    query = request.args.get('q', '').strip()
-    page = request.args.get('page', 1, type=int)
-    per_page = 12
-    
-    if not query:
-        return render_template('search.html', 
-                             query=query, 
-                             movies=[], 
-                             pagination=None,
-                             total_results=0)
-    
-    try:
-        with current_app.db_engine.connect() as conn:
-            # Đếm tổng số kết quả
-            total_count = conn.execute(text("""
-                SELECT COUNT(*) 
-                FROM cine.Movie 
-                WHERE title LIKE :query
-            """), {"query": f"%{query}%"}).scalar()
-            
-            # Tính toán phân trang
-            total_pages = (total_count + per_page - 1) // per_page
-            offset = (page - 1) * per_page
-            
-            # Lấy kết quả tìm kiếm
-            movies = conn.execute(text("""
-                SELECT movieId, title, posterUrl, backdropUrl, overview, releaseYear
-                FROM (
-                    SELECT movieId, title, posterUrl, backdropUrl, overview, releaseYear,
-                           ROW_NUMBER() OVER (
-                               ORDER BY 
-                                   CASE 
-                                       WHEN title LIKE :exact_query THEN 1
-                                       WHEN title LIKE :start_query THEN 2
-                                       ELSE 3
-                                   END,
-                                   title
-                           ) as rn
-                    FROM cine.Movie 
-                    WHERE title LIKE :query
-                ) t
-                WHERE rn > :offset AND rn <= :offset + :per_page
-            """), {
-                "query": f"%{query}%",
-                "exact_query": f"{query}%",
-                "start_query": f"{query}%",
-                "offset": offset,
-                "per_page": per_page
-            }).mappings().all()
-            
-            movie_list = [
-                {
-                    "id": r["movieId"],
-                    "title": r["title"],
-                    "poster": r.get("posterUrl") if r.get("posterUrl") and r.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={r['title'][:20].replace(' ', '+')}",
-                    "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
-                    "description": (r.get("overview") or "")[:160],
-                    "year": r.get("releaseYear")
-                }
-                for r in movies
-            ]
-            
-            # Tạo pagination info
-            pagination = {
-                "page": page,
-                "per_page": per_page,
-                "total": total_count,
-                "pages": total_pages,
-                "has_prev": page > 1,
-                "has_next": page < total_pages,
-                "prev_num": page - 1 if page > 1 else None,
-                "next_num": page + 1 if page < total_pages else None
-            }
-            
-            return render_template('search.html', 
-                                 query=query, 
-                                 movies=movie_list, 
-                                 pagination=pagination,
-                                 total_results=total_count)
-            
-    except Exception as e:
-        return render_template('search.html', 
-                             query=query, 
-                             movies=[], 
-                             pagination=None,
-                             total_results=0,
-                             error=str(e))
-
-
-@main_bp.route("/the-loai/<string:genre_slug>")
-def genre_page(genre_slug):
-    """Redirect đến trang chủ với filter thể loại"""
-    if not session.get("user_id"):
-        return redirect(url_for("main.login"))
-    
-    # Mapping từ slug sang tên thể loại (4 thể loại chính)
-    main_genre_mapping = {
-        'action': 'Action',
-        'adventure': 'Adventure', 
-        'comedy': 'Comedy',
-        'horror': 'Horror'
-    }
-    
-    # Kiểm tra 4 thể loại chính trước
-    genre_name = main_genre_mapping.get(genre_slug)
-    
-    # Nếu không tìm thấy trong 4 thể loại chính, tìm trong database
-    if not genre_name:
-        try:
-            with current_app.db_engine.connect() as conn:
-                # Tìm thể loại theo slug trong database
-                result = conn.execute(text("""
-                    SELECT name FROM cine.Genre 
-                    WHERE LOWER(REPLACE(name, ' ', '-')) = :slug
-                """), {"slug": genre_slug.lower()}).fetchone()
-                
-                if result:
-                    genre_name = result[0]
-                else:
-                    return redirect(url_for('main.home'))
-        except Exception as e:
-            print(f"Error finding genre: {e}")
-            return redirect(url_for('main.home'))
-    
-    # Redirect về trang chủ với genre filter
-    return redirect(url_for('main.home', genre=genre_name))
 
 

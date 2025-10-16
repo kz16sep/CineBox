@@ -37,8 +37,9 @@
         <nav>
           {% if session.get('user_id') %}
             {% if session.get('role') == 'Admin' %}
-              <a class="btn btn-secondary" href="{{ url_for('main.admin_movies') }}">Quản lý phim</a>
-              <a class="btn btn-secondary" href="{{ url_for('main.admin_users') }}">Quản lý tài khoản</a>
+              <a class="btn btn-primary" href="{{ url_for('main.admin_dashboard') }}">Admin</a>
+              <a class="btn btn-secondary" href="{{ url_for('main.admin_movies') }}">Phim</a>
+              <a class="btn btn-secondary" href="{{ url_for('main.admin_users') }}">Người dùng</a>
             {% endif %}
             <div class="user-box">
               <div class="avatar-container">

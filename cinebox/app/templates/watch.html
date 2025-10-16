@@ -380,7 +380,7 @@
 }
 
 .similarity-value {
-  color: #4CAF50;
+  color: var(--primary);
   font-weight: bold;
 }
 
@@ -390,7 +390,7 @@
   overflow-x: auto;
   padding: 10px 0 20px 0;
   scrollbar-width: thin;
-  scrollbar-color: #4CAF50 #2a2a2a;
+  scrollbar-color: var(--primary) #2a2a2a;
 }
 
 /* Custom scrollbar for WebKit browsers (Chrome, Safari, Edge) */
@@ -405,20 +405,20 @@
 }
 
 .cards::-webkit-scrollbar-thumb {
-  background: linear-gradient(90deg, #4CAF50, #45a049);
+  background: linear-gradient(90deg, var(--primary), var(--primary-2));
   border-radius: 4px;
   transition: all 0.3s ease;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
 .cards::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(90deg, #45a049, #4CAF50);
-  box-shadow: 0 2px 8px rgba(76, 175, 80, 0.3);
+  background: linear-gradient(90deg, var(--primary-2), var(--primary));
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
   transform: scaleY(1.2);
 }
 
 .cards::-webkit-scrollbar-thumb:active {
-  background: linear-gradient(90deg, #3d8b40, #4CAF50);
+  background: linear-gradient(90deg, #1d4ed8, var(--primary));
 }
 
 .cards::-webkit-scrollbar-corner {
@@ -439,7 +439,7 @@
 }
 
 .scroll-btn {
-  background: rgba(76, 175, 80, 0.8);
+  background: rgba(59, 130, 246, 0.8);
   border: none;
   color: white;
   font-size: 24px;
@@ -457,9 +457,9 @@
 }
 
 .scroll-btn:hover {
-  background: rgba(76, 175, 80, 1);
+  background: rgba(59, 130, 246, 1);
   transform: scale(1.1);
-  box-shadow: 0 6px 16px rgba(76, 175, 80, 0.4);
+  box-shadow: 0 6px 16px rgba(59, 130, 246, 0.4);
 }
 
 .scroll-btn:active {
@@ -516,7 +516,7 @@
 }
 
 .stars {
-  color: #ffd700;
+  color: #ffdf6c;
   font-size: 0.8em;
 }
 

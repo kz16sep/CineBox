@@ -1,0 +1,176 @@
+{% extends 'base.html' %}
+{% block title %}Admin Dashboard · CineBox{% endblock %}
+{% block content %}
+<div class="admin">
+  <h1>🎬 Admin Dashboard</h1>
+  
+  <div class="admin-stats">
+    <div class="stat-card">
+      <h3>📊 Thống kê tổng quan</h3>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <span class="stat-number">{{ total_movies or 0 }}</span>
+          <span class="stat-label">Tổng số phim</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-number">{{ total_users or 0 }}</span>
+          <span class="stat-label">Tổng số người dùng</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-number">{{ total_views or 0 }}</span>
+          <span class="stat-label">Tổng lượt xem</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-number">{{ active_users or 0 }}</span>
+          <span class="stat-label">Người dùng hoạt động</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="admin-actions">
+    <h3>🔧 Quản lý hệ thống</h3>
+    <div class="action-grid">
+      <a href="{{ url_for('main.admin_movies') }}" class="action-card">
+        <div class="action-icon">🎬</div>
+        <div class="action-title">Quản lý phim</div>
+        <div class="action-desc">Thêm, sửa, xóa phim</div>
+      </a>
+      
+      <a href="{{ url_for('main.admin_users') }}" class="action-card">
+        <div class="action-icon">👥</div>
+        <div class="action-title">Quản lý người dùng</div>
+        <div class="action-desc">Xem và quản lý tài khoản</div>
+      </a>
+      
+      <a href="{{ url_for('main.home') }}" class="action-card">
+        <div class="action-icon">🏠</div>
+        <div class="action-title">Về trang chủ</div>
+        <div class="action-desc">Quay lại trang chính</div>
+      </a>
+    </div>
+  </div>
+</div>
+
+<style>
+.admin {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.admin h1 {
+  color: #fff;
+  margin-bottom: 30px;
+  font-size: 2.5rem;
+  text-align: center;
+}
+
+.admin-stats {
+  margin-bottom: 40px;
+}
+
+.stat-card {
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  padding: 30px;
+  margin-bottom: 20px;
+}
+
+.stat-card h3 {
+  color: #fff;
+  margin-bottom: 20px;
+  font-size: 1.5rem;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 20px;
+}
+
+.stat-item {
+  text-align: center;
+  padding: 20px;
+  background: var(--panel-2);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.stat-number {
+  display: block;
+  font-size: 2.5rem;
+  font-weight: bold;
+  color: var(--primary);
+  margin-bottom: 8px;
+}
+
+.stat-label {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.admin-actions h3 {
+  color: #fff;
+  margin-bottom: 20px;
+  font-size: 1.5rem;
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 20px;
+}
+
+.action-card {
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  padding: 30px;
+  text-decoration: none;
+  color: inherit;
+  transition: all 0.3s ease;
+  text-align: center;
+}
+
+.action-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  border-color: var(--primary);
+  text-decoration: none;
+  color: inherit;
+}
+
+.action-icon {
+  font-size: 3rem;
+  margin-bottom: 15px;
+}
+
+.action-title {
+  font-size: 1.2rem;
+  font-weight: bold;
+  color: #fff;
+  margin-bottom: 8px;
+}
+
+.action-desc {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 768px) {
+  .admin {
+    padding: 15px;
+  }
+  
+  .stats-grid {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+  
+  .action-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
+{% endblock %}

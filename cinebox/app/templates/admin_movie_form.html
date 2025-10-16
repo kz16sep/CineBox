@@ -1,70 +1,621 @@
 {% extends 'base.html' %}
-{% block title %}{{ 'Sửa' if movie else 'Thêm' }} phim · CineBox{% endblock %}
+{% block title %}{{ 'Sửa phim' if form_data else 'Thêm phim mới' }} · CineBox{% endblock %}
 {% block content %}
 <div class="admin">
-  <h1>{{ 'Sửa' if movie else 'Thêm' }} phim</h1>
-  <form method="post" class="form">
-    <label>Tiêu đề</label>
-    <input type="text" name="title" value="{{ movie.title if movie else '' }}" required>
-    <label>Năm phát hành</label>
-    <input type="number" name="releaseYear" min="1800" max="2100" value="{{ movie.releaseYear if movie else '' }}">
-    <label>Quốc gia</label>
-    <input type="text" name="country" value="{{ movie.country if movie else '' }}" placeholder="VN, US, JP...">
-    <label>Mô tả</label>
-    <textarea name="overview" rows="4">{{ movie.overview if movie else '' }}</textarea>
-    <label>Đạo diễn</label>
-    <input type="text" name="director" value="{{ movie.director if movie else '' }}">
-    <label>Diễn viên</label>
-    <input type="text" name="cast" value="{{ movie.cast if movie else '' }}" placeholder="Tên diễn viên, cách nhau bởi dấu phẩy">
-    <label>Thời lượng (phút)</label>
-    <input type="number" name="durationMin" min="1" step="1" value="{{ movie.durationMin if movie else '' }}">
-    <label>Điểm IMDb</label>
-    <input type="number" name="imdbRating" min="0" max="10" step="0.1" value="{{ movie.imdbRating if movie else '' }}">
-    <label>Trailer URL</label>
-    <input type="text" name="trailerUrl" value="{{ movie.trailerUrl if movie else '' }}">
-    <label>Poster URL</label>
-    <input type="text" name="posterUrl" value="{{ movie.posterUrl if movie else '' }}">
-    <label>Backdrop URL</label>
-    <input type="text" name="backdropUrl" value="{{ movie.backdropUrl if movie else '' }}">
-    <label>Lượt xem (viewCount)</label>
-    <input type="number" name="viewCount" min="0" step="1" value="{{ movie.viewCount if movie else 0 }}">
-    
-    <!-- Thể loại phim -->
-    <label>Thể loại</label>
-    <div class="genres-section">
-      {% if movie %}
-        <div class="current-genres">
-          <h4>Thể loại hiện tại:</h4>
-          {% if current_genres %}
-            <div class="genre-tags">
-              {% for genre in current_genres %}
-                <span class="genre-tag">{{ genre.name }}</span>
-              {% endfor %}
-            </div>
-          {% else %}
-            <p class="no-genres">Chưa có thể loại nào</p>
-          {% endif %}
+  <div class="form-header">
+    <h1>🎬 {{ 'Sửa phim' if form_data else 'Thêm phim mới' }}</h1>
+    <p class="form-subtitle">Điền thông tin chi tiết cho phim</p>
+  </div>
+
+  <!-- Hiển thị lỗi validation -->
+  {% if errors %}
+  <div class="error-container">
+    <h3>❌ Có lỗi xảy ra:</h3>
+    <ul class="error-list">
+      {% for error in errors %}
+      <li>{{ error }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <form method="POST" class="movie-form" enctype="multipart/form-data">
+    <div class="form-grid">
+      <!-- Thông tin cơ bản -->
+      <div class="form-section">
+        <h2 class="section-title">📝 Thông tin cơ bản</h2>
+        
+        <div class="form-group">
+          <label for="title" class="form-label required">Tiêu đề phim</label>
+          <input 
+            type="text" 
+            id="title" 
+            name="title" 
+            class="form-input" 
+            value="{{ form_data.title if form_data else '' }}"
+            placeholder="Nhập tiêu đề phim..."
+            maxlength="300"
+            required
+          />
+          <small class="form-hint">Tối đa 300 ký tự, chỉ chữ cái, số và dấu câu cơ bản</small>
         </div>
-      {% endif %}
-      
-      <div class="available-genres">
-        <h4>{{ 'Thêm thể loại:' if movie else 'Chọn thể loại:' }}</h4>
-        <div class="genre-checkboxes">
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="release_year" class="form-label">Năm phát hành</label>
+            <select id="release_year" name="release_year" class="form-select">
+              <option value="">Chọn năm...</option>
+              {% for year in range(2030, 1899, -1) %}
+              <option value="{{ year }}" 
+                {% if form_data and form_data.release_year == year|string %}selected{% endif %}>
+                {{ year }}
+              </option>
+              {% endfor %}
+            </select>
+            <small class="form-hint">Chọn năm phát hành (1900-2030)</small>
+          </div>
+
+          <div class="form-group">
+            <label for="country" class="form-label">Quốc gia</label>
+            <input 
+              type="text" 
+              id="country" 
+              name="country" 
+              class="form-input" 
+              value="{{ form_data.country if form_data else '' }}"
+              placeholder="Ví dụ: United States, Vietnam..."
+              maxlength="80"
+            />
+            <small class="form-hint">Tối đa 80 ký tự, chỉ chữ cái và khoảng trắng</small>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="overview" class="form-label">Mô tả phim</label>
+          <textarea 
+            id="overview" 
+            name="overview" 
+            class="form-textarea" 
+            rows="4"
+            placeholder="Mô tả ngắn gọn về nội dung phim..."
+          >{{ form_data.overview if form_data else '' }}</textarea>
+          <small class="form-hint">Mô tả chi tiết về nội dung phim</small>
+        </div>
+      </div>
+
+      <!-- Thông tin sản xuất -->
+      <div class="form-section">
+        <h2 class="section-title">🎭 Thông tin sản xuất</h2>
+        
+        <div class="form-group">
+          <label for="director" class="form-label">Đạo diễn</label>
+          <input 
+            type="text" 
+            id="director" 
+            name="director" 
+            class="form-input" 
+            value="{{ form_data.director if form_data else '' }}"
+            placeholder="Tên đạo diễn..."
+            maxlength="200"
+          />
+          <small class="form-hint">Tối đa 200 ký tự, chỉ chữ cái, khoảng trắng và dấu câu</small>
+        </div>
+
+        <div class="form-group">
+          <label for="cast" class="form-label">Diễn viên</label>
+          <input 
+            type="text" 
+            id="cast" 
+            name="cast" 
+            class="form-input" 
+            value="{{ form_data.cast if form_data else '' }}"
+            placeholder="Tên các diễn viên chính, cách nhau bởi dấu phẩy..."
+            maxlength="500"
+          />
+          <small class="form-hint">Tối đa 500 ký tự, cách nhau bởi dấu phẩy</small>
+        </div>
+
+        <div class="form-group">
+          <label for="imdb_rating" class="form-label">Điểm IMDb</label>
+          <input 
+            type="number" 
+            id="imdb_rating" 
+            name="imdb_rating" 
+            class="form-input" 
+            value="{{ form_data.imdb_rating if form_data else '' }}"
+            placeholder="8.5"
+            min="0" 
+            max="10" 
+            step="0.1"
+          />
+          <small class="form-hint">Điểm từ 0.0 đến 10.0</small>
+        </div>
+      </div>
+
+      <!-- Thông tin media -->
+      <div class="form-section">
+        <h2 class="section-title">🎬 Thông tin media</h2>
+        
+        <div class="form-group">
+          <label for="trailer_url" class="form-label">Trailer URL</label>
+          <input 
+            type="url" 
+            id="trailer_url" 
+            name="trailer_url" 
+            class="form-input" 
+            value="{{ form_data.trailer_url if form_data else '' }}"
+            placeholder="https://www.youtube.com/watch?v=..."
+          />
+          <small class="form-hint">Địa chỉ video trailer (YouTube, Vimeo...)</small>
+        </div>
+
+        <div class="form-group">
+          <label for="poster_url" class="form-label">Poster URL</label>
+          <input 
+            type="url" 
+            id="poster_url" 
+            name="poster_url" 
+            class="form-input" 
+            value="{{ form_data.poster_url if form_data else '' }}"
+            placeholder="https://example.com/poster.jpg"
+          />
+          <small class="form-hint">Địa chỉ hình ảnh poster phim</small>
+        </div>
+
+        <div class="form-group">
+          <label for="backdrop_url" class="form-label">Backdrop URL</label>
+          <input 
+            type="url" 
+            id="backdrop_url" 
+            name="backdrop_url" 
+            class="form-input" 
+            value="{{ form_data.backdrop_url if form_data else '' }}"
+            placeholder="https://example.com/backdrop.jpg"
+          />
+          <small class="form-hint">Địa chỉ hình ảnh nền phim</small>
+            </div>
+
+        <div class="form-group">
+          <label for="view_count" class="form-label">Lượt xem</label>
+          <input 
+            type="number" 
+            id="view_count" 
+            name="view_count" 
+            class="form-input" 
+            value="{{ form_data.view_count if form_data else '0' }}"
+            min="0"
+            placeholder="0"
+          />
+          <small class="form-hint">Số lượt xem ban đầu (mặc định: 0)</small>
+        </div>
+      </div>
+
+      <!-- Thể loại -->
+      <div class="form-section">
+        <h2 class="section-title">🏷️ Thể loại phim</h2>
+        
+        <div class="form-group">
+          <label class="form-label required">Chọn thể loại</label>
+          <div class="genre-grid">
           {% for genre in all_genres %}
             <label class="genre-checkbox">
-              <input type="checkbox" name="genres" value="{{ genre.genreId }}" 
-                     {% if movie and genre.genreId in current_genre_ids %}checked{% endif %}>
-              {{ genre.name }}
+              <input 
+                type="checkbox" 
+                name="genres" 
+                value="{{ genre.genreId }}"
+                {% if form_data and genre.genreId|string in form_data.getlist('genres') %}checked{% endif %}
+              />
+              <span class="genre-label">{{ genre.name }}</span>
             </label>
           {% endfor %}
+          </div>
+          <small class="form-hint">Chọn ít nhất một thể loại</small>
         </div>
       </div>
     </div>
     
-    <button class="btn btn-primary" type="submit">Lưu</button>
-    <a class="btn" href="{{ url_for('main.admin_movies') }}">Hủy</a>
+    <!-- Nút hành động -->
+    <div class="form-actions">
+      <a href="{{ url_for('main.admin_movies') }}" class="btn btn-secondary">
+        ← Quay lại
+      </a>
+      <button type="submit" class="btn btn-primary">
+        {{ '💾 Cập nhật phim' if form_data else '➕ Thêm phim' }}
+      </button>
+    </div>
   </form>
 </div>
+
+<style>
+.admin {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.form-header {
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.form-header h1 {
+  color: #fff;
+  font-size: 2.5rem;
+  margin-bottom: 10px;
+}
+
+.form-subtitle {
+  color: var(--muted);
+  font-size: 1.1rem;
+}
+
+.error-container {
+  background: rgba(220, 38, 38, 0.1);
+  border: 1px solid rgba(220, 38, 38, 0.3);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 30px;
+}
+
+.error-container h3 {
+  color: #ef4444;
+  margin-bottom: 15px;
+  font-size: 1.2rem;
+}
+
+.error-list {
+  color: #fca5a5;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.error-list li {
+  margin-bottom: 5px;
+}
+
+.movie-form {
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 20px;
+  padding: 30px;
+}
+
+.form-grid {
+  display: grid;
+  gap: 30px;
+}
+
+.form-section {
+  background: var(--panel-2);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 16px;
+  padding: 25px;
+}
+
+.section-title {
+  color: #fff;
+  font-size: 1.4rem;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.form-group {
+  margin-bottom: 20px;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.form-label {
+  display: block;
+  color: #fff;
+  font-weight: 600;
+  margin-bottom: 8px;
+  font-size: 0.95rem;
+}
+
+.form-label.required::after {
+  content: " *";
+  color: #ef4444;
+}
+
+.form-input, .form-select, .form-textarea {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 12px 16px;
+  color: #fff;
+  font-size: 16px;
+  transition: all 0.3s ease;
+}
+
+.form-input:focus, .form-select:focus, .form-textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.form-input::placeholder, .form-textarea::placeholder {
+  color: var(--muted);
+}
+
+.form-textarea {
+  resize: vertical;
+  min-height: 100px;
+}
+
+.form-hint {
+  display: block;
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-top: 5px;
+}
+
+.genre-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.genre-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--bg);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.genre-checkbox:hover {
+  background: var(--panel);
+  border-color: var(--primary);
+}
+
+.genre-checkbox input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--primary);
+}
+
+.genre-checkbox input[type="checkbox"]:checked + .genre-label {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.genre-label {
+  color: #fff;
+  font-size: 0.9rem;
+  user-select: none;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 40px;
+  padding-top: 30px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.btn {
+  padding: 12px 24px;
+  border-radius: 10px;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 1rem;
+  transition: all 0.3s ease;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: var(--primary-2);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(59, 130, 246, 0.3);
+}
+
+.btn-secondary {
+  background: var(--panel-2);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.btn-secondary:hover {
+  background: var(--panel);
+  border-color: var(--primary);
+  transform: translateY(-2px);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .admin {
+    padding: 15px;
+  }
+  
+  .movie-form {
+    padding: 20px;
+  }
+  
+  .form-row {
+    grid-template-columns: 1fr;
+  }
+  
+  .genre-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .form-actions {
+    flex-direction: column;
+    gap: 15px;
+  }
+  
+  .btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+/* Animation cho form */
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.form-section {
+  animation: slideInUp 0.6s ease-out;
+}
+
+.form-section:nth-child(1) { animation-delay: 0.1s; }
+.form-section:nth-child(2) { animation-delay: 0.2s; }
+.form-section:nth-child(3) { animation-delay: 0.3s; }
+.form-section:nth-child(4) { animation-delay: 0.4s; }
+</style>
+
+<script>
+// Real-time validation
+document.addEventListener('DOMContentLoaded', function() {
+  const inputs = document.querySelectorAll('.form-input, .form-select, .form-textarea');
+  
+  inputs.forEach(input => {
+    input.addEventListener('blur', function() {
+      validateField(this);
+    });
+    
+    input.addEventListener('input', function() {
+      clearFieldError(this);
+    });
+  });
+  
+  function validateField(field) {
+    const value = field.value.trim();
+    const fieldName = field.name;
+    
+    // Clear previous error
+    clearFieldError(field);
+    
+    // Title validation
+    if (fieldName === 'title') {
+      if (!value) {
+        showFieldError(field, 'Tiêu đề phim là bắt buộc');
+        return;
+      }
+      if (value.length > 300) {
+        showFieldError(field, 'Tiêu đề phim không được quá 300 ký tự');
+        return;
+      }
+      if (!/^[a-zA-Z0-9\s\-.,:!?()]+$/.test(value)) {
+        showFieldError(field, 'Tiêu đề phim chỉ được chứa chữ cái, số và dấu câu cơ bản');
+        return;
+      }
+    }
+    
+    // Country validation
+    if (fieldName === 'country' && value) {
+      if (value.length > 80) {
+        showFieldError(field, 'Tên quốc gia không được quá 80 ký tự');
+        return;
+      }
+      if (!/^[a-zA-Z\s]+$/.test(value)) {
+        showFieldError(field, 'Tên quốc gia chỉ được chứa chữ cái và khoảng trắng');
+        return;
+      }
+    }
+    
+    // Director validation
+    if (fieldName === 'director' && value) {
+      if (value.length > 200) {
+        showFieldError(field, 'Tên đạo diễn không được quá 200 ký tự');
+        return;
+      }
+      if (!/^[a-zA-Z\s.,]+$/.test(value)) {
+        showFieldError(field, 'Tên đạo diễn chỉ được chứa chữ cái, khoảng trắng và dấu câu');
+        return;
+      }
+    }
+    
+    // Cast validation
+    if (fieldName === 'cast' && value) {
+      if (value.length > 500) {
+        showFieldError(field, 'Tên diễn viên không được quá 500 ký tự');
+        return;
+      }
+      if (!/^[a-zA-Z\s.,]+$/.test(value)) {
+        showFieldError(field, 'Tên diễn viên chỉ được chứa chữ cái, khoảng trắng và dấu câu');
+        return;
+      }
+    }
+    
+    // URL validation
+    if ((fieldName === 'trailer_url' || fieldName === 'poster_url' || fieldName === 'backdrop_url') && value) {
+      if (!/^https?:\/\/[^\s/$.?#].[^\s]*$/.test(value)) {
+        showFieldError(field, 'URL phải là địa chỉ web hợp lệ (bắt đầu bằng http:// hoặc https://)');
+        return;
+      }
+    }
+  }
+  
+  function showFieldError(field, message) {
+    field.style.borderColor = '#ef4444';
+    field.style.boxShadow = '0 0 0 3px rgba(239, 68, 68, 0.1)';
+    
+    let errorDiv = field.parentNode.querySelector('.field-error');
+    if (!errorDiv) {
+      errorDiv = document.createElement('div');
+      errorDiv.className = 'field-error';
+      errorDiv.style.color = '#ef4444';
+      errorDiv.style.fontSize = '0.85rem';
+      errorDiv.style.marginTop = '5px';
+      field.parentNode.appendChild(errorDiv);
+    }
+    errorDiv.textContent = message;
+  }
+  
+  function clearFieldError(field) {
+    field.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+    field.style.boxShadow = 'none';
+    
+    const errorDiv = field.parentNode.querySelector('.field-error');
+    if (errorDiv) {
+      errorDiv.remove();
+    }
+  }
+  
+  // Genre selection validation
+  const genreCheckboxes = document.querySelectorAll('input[name="genres"]');
+  const form = document.querySelector('.movie-form');
+  
+  form.addEventListener('submit', function(e) {
+    const selectedGenres = document.querySelectorAll('input[name="genres"]:checked');
+    if (selectedGenres.length === 0) {
+      e.preventDefault();
+      alert('Vui lòng chọn ít nhất một thể loại phim');
+      return false;
+    }
+  });
+});
+</script>
 {% endblock %}
-
-
