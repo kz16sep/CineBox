@@ -12,8 +12,27 @@
     <header class="navbar">
       <div class="container">
         <a href="{{ url_for('main.home') }}" class="logo">Cine<span>Box</span></a>
-        <form class="search">
-          <input type="text" placeholder="Tìm kiếm phim, series.." />
+        <form class="search" action="{{ url_for('main.search') }}" method="GET">
+          <div class="search-input-group">
+            <input 
+              type="text" 
+              name="q" 
+              placeholder="Tìm kiếm phim, series.." 
+              class="search-input"
+              id="headerSearchInput"
+              autocomplete="off"
+            />
+            <button type="submit" class="search-btn">
+              <span>🔍</span>
+            </button>
+          </div>
+          
+          <!-- Search Suggestions Dropdown -->
+          <div class="search-suggestions" id="headerSearchSuggestions" style="display: none;">
+            <div class="suggestions-list" id="headerSuggestionsList">
+              <!-- Suggestions will be populated by JavaScript -->
+            </div>
+          </div>
         </form>
         <nav>
           {% if session.get('user_id') %}
@@ -44,6 +63,96 @@
     <footer class="footer">
       <div class="container">© 2024 CINEBOX · Điều khoản sử dụng · Liên hệ</div>
     </footer>
+
+    <script>
+    // Header Search Suggestions
+    document.addEventListener('DOMContentLoaded', function() {
+        const searchInput = document.getElementById('headerSearchInput');
+        const suggestionsContainer = document.getElementById('headerSearchSuggestions');
+        const suggestionsList = document.getElementById('headerSuggestionsList');
+        
+        let searchTimeout;
+        
+        searchInput.addEventListener('input', function() {
+            const query = this.value.trim();
+            console.log('Search input changed:', query);
+            
+            // Clear previous timeout
+            clearTimeout(searchTimeout);
+            
+            if (query.length < 2) {
+                suggestionsContainer.style.display = 'none';
+                return;
+            }
+            
+            // Debounce search
+            searchTimeout = setTimeout(() => {
+                console.log('Fetching suggestions for:', query);
+                fetchSuggestions(query);
+            }, 300);
+        });
+        
+        // Hide suggestions when clicking outside
+        document.addEventListener('click', function(e) {
+            if (!searchInput.contains(e.target) && !suggestionsContainer.contains(e.target)) {
+                suggestionsContainer.style.display = 'none';
+            }
+        });
+        
+        // Show suggestions when focusing on input
+        searchInput.addEventListener('focus', function() {
+            if (this.value.trim().length >= 2) {
+                suggestionsContainer.style.display = 'block';
+            }
+        });
+        
+        function fetchSuggestions(query) {
+            console.log('Fetching suggestions for query:', query);
+            fetch(`/api/search/suggestions?q=${encodeURIComponent(query)}&limit=6`)
+                .then(response => {
+                    console.log('Response status:', response.status);
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('Suggestions data:', data);
+                    if (data.success) {
+                        displaySuggestions(data.suggestions);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching suggestions:', error);
+                });
+        }
+        
+        function displaySuggestions(suggestions) {
+            console.log('Displaying suggestions:', suggestions);
+            if (suggestions.length === 0) {
+                suggestionsContainer.style.display = 'none';
+                return;
+            }
+            
+            suggestionsList.innerHTML = suggestions.map(suggestion => `
+                <div class="suggestion-item" onclick="selectHeaderSuggestion('${suggestion.title.replace(/'/g, "\\'")}')">
+                    <div class="suggestion-poster" style="background-image: url('${suggestion.poster}')"></div>
+                    <div class="suggestion-info">
+                        <div class="suggestion-title">${suggestion.title}</div>
+                        ${suggestion.year ? `<div class="suggestion-year">${suggestion.year}</div>` : ''}
+                    </div>
+                </div>
+            `).join('');
+            
+            console.log('Suggestions HTML:', suggestionsList.innerHTML);
+            suggestionsContainer.style.display = 'block';
+        }
+        
+        // Make selectHeaderSuggestion globally available
+        window.selectHeaderSuggestion = function(title) {
+            searchInput.value = title;
+            suggestionsContainer.style.display = 'none';
+            searchInput.form.submit();
+        };
+    });
+    </script>
   </body>
   </html>
 

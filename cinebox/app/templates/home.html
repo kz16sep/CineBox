@@ -74,15 +74,22 @@
 
 <!-- 3. Tất cả phim (có phân trang) -->
 {% if all_movies %}
-<section class="all-movies">
+<section class="all-movies movies-section">
   <div class="section-header">
-    <h3>🎬 Tất cả phim{% if genre_filter %} - {{ genre_filter }}{% endif %}</h3>
-    <div class="section-info">
-      <span class="movie-count">Hiển thị {{ all_movies|length }} / {{ pagination.total }} phim</span>
-    </div>
+    {% if search_query %}
+      <h3>🔍 Kết quả tìm kiếm cho "{{ search_query }}"</h3>
+      <div class="section-info">
+        <span class="movie-count">Tìm thấy {{ pagination.total }} phim</span>
+      </div>
+    {% else %}
+      <h3>🎬 Tất cả phim{% if genre_filter %} - {{ genre_filter }}{% endif %}</h3>
+      <div class="section-info">
+        <span class="movie-count">Hiển thị {{ all_movies|length }} / {{ pagination.total }} phim</span>
+      </div>
+    {% endif %}
   </div>
   
-  <div class="cards">
+  <div class="cards movies-grid">
     {% for m in all_movies %}
     <a class="card" href="{{ url_for('main.detail', movie_id=m.id) }}">
       <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
@@ -100,14 +107,14 @@
   <!-- Pagination -->
   {% if pagination and pagination.pages > 1 %}
   <div class="pagination">
-    <div class="pagination-info">
+    <div class="pagination-info page-info">
       <span>Trang {{ pagination.page }} / {{ pagination.pages }}</span>
       <span>({{ pagination.total }} phim)</span>
     </div>
     
     <div class="pagination-controls">
       {% if pagination.has_prev %}
-        <a href="{{ url_for('main.home', page=pagination.prev_num) }}" class="btn btn-pagination">
+        <a href="{{ url_for('main.home', page=pagination.prev_num, q=search_query, genre=genre_filter) }}" class="btn btn-pagination">
           ← Trang trước
         </a>
       {% endif %}
@@ -117,7 +124,7 @@
         {% set end_page = [pagination.pages, pagination.page + 2]|min %}
         
         {% if start_page > 1 %}
-          <a href="{{ url_for('main.home', page=1) }}" class="page-number">1</a>
+          <a href="{{ url_for('main.home', page=1, q=search_query, genre=genre_filter) }}" class="page-number">1</a>
           {% if start_page > 2 %}
             <span class="page-ellipsis">...</span>
           {% endif %}
@@ -127,7 +134,7 @@
           {% if page_num == pagination.page %}
             <span class="page-number current">{{ page_num }}</span>
           {% else %}
-            <a href="{{ url_for('main.home', page=page_num) }}" class="page-number">{{ page_num }}</a>
+            <a href="{{ url_for('main.home', page=page_num, q=search_query, genre=genre_filter) }}" class="page-number">{{ page_num }}</a>
           {% endif %}
         {% endfor %}
         
@@ -135,12 +142,12 @@
           {% if end_page < pagination.pages - 1 %}
             <span class="page-ellipsis">...</span>
           {% endif %}
-          <a href="{{ url_for('main.home', page=pagination.pages) }}" class="page-number">{{ pagination.pages }}</a>
+          <a href="{{ url_for('main.home', page=pagination.pages, q=search_query, genre=genre_filter) }}" class="page-number">{{ pagination.pages }}</a>
         {% endif %}
       </div>
       
       {% if pagination.has_next %}
-        <a href="{{ url_for('main.home', page=pagination.next_num) }}" class="btn btn-pagination">
+        <a href="{{ url_for('main.home', page=pagination.next_num, q=search_query, genre=genre_filter) }}" class="btn btn-pagination">
           Trang sau →
         </a>
       {% endif %}
@@ -392,7 +399,315 @@
     min-width: 35px;
   }
 }
+
+/* AJAX Loading States */
+.movies-grid {
+  transition: opacity 0.3s ease;
+}
+
+.movies-grid.loading {
+  opacity: 0.7;
+}
+
+.genre-btn {
+  transition: all 0.3s ease;
+}
+
+.genre-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+.page-number {
+  transition: all 0.3s ease;
+}
+
+.page-number:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
 </style>
+
+<script>
+// AJAX Pagination, Genre Filter, and Search
+document.addEventListener('DOMContentLoaded', function() {
+    // Attach pagination listeners
+    attachPaginationListeners();
+    
+    // Attach genre filter listeners
+    attachGenreFilterListeners();
+    
+    // Attach search listeners
+    attachSearchListeners();
+});
+
+function attachGenreFilterListeners() {
+    const genreLinks = document.querySelectorAll('.genre-btn');
+    
+    genreLinks.forEach(link => {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            
+            const url = this.href;
+            
+            // Show loading indicator
+            showLoading();
+            
+            // Add loading class to movies grid
+            const moviesGrid = document.querySelector('.movies-grid');
+            if (moviesGrid) {
+                moviesGrid.classList.add('loading');
+            }
+            
+            // Fetch new page content
+            fetch(url)
+                .then(response => response.text())
+                .then(html => {
+                    // Parse the response
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, 'text/html');
+                    
+                    // Update the movies grid
+                    const newMoviesGrid = doc.querySelector('.movies-grid');
+                    const currentMoviesGrid = document.querySelector('.movies-grid');
+                    if (newMoviesGrid && currentMoviesGrid) {
+                        currentMoviesGrid.innerHTML = newMoviesGrid.innerHTML;
+                    }
+                    
+                    // Update pagination
+                    const newPagination = doc.querySelector('.pagination-controls');
+                    const currentPagination = document.querySelector('.pagination-controls');
+                    if (newPagination && currentPagination) {
+                        currentPagination.innerHTML = newPagination.innerHTML;
+                        // Re-attach event listeners to new pagination links
+                        attachPaginationListeners();
+                    }
+                    
+                    // Update page info
+                    const newPageInfo = doc.querySelector('.page-info');
+                    const currentPageInfo = document.querySelector('.page-info');
+                    if (newPageInfo && currentPageInfo) {
+                        currentPageInfo.innerHTML = newPageInfo.innerHTML;
+                    }
+                    
+                    // Update genre filter active state
+                    const newGenreFilter = doc.querySelector('.genre-filter');
+                    const currentGenreFilter = document.querySelector('.genre-filter');
+                    if (newGenreFilter && currentGenreFilter) {
+                        currentGenreFilter.innerHTML = newGenreFilter.innerHTML;
+                        // Re-attach event listeners to new genre links
+                        attachGenreFilterListeners();
+                    }
+                    
+                    // Update section title
+                    const newSectionTitle = doc.querySelector('.movies-section h3');
+                    const currentSectionTitle = document.querySelector('.movies-section h3');
+                    if (newSectionTitle && currentSectionTitle) {
+                        currentSectionTitle.innerHTML = newSectionTitle.innerHTML;
+                    }
+                    
+                    // Update section info
+                    const newSectionInfo = doc.querySelector('.section-info');
+                    const currentSectionInfo = document.querySelector('.section-info');
+                    if (newSectionInfo && currentSectionInfo) {
+                        currentSectionInfo.innerHTML = newSectionInfo.innerHTML;
+                    }
+                    
+                    // Scroll to top of movies section
+                    const moviesSection = document.querySelector('.movies-section');
+                    if (moviesSection) {
+                        moviesSection.scrollIntoView({ behavior: 'smooth' });
+                    }
+                    
+                    // Update URL without reload
+                    window.history.pushState({}, '', url);
+                    
+                    // Remove loading class
+                    const moviesGrid = document.querySelector('.movies-grid');
+                    if (moviesGrid) {
+                        moviesGrid.classList.remove('loading');
+                    }
+                    
+                    hideLoading();
+                })
+                .catch(error => {
+                    console.error('Error loading page:', error);
+                    
+                    // Remove loading class
+                    const moviesGrid = document.querySelector('.movies-grid');
+                    if (moviesGrid) {
+                        moviesGrid.classList.remove('loading');
+                    }
+                    
+                    hideLoading();
+                    // Fallback to normal page reload
+                    window.location.href = url;
+                });
+        });
+    });
+}
+
+function attachPaginationListeners() {
+    const paginationLinks = document.querySelectorAll('.pagination-controls a');
+    
+    paginationLinks.forEach(link => {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            
+            const url = this.href;
+            
+            // Show loading indicator
+            showLoading();
+            
+            // Add loading class to movies grid
+            const moviesGrid = document.querySelector('.movies-grid');
+            if (moviesGrid) {
+                moviesGrid.classList.add('loading');
+            }
+            
+            // Fetch new page content
+            fetch(url)
+                .then(response => response.text())
+                .then(html => {
+                    // Parse the response
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, 'text/html');
+                    
+                    // Update the movies grid
+                    const newMoviesGrid = doc.querySelector('.movies-grid');
+                    const currentMoviesGrid = document.querySelector('.movies-grid');
+                    if (newMoviesGrid && currentMoviesGrid) {
+                        currentMoviesGrid.innerHTML = newMoviesGrid.innerHTML;
+                    }
+                    
+                    // Update pagination
+                    const newPagination = doc.querySelector('.pagination-controls');
+                    const currentPagination = document.querySelector('.pagination-controls');
+                    if (newPagination && currentPagination) {
+                        currentPagination.innerHTML = newPagination.innerHTML;
+                        // Re-attach event listeners to new pagination links
+                        attachPaginationListeners();
+                    }
+                    
+                    // Update page info
+                    const newPageInfo = doc.querySelector('.page-info');
+                    const currentPageInfo = document.querySelector('.page-info');
+                    if (newPageInfo && currentPageInfo) {
+                        currentPageInfo.innerHTML = newPageInfo.innerHTML;
+                    }
+                    
+                    // Scroll to top of movies section
+                    const moviesSection = document.querySelector('.movies-section');
+                    if (moviesSection) {
+                        moviesSection.scrollIntoView({ behavior: 'smooth' });
+                    }
+                    
+                    // Update URL without reload
+                    window.history.pushState({}, '', url);
+                    
+                    // Remove loading class
+                    const moviesGrid = document.querySelector('.movies-grid');
+                    if (moviesGrid) {
+                        moviesGrid.classList.remove('loading');
+                    }
+                    
+                    hideLoading();
+                })
+                .catch(error => {
+                    console.error('Error loading page:', error);
+                    
+                    // Remove loading class
+                    const moviesGrid = document.querySelector('.movies-grid');
+                    if (moviesGrid) {
+                        moviesGrid.classList.remove('loading');
+                    }
+                    
+                    hideLoading();
+                    // Fallback to normal page reload
+                    window.location.href = url;
+                });
+        });
+    });
+}
+
+function showLoading() {
+    // Create loading overlay
+    let loadingOverlay = document.getElementById('loading-overlay');
+    if (!loadingOverlay) {
+        loadingOverlay = document.createElement('div');
+        loadingOverlay.id = 'loading-overlay';
+        loadingOverlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+        `;
+        
+        const loadingSpinner = document.createElement('div');
+        loadingSpinner.style.cssText = `
+            width: 50px;
+            height: 50px;
+            border: 5px solid #333;
+            border-top: 5px solid #e50914;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        `;
+        
+        loadingOverlay.appendChild(loadingSpinner);
+        document.body.appendChild(loadingOverlay);
+        
+        // Add CSS animation
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+    loadingOverlay.style.display = 'flex';
+}
+
+function hideLoading() {
+    const loadingOverlay = document.getElementById('loading-overlay');
+    if (loadingOverlay) {
+        loadingOverlay.style.display = 'none';
+    }
+}
+
+function attachSearchListeners() {
+    const searchInput = document.getElementById('headerSearchInput');
+    const searchForm = document.querySelector('.search');
+    
+    if (searchForm) {
+        searchForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const query = searchInput.value.trim();
+            if (query.length < 2) {
+                return;
+            }
+            
+            // Redirect to home page with search query
+            const url = new URL(window.location.origin + '/');
+            url.searchParams.set('q', query);
+            window.location.href = url.toString();
+        });
+    }
+}
+</script>
 {% endblock %}
 
 

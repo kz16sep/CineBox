@@ -20,6 +20,7 @@ def home():
     page = request.args.get('page', 1, type=int)
     per_page = 12  # Số phim mỗi trang
     genre_filter = request.args.get('genre', '', type=str)  # Lọc theo thể loại
+    search_query = request.args.get('q', '', type=str)  # Tìm kiếm
     
     # 1. Phim mới nhất (12 phim, không phân trang) - thay thế trending
     try:
@@ -32,7 +33,7 @@ def home():
                 {
                     "id": r["movieId"],
                     "title": r["title"],
-                    "poster": r.get("posterUrl") or "/static/img/dune2.jpg",
+                    "poster": r.get("posterUrl") if r.get("posterUrl") and r.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={r['title'][:20].replace(' ', '+')}",
                     "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
                     "description": (r.get("overview") or "")[:160],
                     "createdAt": r.get("createdAt"),
@@ -62,7 +63,7 @@ def home():
                     {
                         "id": row["movieId"],
                         "title": row["title"],
-                        "poster": row.get("posterUrl") or "/static/img/dune2.jpg",
+                        "poster": row.get("posterUrl") if row.get("posterUrl") and row.get("posterUrl") != "1" else "/static/img/dune2.jpg",
                         "score": row["score"]
                     }
                     for row in personal_rows
@@ -82,7 +83,46 @@ def home():
     
     try:
         with current_app.db_engine.connect() as conn:
-            if genre_filter:
+            if search_query:
+                # Tìm kiếm phim theo từ khóa
+                # Đếm tổng số kết quả tìm kiếm
+                total_count = conn.execute(text("""
+                    SELECT COUNT(*) 
+                    FROM cine.Movie 
+                    WHERE title LIKE :query
+                """), {"query": f"%{search_query}%"}).scalar()
+                total_movies = total_count
+                
+                # Tính toán phân trang
+                total_pages = (total_movies + per_page - 1) // per_page
+                offset = (page - 1) * per_page
+                
+                # Lấy kết quả tìm kiếm
+                all_rows = conn.execute(text("""
+                    SELECT movieId, title, posterUrl, backdropUrl, overview, releaseYear
+                    FROM (
+                        SELECT movieId, title, posterUrl, backdropUrl, overview, releaseYear,
+                               ROW_NUMBER() OVER (
+                                   ORDER BY 
+                                       CASE 
+                                           WHEN title LIKE :exact_query THEN 1
+                                           WHEN title LIKE :start_query THEN 2
+                                           ELSE 3
+                                       END,
+                                       title
+                               ) as rn
+                        FROM cine.Movie 
+                        WHERE title LIKE :query
+                    ) t
+                    WHERE rn > :offset AND rn <= :offset + :per_page
+                """), {
+                    "query": f"%{search_query}%",
+                    "exact_query": f"{search_query}%",
+                    "start_query": f"{search_query}%",
+                    "offset": offset,
+                    "per_page": per_page
+                }).mappings().all()
+            elif genre_filter:
                 # Lọc theo thể loại nếu được chọn
                 # Đếm tổng số phim theo thể loại
                 total_count = conn.execute(text("""
@@ -136,7 +176,7 @@ def home():
                 {
                     "id": r["movieId"],
                     "title": r["title"],
-                    "poster": r.get("posterUrl") or "/static/img/dune2.jpg",
+                    "poster": r.get("posterUrl") if r.get("posterUrl") and r.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={r['title'][:20].replace(' ', '+')}",
                     "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
                     "description": (r.get("overview") or "")[:160],
                     "year": r.get("releaseYear")
@@ -187,7 +227,8 @@ def home():
                          recommended=personal_recommendations,  # Phim đề xuất
                          all_movies=all_movies,  # Tất cả phim (có phân trang)
                          pagination=pagination,
-                         genre_filter=genre_filter)
+                         genre_filter=genre_filter,
+                         search_query=search_query)
 
 
 @main_bp.route("/login", methods=["GET", "POST"])
@@ -197,7 +238,7 @@ def login():
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
         
-        print(f"🔍 Login attempt: username='{username}', password='{password}'")
+        print(f"Login attempt: username='{username}', password='{password}'")
         
         with current_app.db_engine.connect() as conn:
             # Test query đơn giản trước
@@ -211,28 +252,28 @@ def login():
                 ) AND a.passwordHash = HASHBYTES('SHA2_256', CONVERT(VARBINARY(512), :p))
             """)
             
-            print(f"🔍 Executing query with params: u='{username}', p='{password}'")
+            print(f"Executing query with params: u='{username}', p='{password}'")
             
             try:
                 result = conn.execute(test_query, {"u": username, "p": password})
                 rows = result.fetchall()
-                print(f"🔍 Query result: {len(rows)} rows")
+                print(f"Query result: {len(rows)} rows")
                 
                 if rows:
                     row = rows[0]
-                    print(f"🔍 Found user: ID={row[0]}, Email={row[1]}, Role={row[2]}")
+                    print(f"Found user: ID={row[0]}, Email={row[1]}, Role={row[2]}")
                     
                     session["user_id"] = int(row[0])
                     session["role"] = row[2]
                     session["username"] = username
                     session["email"] = row[1]
-                    print(f"🔍 Session set: user_id={session['user_id']}, role={session['role']}")
+                    print(f"Session set: user_id={session['user_id']}, role={session['role']}")
                     return redirect(url_for("main.home"))
                 else:
-                    print("🔍 No user found with these credentials")
+                    print("No user found with these credentials")
                     error = "Sai tài khoản hoặc mật khẩu"
             except Exception as e:
-                print(f"🔍 Database error: {e}")
+                print(f"Database error: {e}")
                 error = f"Lỗi database: {str(e)}"
     return render_template("login.html", error=error)
 
@@ -269,8 +310,8 @@ def detail(movie_id: int):
             "SELECT movieId, title, releaseYear, posterUrl, backdropUrl, overview FROM cine.Movie WHERE movieId=:id"
         ), {"id": movie_id}).mappings().first()
         
-        if not r:
-            return redirect(url_for("main.home"))
+    if not r:
+        return redirect(url_for("main.home"))
         
         # Lấy genres của phim
         genres_query = text("""
@@ -282,18 +323,18 @@ def detail(movie_id: int):
         genres_result = conn.execute(genres_query, {"movie_id": movie_id}).fetchall()
         genres = [genre[0] for genre in genres_result]
         
-        movie = {
-            "id": r["movieId"],
-            "title": r["title"],
-            "year": r.get("releaseYear"),
+    movie = {
+        "id": r["movieId"],
+        "title": r["title"],
+        "year": r.get("releaseYear"),
             "duration": "120 phút",  # Default duration
             "genres": genres,
             "rating": 5.0,  # Default rating
-            "poster": r.get("posterUrl") or "/static/img/dune2.jpg",
-            "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
-            "description": r.get("overview") or "",
-            "sources": [{"label": "720p", "url": "https://www.w3schools.com/html/movie.mp4"}],
-        }
+                    "poster": r.get("posterUrl") if r.get("posterUrl") and r.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={r['title'][:20].replace(' ', '+')}",
+        "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
+        "description": r.get("overview") or "",
+        "sources": [{"label": "720p", "url": "https://www.w3schools.com/html/movie.mp4"}],
+    }
     
     # CONTENT-BASED: Phim liên quan sử dụng ContentBasedRecommender
     related = []
@@ -332,7 +373,7 @@ def detail(movie_id: int):
                 {
                     "movieId": row["movieId"],
                     "title": row["title"],
-                    "posterUrl": row.get("posterUrl") or "/static/img/dune2.jpg",
+                    "posterUrl": row.get("posterUrl") if row.get("posterUrl") and row.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={row['title'][:20].replace(' ', '+')}",
                     "similarity": 0.0,
                     "overview": "",
                     "releaseYear": row.get("releaseYear")
@@ -341,7 +382,7 @@ def detail(movie_id: int):
             ]
         except Exception as fallback_error:
             print(f"Fallback error: {fallback_error}")
-            related = []
+    related = []
     
     return render_template("detail.html", movie=movie, related=related)
 
@@ -354,61 +395,61 @@ def watch(movie_id: int):
             "SELECT movieId, title, posterUrl, backdropUrl, releaseYear, overview FROM cine.Movie WHERE movieId=:id"
         ), {"id": movie_id}).mappings().first()
         
-        if not r:
-            return redirect(url_for("main.home"))
+    if not r:
+        return redirect(url_for("main.home"))
         
-        movie = {
-            "id": r["movieId"],
-            "title": r["title"],
-            "poster": r.get("posterUrl") or "/static/img/dune2.jpg",
-            "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
-            "year": r.get("releaseYear"),
-            "overview": r.get("overview") or "",
-            "sources": [{"label": "720p", "url": "https://www.w3schools.com/html/movie.mp4"}],
-        }
+    movie = {
+        "id": r["movieId"],
+        "title": r["title"],
+                    "poster": r.get("posterUrl") if r.get("posterUrl") and r.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={r['title'][:20].replace(' ', '+')}",
+        "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
+        "year": r.get("releaseYear"),
+        "overview": r.get("overview") or "",
+        "sources": [{"label": "720p", "url": "https://www.w3schools.com/html/movie.mp4"}],
+    }
+    
+    # Lấy phim liên quan từ model đã train
+    related_movies = []
+    try:
+        # Sử dụng ContentBasedRecommender để lấy phim liên quan
+        recommender = ContentBasedRecommender(current_app.db_engine)
+        related_movies_raw = recommender.get_related_movies(movie_id, limit=12)
         
-        # Lấy phim liên quan từ model đã train
-        related_movies = []
+        # Format data cho template
+        related_movies = [
+            {
+                "movieId": movie["movieId"],
+                "title": movie["title"],
+                "posterUrl": movie["posterUrl"],
+                "similarity": movie.get("similarity", 0.0),
+                "releaseYear": movie.get("releaseYear")
+            }
+            for movie in related_movies_raw
+        ]
+    except Exception as e:
+        print(f"Error getting related movies: {e}")
+        # Fallback: lấy phim ngẫu nhiên nếu không có recommendations
         try:
-            # Sử dụng ContentBasedRecommender để lấy phim liên quan
-            recommender = ContentBasedRecommender(current_app.db_engine)
-            related_movies_raw = recommender.get_related_movies(movie_id, limit=12)
+            fallback_rows = conn.execute(text("""
+                SELECT TOP 8 movieId, title, posterUrl, releaseYear
+                FROM cine.Movie 
+                WHERE movieId != :id
+                ORDER BY NEWID()
+            """), {"id": movie_id}).mappings().all()
             
-            # Format data cho template
             related_movies = [
                 {
-                    "movieId": movie["movieId"],
-                    "title": movie["title"],
-                    "posterUrl": movie["posterUrl"],
-                    "similarity": movie.get("similarity", 0.0),
-                    "releaseYear": movie.get("releaseYear")
+                    "movieId": row["movieId"],
+                    "title": row["title"],
+                    "posterUrl": row.get("posterUrl") if row.get("posterUrl") and row.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={row['title'][:20].replace(' ', '+')}",
+                    "releaseYear": row.get("releaseYear"),
+                    "similarity": 0.0
                 }
-                for movie in related_movies_raw
+                for row in fallback_rows
             ]
-        except Exception as e:
-            print(f"Error getting related movies: {e}")
-            # Fallback: lấy phim ngẫu nhiên nếu không có recommendations
-            try:
-                fallback_rows = conn.execute(text("""
-                    SELECT TOP 8 movieId, title, posterUrl, releaseYear
-                    FROM cine.Movie 
-                    WHERE movieId != :id
-                    ORDER BY NEWID()
-                """), {"id": movie_id}).mappings().all()
-                
-                related_movies = [
-                    {
-                        "movieId": row["movieId"],
-                        "title": row["title"],
-                        "posterUrl": row.get("posterUrl") or "/static/img/dune2.jpg",
-                        "releaseYear": row.get("releaseYear"),
-                        "similarity": 0.0
-                    }
-                    for row in fallback_rows
-                ]
-            except Exception as fallback_error:
-                print(f"Fallback error: {fallback_error}")
-                related_movies = []
+        except Exception as fallback_error:
+            print(f"Fallback error: {fallback_error}")
+            related_movies = []
         
         # Chỉ sử dụng phim liên quan từ mô hình improved_train.py
         # Không cần "Phim mới ra mắt" nữa
@@ -995,6 +1036,153 @@ def api_recommendation_stats():
             "success": False,
             "error": str(e)
         }), 500
+
+# Search API endpoints
+@main_bp.route("/api/search/suggestions")
+def search_suggestions():
+    """API endpoint để lấy gợi ý tìm kiếm phim"""
+    try:
+        query = request.args.get('q', '').strip()
+        limit = request.args.get('limit', 10, type=int)
+        
+        if not query or len(query) < 2:
+            return jsonify({
+                "success": True,
+                "suggestions": []
+            })
+        
+        with current_app.db_engine.connect() as conn:
+            # Tìm kiếm phim theo title (case-insensitive)
+            suggestions = conn.execute(text(f"""
+                SELECT TOP {limit} movieId, title, releaseYear, posterUrl
+                FROM cine.Movie 
+                WHERE title LIKE :query
+                ORDER BY 
+                    CASE 
+                        WHEN title LIKE :exact_query THEN 1
+                        WHEN title LIKE :start_query THEN 2
+                        ELSE 3
+                    END,
+                    title
+            """), {
+                "query": f"%{query}%",
+                "exact_query": f"{query}%",
+                "start_query": f"{query}%"
+            }).mappings().all()
+            
+            results = []
+            for row in suggestions:
+                results.append({
+                    "id": row["movieId"],
+                    "title": row["title"],
+                    "year": row.get("releaseYear"),
+                    "poster": row.get("posterUrl") if row.get("posterUrl") and row.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={row['title'][:20].replace(' ', '+')}"
+                })
+            
+            return jsonify({
+                "success": True,
+                "suggestions": results
+            })
+            
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@main_bp.route("/search")
+def search():
+    """Trang kết quả tìm kiếm"""
+    if not session.get("user_id"):
+        return redirect(url_for("main.login"))
+    
+    query = request.args.get('q', '').strip()
+    page = request.args.get('page', 1, type=int)
+    per_page = 12
+    
+    if not query:
+        return render_template('search.html', 
+                             query=query, 
+                             movies=[], 
+                             pagination=None,
+                             total_results=0)
+    
+    try:
+        with current_app.db_engine.connect() as conn:
+            # Đếm tổng số kết quả
+            total_count = conn.execute(text("""
+                SELECT COUNT(*) 
+                FROM cine.Movie 
+                WHERE title LIKE :query
+            """), {"query": f"%{query}%"}).scalar()
+            
+            # Tính toán phân trang
+            total_pages = (total_count + per_page - 1) // per_page
+            offset = (page - 1) * per_page
+            
+            # Lấy kết quả tìm kiếm
+            movies = conn.execute(text("""
+                SELECT movieId, title, posterUrl, backdropUrl, overview, releaseYear
+                FROM (
+                    SELECT movieId, title, posterUrl, backdropUrl, overview, releaseYear,
+                           ROW_NUMBER() OVER (
+                               ORDER BY 
+                                   CASE 
+                                       WHEN title LIKE :exact_query THEN 1
+                                       WHEN title LIKE :start_query THEN 2
+                                       ELSE 3
+                                   END,
+                                   title
+                           ) as rn
+                    FROM cine.Movie 
+                    WHERE title LIKE :query
+                ) t
+                WHERE rn > :offset AND rn <= :offset + :per_page
+            """), {
+                "query": f"%{query}%",
+                "exact_query": f"{query}%",
+                "start_query": f"{query}%",
+                "offset": offset,
+                "per_page": per_page
+            }).mappings().all()
+            
+            movie_list = [
+                {
+                    "id": r["movieId"],
+                    "title": r["title"],
+                    "poster": r.get("posterUrl") if r.get("posterUrl") and r.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={r['title'][:20].replace(' ', '+')}",
+                    "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
+                    "description": (r.get("overview") or "")[:160],
+                    "year": r.get("releaseYear")
+                }
+                for r in movies
+            ]
+            
+            # Tạo pagination info
+            pagination = {
+                "page": page,
+                "per_page": per_page,
+                "total": total_count,
+                "pages": total_pages,
+                "has_prev": page > 1,
+                "has_next": page < total_pages,
+                "prev_num": page - 1 if page > 1 else None,
+                "next_num": page + 1 if page < total_pages else None
+            }
+            
+            return render_template('search.html', 
+                                 query=query, 
+                                 movies=movie_list, 
+                                 pagination=pagination,
+                                 total_results=total_count)
+            
+    except Exception as e:
+        return render_template('search.html', 
+                             query=query, 
+                             movies=[], 
+                             pagination=None,
+                             total_results=0,
+                             error=str(e))
 
 # DB health endpoints removed for UI-only build
 
