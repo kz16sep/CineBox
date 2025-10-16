@@ -10,18 +10,21 @@
         <img src="{{ movie.poster }}" alt="{{ movie.title }}" class="poster-img">
       </div>
       <div class="movie-info">
-        <h1 class="movie-title">{{ movie.title }}{% if movie.year %} ({{ movie.year }}){% endif %}</h1>
+        <h1 class="movie-title">{{ movie.title }}</h1>
         
         <div class="movie-meta">
           {% if movie.year %}<span class="meta-item">📅 {{ movie.year }}</span>{% endif %}
           {% if movie.duration %}<span class="meta-item">⏱️ {{ movie.duration }}</span>{% endif %}
-          {% if movie.genres %}<span class="meta-item">🎭 {{ ', '.join(movie.genres) }}</span>{% endif %}
+          {% if movie.genres %}<span class="meta-item">🎭 {{ ', '.join(movie.genres|map(attribute='name')) }}</span>{% endif %}
           <span class="meta-item">⭐ 5.0</span>
         </div>
         
         <div class="movie-actions">
           <a class="btn btn-primary btn-watch" href="{{ url_for('main.watch', movie_id=movie.id) }}">
             ▶ Xem phim
+          </a>
+          <a class="btn btn-secondary btn-trailer" href="{{ url_for('main.watch', movie_id=movie.id) }}?type=trailer">
+            🎬 Xem trailer
           </a>
           <button class="btn btn-secondary" onclick="addToWatchlist({{ movie.id }})">
             📋 Xem sau
@@ -30,6 +33,21 @@
             ❤️ Yêu thích
           </button>
         </div>
+        
+        <!-- Movie Genres Section -->
+        {% if movie.genres %}
+        <div class="movie-genres-section">
+          <h3>Thể loại:</h3>
+          <div class="genre-tags">
+            {% for genre in movie.genres %}
+              <a href="{{ url_for('main.genre_page', genre_slug=genre.slug) }}" 
+                 class="genre-tag">
+                {{ genre.name }}
+              </a>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
         
         {% if movie.description %}
         <div class="movie-description">
@@ -403,6 +421,109 @@
   .poster {
     height: 250px;
   }
+}
+
+/* Movie Genres Section - Enhanced */
+.movie-genres-section {
+  margin: 40px 0;
+  padding: 25px 0;
+  border-top: 2px solid rgba(59, 130, 246, 0.3);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.05), rgba(147, 51, 234, 0.05));
+  border-radius: 15px;
+  position: relative;
+  overflow: hidden;
+}
+
+.movie-genres-section::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #3b82f6, #8b5cf6, #06b6d4, #10b981);
+  animation: shimmer 3s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+.movie-genres-section h3 {
+  color: #fff;
+  margin-bottom: 20px;
+  font-size: 1.4em;
+  font-weight: 700;
+  text-align: left;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  position: relative;
+}
+
+.movie-genres-section h3::after {
+  content: '🎬';
+  margin-left: 10px;
+  font-size: 1.2em;
+}
+
+.genre-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 15px;
+  justify-content: flex-start;
+  padding: 0 20px;
+}
+
+.genre-tag {
+  background: linear-gradient(135deg, #1e293b, #334155);
+  color: #e2e8f0;
+  padding: 12px 24px;
+  border-radius: 30px;
+  text-decoration: none;
+  font-size: 1em;
+  font-weight: 600;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 2px solid transparent;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.genre-tag::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  transition: left 0.5s;
+}
+
+.genre-tag:hover::before {
+  left: 100%;
+}
+
+.genre-tag:hover {
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  color: #fff;
+  transform: translateY(-3px) scale(1.05);
+  box-shadow: 0 8px 25px rgba(59, 130, 246, 0.4);
+  border-color: #3b82f6;
+}
+
+.genre-tag:active {
+  transform: translateY(-1px) scale(1.02);
+}
+
+/* Glow effect for genre tags */
+.genre-tag:hover {
+  box-shadow: 
+    0 8px 25px rgba(59, 130, 246, 0.4),
+    0 0 20px rgba(59, 130, 246, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 </style>
 

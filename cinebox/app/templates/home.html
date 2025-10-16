@@ -26,6 +26,8 @@
          onclick="window.location.href='{{ url_for('main.home') }}'; return false;">
         🏠 Trang chủ
       </a>
+      
+      <!-- 4 thể loại chính -->
       <a href="{{ url_for('main.genre_page', genre_slug='action') }}" 
          class="genre-btn {{ 'active' if genre_filter == 'Action' else '' }}"
          data-genre="action">
@@ -46,6 +48,15 @@
          data-genre="horror">
         👻 Horror
       </a>
+      
+      <!-- Chỉ hiển thị thể loại được chọn (nếu không phải 4 thể loại chính) -->
+      {% if genre_filter and genre_filter not in ['Action', 'Adventure', 'Comedy', 'Horror'] %}
+        <a href="{{ url_for('main.genre_page', genre_slug=genre_filter.lower().replace(' ', '-')) }}" 
+           class="genre-btn active"
+           data-genre="{{ genre_filter.lower().replace(' ', '-') }}">
+          {{ genre_filter }}
+        </a>
+      {% endif %}
     </div>
   </div>
 </section>

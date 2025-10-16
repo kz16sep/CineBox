@@ -102,3 +102,41 @@ h3{margin:24px 0 12px}
 .genre-btn:hover{background:var(--primary);color:#fff;transform:translateY(-1px);text-decoration:none}
 .genre-btn.active{background:var(--primary);color:#fff;font-weight:600;box-shadow:0 2px 8px rgba(59,130,246,0.3)}
 
+/* Tất cả thể loại đều có style giống nhau - đã loại bỏ style màu đỏ */
+
+/* Avatar Styles */
+.avatar-container {
+  position: relative;
+  display: inline-block;
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.avatar:hover {
+  border-color: var(--primary);
+  transform: scale(1.05);
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.3);
+}
+
+.user-avatar img {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.2s ease;
+}
+
+.user-avatar img:hover {
+  border-color: var(--primary);
+  transform: scale(1.02);
+}
+

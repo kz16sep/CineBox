@@ -1,24 +1,60 @@
 {% extends 'base.html' %}
-{% block title %}Xem: {{ movie.title }} · CineBox{% endblock %}
+{% block title %}{% if request.args.get('type') == 'trailer' %}Trailer: {% endif %}{{ movie.title }} · CineBox{% endblock %}
 {% block content %}
 <section class="watch">
-  <h2>{{ movie.title }}{% if movie.year %} ({{ movie.year }}){% endif %}</h2>
+  <!-- Back to Detail Button -->
+  <div class="back-to-detail">
+    <a href="{{ url_for('main.detail', movie_id=movie.id) }}" class="btn btn-secondary">
+      ← Quay lại chi tiết phim
+    </a>
+  </div>
+  
+  <!-- Movie Title -->
+  <div class="watch-header">
+    <h1>{{ movie.title }}</h1>
+    {% if request.args.get('type') == 'trailer' %}
+      <span class="trailer-badge">🎬 TRAILER</span>
+    {% endif %}
+  </div>
   
   <!-- Video Player -->
-  <video class="player" controls poster="{{ movie.backdrop }}">
-    {% for s in movie.sources %}
-    <source src="{{ s.url }}" type="video/mp4" />
-    {% endfor %}
-    Trình duyệt của bạn không hỗ trợ video.
-  </video>
+  <div class="video-container">
+    <video class="player" controls poster="{{ movie.backdrop }}">
+      {% for s in movie.sources %}
+      <source src="{{ s.url }}" type="video/mp4" />
+      {% endfor %}
+      Trình duyệt của bạn không hỗ trợ video.
+    </video>
+  </div>
 
   <!-- Movie Genres -->
   {% if movie.genres %}
   <div class="movie-genres">
-    <h3>Genres:</h3>
+    <h3>Thể loại:</h3>
     <div class="genre-tags">
       {% for genre in movie.genres %}
         <a href="{{ url_for('main.genre_page', genre_slug=genre.slug) }}" class="genre-tag">{{ genre.name }}</a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Episodes Section (chỉ hiển thị nếu có nhiều hơn 1 tập) -->
+  {% if movie.episodes and movie.episodes|length > 1 %}
+  <div class="episodes-section">
+    <h3>📺 Tập phim</h3>
+    <div class="episodes-list">
+      {% for episode in movie.episodes %}
+      <div class="episode-item">
+        <a href="{{ url_for('main.watch', movie_id=movie.id) }}?episode={{ episode.number }}" 
+           class="episode-link {{ 'active' if request.args.get('episode')|int == episode.number else '' }}">
+          <div class="episode-number">{{ episode.number }}</div>
+          <div class="episode-info">
+            <div class="episode-title">{{ episode.title }}</div>
+            <div class="episode-duration">{{ episode.duration }}</div>
+          </div>
+        </a>
+      </div>
       {% endfor %}
     </div>
   </div>
@@ -62,6 +98,247 @@
 </section>
 
 <style>
+/* Watch Page Styles */
+.back-to-detail {
+  margin-bottom: 20px;
+}
+
+.watch-header {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  margin-bottom: 20px;
+}
+
+.watch-header h1 {
+  color: #fff;
+  font-size: 2rem;
+  margin: 0;
+}
+
+.trailer-badge {
+  background: linear-gradient(45deg, #ff6b6b, #ff8e8e);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 0.9rem;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3);
+}
+
+.video-container {
+  position: relative;
+  width: 100%;
+  max-width: 1000px;
+  margin: 0 auto 30px auto;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.player {
+  width: 100%;
+  height: auto;
+  min-height: 400px;
+  background: #000;
+  border-radius: 12px;
+}
+
+/* Movie Genres - Enhanced */
+.movie-genres {
+  margin: 30px 0;
+  padding: 25px 0;
+  border-top: 2px solid rgba(59, 130, 246, 0.3);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.05), rgba(147, 51, 234, 0.05));
+  border-radius: 15px;
+  position: relative;
+  overflow: hidden;
+}
+
+.movie-genres::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #3b82f6, #8b5cf6, #06b6d4, #10b981);
+  animation: shimmer 3s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+.movie-genres h3 {
+  color: #fff;
+  margin-bottom: 20px;
+  font-size: 1.3em;
+  font-weight: 700;
+  text-align: left;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  position: relative;
+}
+
+.movie-genres h3::after {
+  content: '🎬';
+  margin-left: 10px;
+  font-size: 1.1em;
+}
+
+.genre-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 15px;
+  justify-content: flex-start;
+  padding: 0 20px;
+}
+
+.genre-tag {
+  background: linear-gradient(135deg, #1e293b, #334155);
+  color: #e2e8f0;
+  padding: 10px 20px;
+  border-radius: 25px;
+  text-decoration: none;
+  font-size: 0.95em;
+  font-weight: 600;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 2px solid transparent;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.genre-tag::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  transition: left 0.5s;
+}
+
+.genre-tag:hover::before {
+  left: 100%;
+}
+
+.genre-tag:hover {
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  color: #fff;
+  transform: translateY(-3px) scale(1.05);
+  box-shadow: 
+    0 8px 25px rgba(59, 130, 246, 0.4),
+    0 0 20px rgba(59, 130, 246, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  border-color: #3b82f6;
+}
+
+.genre-tag:active {
+  transform: translateY(-1px) scale(1.02);
+}
+
+/* Episodes Section */
+.episodes-section {
+  margin: 30px 0;
+  padding: 20px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.episodes-section h3 {
+  color: #fff;
+  margin-bottom: 20px;
+  font-size: 1.3em;
+  font-weight: 600;
+}
+
+.episodes-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 15px;
+}
+
+.episode-item {
+  background: var(--panel);
+  border-radius: 12px;
+  overflow: hidden;
+  transition: all 0.3s ease;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.episode-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+  border-color: var(--primary);
+}
+
+.episode-link {
+  display: flex;
+  align-items: center;
+  padding: 15px;
+  text-decoration: none;
+  color: inherit;
+  transition: all 0.3s ease;
+}
+
+.episode-link:hover {
+  text-decoration: none;
+  color: inherit;
+}
+
+.episode-link.active {
+  background: linear-gradient(135deg, var(--primary), #4f46e5);
+  color: white;
+}
+
+.episode-number {
+  background: var(--primary);
+  color: white;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 1.1em;
+  margin-right: 15px;
+  flex-shrink: 0;
+}
+
+.episode-link.active .episode-number {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+}
+
+.episode-info {
+  flex: 1;
+}
+
+.episode-title {
+  font-size: 1.1em;
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 5px;
+}
+
+.episode-duration {
+  font-size: 0.9em;
+  color: #ccc;
+  opacity: 0.8;
+}
+
+.episode-link.active .episode-title,
+.episode-link.active .episode-duration {
+  color: white;
+}
+
 .movie-overview {
   margin: 20px 0;
   padding: 20px;

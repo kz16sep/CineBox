@@ -3,6 +3,8 @@ from sqlalchemy import text
 import sys
 import os
 import time
+import uuid
+from werkzeug.utils import secure_filename
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from content_based_recommender import ContentBasedRecommender
 
@@ -220,6 +222,30 @@ def home():
     print(f"Debug - search_query: '{search_query}'")
     print(f"Debug - URL: {request.url}")
     
+    # Lấy danh sách tất cả thể loại từ database
+    all_genres = []
+    try:
+        with current_app.db_engine.connect() as conn:
+            genre_rows = conn.execute(text("""
+                SELECT name, COUNT(mg.movieId) as movie_count
+                FROM cine.Genre g
+                LEFT JOIN cine.MovieGenre mg ON g.genreId = mg.genreId
+                GROUP BY g.genreId, g.name
+                ORDER BY movie_count DESC, g.name
+            """)).mappings().all()
+            
+            all_genres = [
+                {
+                    "name": row["name"],
+                    "slug": row["name"].lower().replace(' ', '-'),
+                    "movie_count": row["movie_count"]
+                }
+                for row in genre_rows
+            ]
+    except Exception as e:
+        print(f"Error getting genres: {e}")
+        all_genres = []
+    
     # Fallback nếu all_movies rỗng
     if not all_movies:
         print("Debug - all_movies is empty, using fallback")
@@ -262,7 +288,8 @@ def home():
                          all_movies=all_movies,  # Tất cả phim (có phân trang)
                          pagination=pagination,
                          genre_filter=genre_filter,
-                         search_query=search_query)
+                         search_query=search_query,
+                         all_genres=all_genres)  # Tất cả thể loại
 
 
 @main_bp.route("/login", methods=["GET", "POST"])
@@ -347,10 +374,11 @@ def detail(movie_id: int):
             "SELECT movieId, title, releaseYear, posterUrl, backdropUrl, overview FROM cine.Movie WHERE movieId=:id"
         ), {"id": movie_id}).mappings().first()
         
-        if not r:
-            return redirect(url_for("main.home"))
-                    
-        # Lấy genres của phim
+    if not r:
+        return redirect(url_for("main.home"))
+    
+    # Lấy genres của phim
+    with current_app.db_engine.connect() as conn:
         genres_query = text("""
             SELECT g.name
             FROM cine.MovieGenre mg
@@ -360,18 +388,17 @@ def detail(movie_id: int):
         genres_result = conn.execute(genres_query, {"movie_id": movie_id}).fetchall()
         genres = [{"name": genre[0], "slug": genre[0].lower().replace(' ', '-')} for genre in genres_result]
         
-        movie = {
-            "id": r["movieId"],
-            "title": r["title"],
-            "year": r.get("releaseYear"),
-            "duration": "120 phút",  # Default duration
-            "genres": genres,
-            "rating": 5.0,  # Default rating
-            "poster": r.get("posterUrl") if r.get("posterUrl") and r.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={r['title'][:20].replace(' ', '+')}",
-            "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
-            "description": r.get("overview") or "",
-            "sources": [{"label": "720p", "url": "https://www.w3schools.com/html/movie.mp4"}],
-        }
+    movie = {
+        "id": r["movieId"],
+        "title": r["title"],
+        "year": r.get("releaseYear"),
+        "duration": "120 phút",  # Default duration
+        "genres": genres,
+        "rating": 5.0,  # Default rating
+        "poster": r.get("posterUrl") if r.get("posterUrl") and r.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={r['title'][:20].replace(' ', '+')}",
+        "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
+        "description": r.get("overview") or "",
+    }
     
     # CONTENT-BASED: Phim liên quan sử dụng ContentBasedRecommender
     related = []
@@ -399,50 +426,83 @@ def detail(movie_id: int):
         print(f"Error getting related movies: {e}")
         # Fallback: lấy phim ngẫu nhiên
         try:
-            fallback_rows = conn.execute(text("""
-                SELECT TOP 6 movieId, title, posterUrl, releaseYear
-                FROM cine.Movie 
-                WHERE movieId != :id
-                ORDER BY NEWID()
-            """), {"id": movie_id}).mappings().all()
+            with current_app.db_engine.connect() as conn:
+                fallback_rows = conn.execute(text("""
+                    SELECT TOP 6 movieId, title, posterUrl, releaseYear
+                    FROM cine.Movie 
+                    WHERE movieId != :id
+                    ORDER BY NEWID()
+                """), {"id": movie_id}).mappings().all()
             
-            related = [
-                {
-                    "movieId": row["movieId"],
-                    "title": row["title"],
-                    "posterUrl": row.get("posterUrl") if row.get("posterUrl") and row.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={row['title'][:20].replace(' ', '+')}",
-                    "similarity": 0.0,
-                    "overview": "",
-                    "releaseYear": row.get("releaseYear")
-                }
-                for row in fallback_rows
-            ]
+                related = [
+                    {
+                        "movieId": row["movieId"],
+                        "title": row["title"],
+                        "posterUrl": row.get("posterUrl") if row.get("posterUrl") and row.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={row['title'][:20].replace(' ', '+')}",
+                        "similarity": 0.0,
+                        "overview": "",
+                        "releaseYear": row.get("releaseYear")
+                    }
+                    for row in fallback_rows
+                ]
         except Exception as fallback_error:
             print(f"Fallback error: {fallback_error}")
-    related = []
+            related = []
     
-    return render_template("watch.html", movie=movie, related=related)
+    return render_template("detail.html", movie=movie, related=related)
 
 
 @main_bp.route("/watch/<int:movie_id>")
 def watch(movie_id: int):
+    # Kiểm tra xem có phải trailer không
+    is_trailer = request.args.get('type') == 'trailer'
+    
     with current_app.db_engine.connect() as conn:
         # Lấy thông tin phim chính
         r = conn.execute(text(
-            "SELECT movieId, title, posterUrl, backdropUrl, releaseYear, overview FROM cine.Movie WHERE movieId=:id"
+            "SELECT movieId, title, posterUrl, backdropUrl, releaseYear, overview, trailerUrl FROM cine.Movie WHERE movieId=:id"
         ), {"id": movie_id}).mappings().first()
         
     if not r:
         return redirect(url_for("main.home"))
+    
+    # Lấy thể loại của phim
+    with current_app.db_engine.connect() as conn:
+        genres_query = text("""
+            SELECT g.name
+            FROM cine.MovieGenre mg
+            JOIN cine.Genre g ON mg.genreId = g.genreId
+            WHERE mg.movieId = :movie_id
+        """)
+        genres_result = conn.execute(genres_query, {"movie_id": movie_id}).fetchall()
+        genres = [{"name": genre[0], "slug": genre[0].lower().replace(' ', '-')} for genre in genres_result]
+    
+    # Xác định video source dựa trên loại (trailer hoặc phim)
+    if is_trailer and r.get("trailerUrl"):
+        video_sources = [{"label": "Trailer", "url": r.get("trailerUrl")}]
+    else:
+        video_sources = [{"label": "720p", "url": "https://www.w3schools.com/html/movie.mp4"}]
+    
+    # Tạo danh sách tập phim (giả lập - có thể mở rộng từ database)
+    episodes = []
+    # Giả sử phim có 3 tập để demo
+    if not is_trailer:  # Chỉ hiển thị tập phim khi xem phim, không phải trailer
+        episodes = [
+            {"number": 1, "title": "Tập 1", "duration": "45 phút", "url": "https://www.w3schools.com/html/movie.mp4"},
+            {"number": 2, "title": "Tập 2", "duration": "42 phút", "url": "https://www.w3schools.com/html/movie.mp4"},
+            {"number": 3, "title": "Tập 3", "duration": "48 phút", "url": "https://www.w3schools.com/html/movie.mp4"}
+        ]
         
     movie = {
         "id": r["movieId"],
         "title": r["title"],
-                    "poster": r.get("posterUrl") if r.get("posterUrl") and r.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={r['title'][:20].replace(' ', '+')}",
+        "poster": r.get("posterUrl") if r.get("posterUrl") and r.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={r['title'][:20].replace(' ', '+')}",
         "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
         "year": r.get("releaseYear"),
         "overview": r.get("overview") or "",
-        "sources": [{"label": "720p", "url": "https://www.w3schools.com/html/movie.mp4"}],
+        "sources": video_sources,
+        "genres": genres,
+        "episodes": episodes,
     }
     
     # Lấy phim liên quan từ model đã train
@@ -606,6 +666,89 @@ def update_profile():
         return redirect(url_for("main.account"))
 
 
+@main_bp.route("/upload-avatar", methods=["POST"])
+def upload_avatar():
+    """Upload avatar từ header"""
+    if not session.get("user_id"):
+        return jsonify({"success": False, "error": "Chưa đăng nhập"})
+    
+    user_id = session.get("user_id")
+    
+    try:
+        if 'avatar' not in request.files:
+            return jsonify({"success": False, "error": "Không có file được chọn"})
+        
+        avatar_file = request.files['avatar']
+        if not avatar_file or not avatar_file.filename:
+            return jsonify({"success": False, "error": "Không có file được chọn"})
+        
+        # Validate file type
+        if not avatar_file.content_type.startswith('image/'):
+            return jsonify({"success": False, "error": "File phải là ảnh"})
+        
+        # Validate file size (max 5MB)
+        avatar_file.seek(0, 2)  # Seek to end
+        file_size = avatar_file.tell()
+        avatar_file.seek(0)  # Reset to beginning
+        
+        if file_size > 5 * 1024 * 1024:
+            return jsonify({"success": False, "error": "File quá lớn (max 5MB)"})
+        
+        # Generate unique filename
+        filename = f"avatar_{user_id}_{int(time.time())}_{uuid.uuid4().hex[:8]}.jpg"
+        avatar_dir = r"D:\N5\KLTN\WebXemPhim\avatar"
+        avatar_file_path = os.path.join(avatar_dir, filename)
+        
+        # Create directory if not exists
+        os.makedirs(avatar_dir, exist_ok=True)
+        
+        # Save file
+        avatar_file.save(avatar_file_path)
+        
+        # Update database
+        avatar_url = f"/avatar/{filename}"
+        with current_app.db_engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE [cine].[User] 
+                SET avatarUrl = :avatar_url
+                WHERE userId = :user_id
+            """), {"avatar_url": avatar_url, "user_id": user_id})
+        
+        # Update session
+        session['avatar'] = avatar_url
+        
+        return jsonify({
+            "success": True, 
+            "avatar_url": avatar_url,
+            "message": "Đổi avatar thành công!"
+        })
+        
+    except Exception as e:
+        print(f"Error uploading avatar: {e}")
+        return jsonify({"success": False, "error": f"Lỗi server: {str(e)}"})
+
+
+@main_bp.route("/avatar/<filename>")
+def serve_avatar(filename):
+    """Serve avatar files"""
+    try:
+        avatar_dir = r"D:\N5\KLTN\WebXemPhim\avatar"
+        avatar_path = os.path.join(avatar_dir, filename)
+        
+        if os.path.exists(avatar_path):
+            from flask import send_file
+            return send_file(avatar_path)
+        else:
+            # Return default avatar if file not found
+            default_avatar = os.path.join(current_app.static_folder, 'img', 'avatar_default.png')
+            return send_file(default_avatar)
+    except Exception as e:
+        print(f"Error serving avatar: {e}")
+        # Return default avatar on error
+        default_avatar = os.path.join(current_app.static_folder, 'img', 'avatar_default.png')
+        return send_file(default_avatar)
+
+
 @main_bp.route("/add-watchlist/<int:movie_id>", methods=["POST"])
 def add_watchlist(movie_id):
     """Thêm phim vào danh sách xem sau"""
@@ -710,21 +853,6 @@ def remove_favorite(movie_id):
     except Exception as e:
         print(f"Error removing from favorites: {e}")
         return jsonify({"success": False, "message": "Có lỗi xảy ra"})
-
-
-@main_bp.route("/avatar/<path:filename>")
-def serve_avatar(filename):
-    """Serve avatar files from D:/N5/KLTN/WebXemPhim/avatar"""
-    from flask import send_file
-    import os
-    
-    avatar_path = os.path.join(r"D:\N5\KLTN\WebXemPhim\avatar", filename)
-    
-    if os.path.exists(avatar_path):
-        return send_file(avatar_path)
-    else:
-        # Return default avatar if file not found
-        return send_file(os.path.join(current_app.static_folder, "img", "avatar_default.png"))
 
 
 def require_role(role_name: str):
@@ -1133,17 +1261,34 @@ def genre_page(genre_slug):
     if not session.get("user_id"):
         return redirect(url_for("main.login"))
     
-    # Mapping từ slug sang tên thể loại
-    genre_mapping = {
+    # Mapping từ slug sang tên thể loại (4 thể loại chính)
+    main_genre_mapping = {
         'action': 'Action',
         'adventure': 'Adventure', 
         'comedy': 'Comedy',
         'horror': 'Horror'
     }
     
-    genre_name = genre_mapping.get(genre_slug)
+    # Kiểm tra 4 thể loại chính trước
+    genre_name = main_genre_mapping.get(genre_slug)
+    
+    # Nếu không tìm thấy trong 4 thể loại chính, tìm trong database
     if not genre_name:
-        return redirect(url_for('main.home'))
+        try:
+            with current_app.db_engine.connect() as conn:
+                # Tìm thể loại theo slug trong database
+                result = conn.execute(text("""
+                    SELECT name FROM cine.Genre 
+                    WHERE LOWER(REPLACE(name, ' ', '-')) = :slug
+                """), {"slug": genre_slug.lower()}).fetchone()
+                
+                if result:
+                    genre_name = result[0]
+                else:
+                    return redirect(url_for('main.home'))
+        except Exception as e:
+            print(f"Error finding genre: {e}")
+            return redirect(url_for('main.home'))
     
     # Redirect về trang chủ với genre filter
     return redirect(url_for('main.home', genre=genre_name))

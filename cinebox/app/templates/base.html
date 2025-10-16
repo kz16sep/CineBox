@@ -41,12 +41,15 @@
               <a class="btn btn-secondary" href="{{ url_for('main.admin_users') }}">Quản lý tài khoản</a>
             {% endif %}
             <div class="user-box">
-              {% if session.get('avatar') and session.get('avatar').startswith('/avatar/') %}
-                <img class="avatar" src="{{ session.get('avatar') }}" alt="avatar">
-              {% else %}
-                <img class="avatar" src="{{ session.get('avatar') or url_for('static', filename='img/avatar_default.png') }}" alt="avatar">
-              {% endif %}
-              <span class="username">{{ session.get('username') or session.get('email') }}</span>
+              <div class="avatar-container">
+                <input type="file" id="avatar-upload" accept="image/*" style="display: none;" onchange="uploadAvatar(this)">
+                {% if session.get('avatar') and session.get('avatar').startswith('/avatar/') %}
+                  <img class="avatar" src="{{ session.get('avatar') }}" alt="avatar" onclick="document.getElementById('avatar-upload').click()" title="Click để đổi avatar">
+                {% else %}
+                  <img class="avatar" src="{{ session.get('avatar') or url_for('static', filename='img/avatar_default.png') }}" alt="avatar" onclick="document.getElementById('avatar-upload').click()" title="Click để đổi avatar">
+                {% endif %}
+              </div>
+              <span class="username">{{ session.get('username') or 'User' }}</span>
               <a class="btn btn-secondary" href="{{ url_for('main.account') }}">Tài khoản của tôi</a>
             </div>
           {% else %}
@@ -152,6 +155,63 @@
             searchInput.form.submit();
         };
     });
+
+    // Avatar upload function
+    function uploadAvatar(input) {
+        if (input.files && input.files[0]) {
+            const file = input.files[0];
+            
+            // Validate file size (max 5MB)
+            if (file.size > 5 * 1024 * 1024) {
+                alert('File quá lớn! Vui lòng chọn file nhỏ hơn 5MB.');
+                return;
+            }
+            
+            // Validate file type
+            if (!file.type.startsWith('image/')) {
+                alert('Vui lòng chọn file ảnh!');
+                return;
+            }
+            
+            // Create FormData
+            const formData = new FormData();
+            formData.append('avatar', file);
+            
+            // Show loading
+            const avatar = document.querySelector('.avatar');
+            const originalSrc = avatar.src;
+            avatar.style.opacity = '0.5';
+            
+            // Upload to server
+            fetch('/upload-avatar', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Update avatar immediately
+                    avatar.src = data.avatar_url + '?t=' + new Date().getTime();
+                    avatar.style.opacity = '1';
+                    
+                    // Show success message
+                    alert('Đổi avatar thành công!');
+                } else {
+                    // Restore original avatar
+                    avatar.src = originalSrc;
+                    avatar.style.opacity = '1';
+                    alert('Lỗi: ' + (data.error || 'Không thể đổi avatar'));
+                }
+            })
+            .catch(error => {
+                // Restore original avatar
+                avatar.src = originalSrc;
+                avatar.style.opacity = '1';
+                console.error('Error:', error);
+                alert('Lỗi: Không thể kết nối đến server');
+            });
+        }
+    }
     </script>
   </body>
   </html>
