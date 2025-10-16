@@ -1,0 +1,455 @@
+{% extends 'base.html' %}
+{% block title %}{{ genre_name }} · CineBox{% endblock %}
+{% block content %}
+<style>
+/* Giữ thanh tìm kiếm hiển thị trên trang thể loại */
+.navbar .search {
+  display: flex;
+  flex: 1;
+}
+
+/* Đảm bảo thanh tìm kiếm có kích thước đầy đủ */
+.navbar .search-input-group {
+  width: 100%;
+}
+
+.navbar .search-input {
+  flex: 1;
+  min-width: 300px;
+}
+</style>
+
+<!-- Genre Filter Menu -->
+<section class="genre-filter">
+  <div class="genre-filter-container">
+    <h3>🎬 Lọc theo thể loại</h3>
+    <div class="genre-buttons">
+      <a href="{{ url_for('main.home') }}" 
+         class="genre-btn"
+         data-genre="all">
+        Tất cả
+      </a>
+      <a href="{{ url_for('main.genre_page', genre_slug='action') }}" 
+         class="genre-btn {{ 'active' if genre_slug == 'action' else '' }}"
+         data-genre="action">
+        🎬 Action
+      </a>
+      <a href="{{ url_for('main.genre_page', genre_slug='adventure') }}" 
+         class="genre-btn {{ 'active' if genre_slug == 'adventure' else '' }}"
+         data-genre="adventure">
+        🗺️ Adventure
+      </a>
+      <a href="{{ url_for('main.genre_page', genre_slug='comedy') }}" 
+         class="genre-btn {{ 'active' if genre_slug == 'comedy' else '' }}"
+         data-genre="comedy">
+        😂 Comedy
+      </a>
+      <a href="{{ url_for('main.genre_page', genre_slug='horror') }}" 
+         class="genre-btn {{ 'active' if genre_slug == 'horror' else '' }}"
+         data-genre="horror">
+        👻 Horror
+      </a>
+    </div>
+  </div>
+</section>
+
+<div class="genre-container">
+  <div class="genre-header">
+    <h1>🎬 {{ genre_name }} Movies</h1>
+    {% if movies %}
+      <p class="genre-results-info">
+        Found {{ total_results }} {{ genre_name.lower() }} movies
+      </p>
+    {% endif %}
+  </div>
+  
+  {% if movies %}
+    <div class="cards movies-grid">
+      {% for m in movies %}
+      <a class="card" href="{{ url_for('main.detail', movie_id=m.id) }}">
+        <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
+        <div class="card-content">
+          <div class="card-title">{{ m.title }}{% if m.year %} ({{ m.year }}){% endif %}</div>
+        <div class="card-meta">
+          <span class="upload-time">Movie {{ m.id }}</span>
+        </div>
+          <div class="stars">★★★★★</div>
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+    
+    <!-- Pagination -->
+    {% if pagination and pagination.pages > 1 %}
+    <div class="pagination">
+      <div class="pagination-info page-info">
+        <span>Page {{ pagination.page }} / {{ pagination.pages }}</span>
+        <span>({{ pagination.total }} movies)</span>
+      </div>
+      
+      <div class="pagination-controls">
+        {% if pagination.has_prev %}
+          <a href="{{ url_for('main.genre_page', genre_slug=genre_slug, page=pagination.prev_num) }}" class="btn btn-pagination">
+            ← Previous
+          </a>
+        {% endif %}
+        
+        <div class="page-numbers">
+          {% set start_page = [1, pagination.page - 2]|max %}
+          {% set end_page = [pagination.pages, pagination.page + 2]|min %}
+          
+          {% if start_page > 1 %}
+            <a href="{{ url_for('main.genre_page', genre_slug=genre_slug, page=1) }}" class="page-number">1</a>
+            {% if start_page > 2 %}
+              <span class="page-ellipsis">...</span>
+            {% endif %}
+          {% endif %}
+          
+          {% for page_num in range(start_page, end_page + 1) %}
+            {% if page_num == pagination.page %}
+              <span class="page-number current">{{ page_num }}</span>
+            {% else %}
+              <a href="{{ url_for('main.genre_page', genre_slug=genre_slug, page=page_num) }}" class="page-number">{{ page_num }}</a>
+            {% endif %}
+          {% endfor %}
+          
+          {% if end_page < pagination.pages %}
+            {% if end_page < pagination.pages - 1 %}
+              <span class="page-ellipsis">...</span>
+            {% endif %}
+            <a href="{{ url_for('main.genre_page', genre_slug=genre_slug, page=pagination.pages) }}" class="page-number">{{ pagination.pages }}</a>
+          {% endif %}
+        </div>
+        
+        {% if pagination.has_next %}
+          <a href="{{ url_for('main.genre_page', genre_slug=genre_slug, page=pagination.next_num) }}" class="btn btn-pagination">
+            Next →
+          </a>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  {% else %}
+    <div class="no-results">
+      <div class="no-results-icon">🎬</div>
+      <h2>No Movies Found</h2>
+      <p>No movies found in <strong>{{ genre_name }}</strong> genre</p>
+      <a href="{{ url_for('main.home') }}" class="btn btn-primary">Back to Home</a>
+    </div>
+  {% endif %}
+</div>
+
+<style>
+.genre-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.genre-header {
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.genre-header h1 {
+  font-size: 2.5rem;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.genre-results-info {
+  color: var(--text-secondary);
+  font-size: 1.1rem;
+}
+
+.no-results {
+  text-align: center;
+  padding: 60px 20px;
+}
+
+.no-results-icon {
+  font-size: 4rem;
+  margin-bottom: 20px;
+}
+
+.no-results h2 {
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.no-results p {
+  color: var(--text-secondary);
+  margin-bottom: 30px;
+}
+
+/* Pagination Styles */
+.pagination {
+  margin-top: 30px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+}
+
+.pagination-info {
+  color: var(--text-secondary);
+  font-size: 0.9em;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.btn-pagination {
+  background: var(--primary);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 6px;
+  text-decoration: none;
+  font-size: 0.9em;
+  transition: all 0.2s ease;
+  border: none;
+  cursor: pointer;
+}
+
+.btn-pagination:hover {
+  background: var(--primary-2);
+  color: white;
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+
+.page-numbers {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.page-number {
+  padding: 8px 12px;
+  border-radius: 6px;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.2s ease;
+  min-width: 40px;
+  text-align: center;
+}
+
+.page-number:hover {
+  background: var(--primary);
+  color: white;
+  text-decoration: none;
+}
+
+.page-number.current {
+  background: var(--primary);
+  color: white;
+  font-weight: bold;
+}
+
+.page-ellipsis {
+  color: var(--text-secondary);
+  padding: 8px 4px;
+}
+
+/* Loading state */
+.movies-grid.loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.movies-grid.loading::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--primary);
+  border-top: 3px solid transparent;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: translate(-50%, -50%) rotate(0deg); }
+  100% { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .genre-header h1 {
+    font-size: 2rem;
+  }
+  
+  .genre-container {
+    padding: 15px;
+  }
+}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Attach genre filter listeners
+    attachGenreFilterListeners();
+    
+    // Attach pagination listeners
+    attachPaginationListeners();
+});
+
+function attachGenreFilterListeners() {
+    const genreLinks = document.querySelectorAll('.genre-btn');
+    
+    genreLinks.forEach(link => {
+        link.addEventListener('click', function(e) {
+            const genre = this.getAttribute('data-genre');
+            
+            // Remove active class from all buttons
+            genreLinks.forEach(btn => btn.classList.remove('active'));
+            
+            // Add active class to clicked button
+            this.classList.add('active');
+            
+            // Nếu là "All" thì chuyển về trang chủ
+            if (genre === 'all') {
+                // Chuyển trang bình thường
+                return;
+            } else {
+                // Các thể loại khác: chuyển trang bình thường
+                return;
+            }
+        });
+    });
+}
+
+function attachPaginationListeners() {
+    const paginationLinks = document.querySelectorAll('.pagination-controls a');
+    
+    paginationLinks.forEach(link => {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            
+            const url = this.href;
+            
+            // Show loading indicator
+            showLoading();
+            
+            // Add loading class to movies grid
+            const moviesGrid = document.querySelector('.movies-grid');
+            if (moviesGrid) {
+                moviesGrid.classList.add('loading');
+            }
+            
+            // Fetch new page content
+            fetch(url)
+                .then(response => response.text())
+                .then(html => {
+                    // Parse the response
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, 'text/html');
+                    
+                    // Update movies grid
+                    const newMoviesGrid = doc.querySelector('.movies-grid');
+                    const currentMoviesGrid = document.querySelector('.movies-grid');
+                    if (newMoviesGrid && currentMoviesGrid) {
+                        currentMoviesGrid.innerHTML = newMoviesGrid.innerHTML;
+                    }
+                    
+                    // Update pagination
+                    const newPagination = doc.querySelector('.pagination');
+                    const currentPagination = document.querySelector('.pagination');
+                    if (newPagination && currentPagination) {
+                        currentPagination.innerHTML = newPagination.innerHTML;
+                        // Re-attach event listeners to new pagination links
+                        attachPaginationListeners();
+                    }
+                    
+                    // Update page info
+                    const newPageInfo = doc.querySelector('.page-info');
+                    const currentPageInfo = document.querySelector('.page-info');
+                    if (newPageInfo && currentPageInfo) {
+                        currentPageInfo.innerHTML = newPageInfo.innerHTML;
+                    }
+                    
+                    // Update genre results info
+                    const newGenreInfo = doc.querySelector('.genre-results-info');
+                    const currentGenreInfo = document.querySelector('.genre-results-info');
+                    if (newGenreInfo && currentGenreInfo) {
+                        currentGenreInfo.innerHTML = newGenreInfo.innerHTML;
+                    }
+                    
+                    // Scroll to top of movies section
+                    const moviesSection = document.querySelector('.genre-container');
+                    if (moviesSection) {
+                        moviesSection.scrollIntoView({ behavior: 'smooth' });
+                    }
+                    
+                    // Update URL without reload
+                    window.history.pushState({}, '', url);
+                    
+                    // Remove loading class
+                    const moviesGrid = document.querySelector('.movies-grid');
+                    if (moviesGrid) {
+                        moviesGrid.classList.remove('loading');
+                    }
+                    
+                    hideLoading();
+                })
+                .catch(error => {
+                    console.error('Error loading page:', error);
+                    
+                    // Remove loading class
+                    const moviesGrid = document.querySelector('.movies-grid');
+                    if (moviesGrid) {
+                        moviesGrid.classList.remove('loading');
+                    }
+                    
+                    hideLoading();
+                    // Fallback to normal page reload
+                    window.location.href = url;
+                });
+        });
+    });
+}
+
+function showLoading() {
+    // Create loading overlay if it doesn't exist
+    let loading = document.getElementById('loading-overlay');
+    if (!loading) {
+        loading = document.createElement('div');
+        loading.id = 'loading-overlay';
+        loading.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            color: white;
+            font-size: 18px;
+        `;
+        loading.innerHTML = 'Loading...';
+        document.body.appendChild(loading);
+    }
+    loading.style.display = 'flex';
+}
+
+function hideLoading() {
+    const loading = document.getElementById('loading-overlay');
+    if (loading) {
+        loading.style.display = 'none';
+    }
+}
+</script>
+{% endblock %}

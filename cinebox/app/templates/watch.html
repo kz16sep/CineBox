@@ -12,11 +12,23 @@
     Trình duyệt của bạn không hỗ trợ video.
   </video>
 
+  <!-- Movie Genres -->
+  {% if movie.genres %}
+  <div class="movie-genres">
+    <h3>Genres:</h3>
+    <div class="genre-tags">
+      {% for genre in movie.genres %}
+        <a href="{{ url_for('main.genre_page', genre_slug=genre.slug) }}" class="genre-tag">{{ genre.name }}</a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
   <!-- Movie Overview -->
-  {% if movie.overview %}
+  {% if movie.description %}
   <div class="movie-overview">
     <h3>Nội dung phim</h3>
-    <p>{{ movie.overview }}</p>
+    <p>{{ movie.description }}</p>
   </div>
   {% endif %}
 

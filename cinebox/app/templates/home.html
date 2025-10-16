@@ -21,23 +21,29 @@
     <h3>🎬 Lọc theo thể loại</h3>
     <div class="genre-buttons">
       <a href="{{ url_for('main.home') }}" 
-         class="genre-btn {{ 'active' if not genre_filter else '' }}">
-        Tất cả
+         class="genre-btn {{ 'active' if not genre_filter else '' }}"
+         data-genre="all"
+         onclick="window.location.href='{{ url_for('main.home') }}'; return false;">
+        🏠 Trang chủ
       </a>
-      <a href="{{ url_for('main.home', genre='Action') }}" 
-         class="genre-btn {{ 'active' if genre_filter == 'Action' else '' }}">
+      <a href="{{ url_for('main.genre_page', genre_slug='action') }}" 
+         class="genre-btn {{ 'active' if genre_filter == 'Action' else '' }}"
+         data-genre="action">
         🎬 Action
       </a>
-      <a href="{{ url_for('main.home', genre='Adventure') }}" 
-         class="genre-btn {{ 'active' if genre_filter == 'Adventure' else '' }}">
+      <a href="{{ url_for('main.genre_page', genre_slug='adventure') }}" 
+         class="genre-btn {{ 'active' if genre_filter == 'Adventure' else '' }}"
+         data-genre="adventure">
         🗺️ Adventure
       </a>
-      <a href="{{ url_for('main.home', genre='Comedy') }}" 
-         class="genre-btn {{ 'active' if genre_filter == 'Comedy' else '' }}">
+      <a href="{{ url_for('main.genre_page', genre_slug='comedy') }}" 
+         class="genre-btn {{ 'active' if genre_filter == 'Comedy' else '' }}"
+         data-genre="comedy">
         😂 Comedy
       </a>
-      <a href="{{ url_for('main.home', genre='Horror') }}" 
-         class="genre-btn {{ 'active' if genre_filter == 'Horror' else '' }}">
+      <a href="{{ url_for('main.genre_page', genre_slug='horror') }}" 
+         class="genre-btn {{ 'active' if genre_filter == 'Horror' else '' }}"
+         data-genre="horror">
         👻 Horror
       </a>
     </div>
@@ -46,7 +52,7 @@
 
 <!-- 1. Phim mới nhất (12 phim, không phân trang) -->
 <section>
-  <h3>🆕 Phim mới nhất</h3>
+  <h3>🆕 {% if genre_filter %}{{ genre_filter }} Movies{% else %}Phim mới nhất{% endif %}</h3>
   <div class="cards">
     {% for m in latest_movies %}
     <a class="card" href="{{ url_for('main.detail', movie_id=m.id) }}">
@@ -58,7 +64,38 @@
   </div>
 </section>
 
-<!-- 2. Phim được đề xuất cho bạn -->
+<!-- Pagination cho trang genre -->
+{% if genre_filter and pagination %}
+<div class="pagination">
+  <div class="pagination-info">
+    <span>Trang {{ pagination.page }} / {{ pagination.pages }}</span>
+  </div>
+  <div class="pagination-controls">
+    {% if pagination.has_prev %}
+      <a href="{{ url_for('main.home', genre=genre_filter, page=pagination.prev_num) }}" class="btn-pagination">‹ Trước</a>
+    {% endif %}
+    
+    <div class="page-numbers">
+      {% for page_num in range(1, pagination.pages + 1) %}
+        {% if page_num == pagination.page %}
+          <span class="page-number current">{{ page_num }}</span>
+        {% elif page_num <= 3 or page_num > pagination.pages - 3 or (page_num >= pagination.page - 1 and page_num <= pagination.page + 1) %}
+          <a href="{{ url_for('main.home', genre=genre_filter, page=page_num) }}" class="page-number">{{ page_num }}</a>
+        {% elif page_num == 4 or page_num == pagination.pages - 3 %}
+          <span class="page-ellipsis">...</span>
+        {% endif %}
+      {% endfor %}
+    </div>
+    
+    {% if pagination.has_next %}
+      <a href="{{ url_for('main.home', genre=genre_filter, page=pagination.next_num) }}" class="btn-pagination">Tiếp ›</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+<!-- 2. Phim được đề xuất cho bạn (chỉ hiển thị khi không có genre filter) -->
+{% if not genre_filter %}
 <section>
   <h3>Phim được đề xuất cho bạn</h3>
   <div class="cards">
@@ -71,21 +108,16 @@
     {% endfor %}
   </div>
 </section>
+{% endif %}
 
-<!-- 3. Tất cả phim (có phân trang) -->
-{% if all_movies %}
+<!-- 3. Tất cả phim (có phân trang) - chỉ hiển thị khi không có genre filter -->
+{% if all_movies and not genre_filter %}
 <section class="all-movies movies-section">
   <div class="section-header">
     {% if search_query %}
       <h3>🔍 Kết quả tìm kiếm cho "{{ search_query }}"</h3>
-      <div class="section-info">
-        <span class="movie-count">Tìm thấy {{ pagination.total }} phim</span>
-      </div>
     {% else %}
-      <h3>🎬 Tất cả phim{% if genre_filter %} - {{ genre_filter }}{% endif %}</h3>
-      <div class="section-info">
-        <span class="movie-count">Hiển thị {{ all_movies|length }} / {{ pagination.total }} phim</span>
-      </div>
+      <h3>🎬 Tất cả phim</h3>
     {% endif %}
   </div>
   
@@ -451,21 +483,25 @@ function attachGenreFilterListeners() {
     
     genreLinks.forEach(link => {
         link.addEventListener('click', function(e) {
-            e.preventDefault();
+            const genre = this.getAttribute('data-genre');
             
-            const url = this.href;
-            
-            // Show loading indicator
-            showLoading();
-            
-            // Add loading class to movies grid
-            const moviesGrid = document.querySelector('.movies-grid');
-            if (moviesGrid) {
-                moviesGrid.classList.add('loading');
-            }
-            
-            // Fetch new page content
-            fetch(url)
+            // Nếu là "Tất cả" thì dùng AJAX, các thể loại khác thì chuyển trang
+            if (genre === 'all') {
+                e.preventDefault();
+                
+                const url = this.href;
+                
+                // Show loading indicator
+                showLoading();
+                
+                // Add loading class to movies grid
+                const moviesGrid = document.querySelector('.movies-grid');
+                if (moviesGrid) {
+                    moviesGrid.classList.add('loading');
+                }
+                
+                // Fetch new page content
+                fetch(url)
                 .then(response => response.text())
                 .then(html => {
                     // Parse the response
@@ -548,6 +584,10 @@ function attachGenreFilterListeners() {
                     // Fallback to normal page reload
                     window.location.href = url;
                 });
+            } else {
+                // Các thể loại khác: chuyển trang bình thường
+                // Không preventDefault, để link hoạt động bình thường
+            }
         });
     });
 }

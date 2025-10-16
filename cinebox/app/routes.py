@@ -25,9 +25,21 @@ def home():
     # 1. Phim mới nhất (12 phim, không phân trang) - thay thế trending
     try:
         with current_app.db_engine.connect() as conn:
-            rows = conn.execute(text(
-                "SELECT TOP 12 movieId, title, posterUrl, backdropUrl, overview, createdAt FROM cine.Movie ORDER BY createdAt DESC, movieId DESC"
-            )).mappings().all()
+            if genre_filter:
+                # Lấy phim mới nhất theo thể loại
+                rows = conn.execute(text("""
+                    SELECT TOP 12 m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt
+                    FROM cine.Movie m
+                    JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                    JOIN cine.Genre g ON mg.genreId = g.genreId
+                    WHERE g.name = :genre
+                    ORDER BY m.createdAt DESC, m.movieId DESC
+                """), {"genre": genre_filter}).mappings().all()
+            else:
+                # Lấy phim mới nhất tất cả thể loại
+                rows = conn.execute(text(
+                    "SELECT TOP 12 movieId, title, posterUrl, backdropUrl, overview, createdAt FROM cine.Movie ORDER BY createdAt DESC, movieId DESC"
+                )).mappings().all()
             
             latest_movies = [
                 {
@@ -201,6 +213,28 @@ def home():
         all_movies = []
         pagination = None
     
+    # Debug: In ra thông tin all_movies
+    print(f"Debug - all_movies length: {len(all_movies) if all_movies else 0}")
+    print(f"Debug - latest_movies length: {len(latest_movies) if latest_movies else 0}")
+    print(f"Debug - genre_filter: '{genre_filter}'")
+    print(f"Debug - search_query: '{search_query}'")
+    print(f"Debug - URL: {request.url}")
+    
+    # Fallback nếu all_movies rỗng
+    if not all_movies:
+        print("Debug - all_movies is empty, using fallback")
+        all_movies = latest_movies[:12]  # Sử dụng latest_movies làm fallback
+        pagination = {
+            "page": 1,
+            "per_page": 12,
+            "total": len(all_movies),
+            "pages": 1,
+            "has_prev": False,
+            "has_next": False,
+            "prev_num": None,
+            "next_num": None
+        }
+    
     if not latest_movies:
         # Fallback demo data to avoid empty list errors in templates
         latest_movies = [
@@ -304,15 +338,18 @@ def register():
 
 @main_bp.route("/movie/<int:movie_id>")
 def detail(movie_id: int):
+    if not session.get("user_id"):
+        return redirect(url_for("main.login"))
+    
     with current_app.db_engine.connect() as conn:
         # Lấy thông tin phim chính
         r = conn.execute(text(
             "SELECT movieId, title, releaseYear, posterUrl, backdropUrl, overview FROM cine.Movie WHERE movieId=:id"
         ), {"id": movie_id}).mappings().first()
         
-    if not r:
-        return redirect(url_for("main.home"))
-        
+        if not r:
+            return redirect(url_for("main.home"))
+                    
         # Lấy genres của phim
         genres_query = text("""
             SELECT g.name
@@ -321,20 +358,20 @@ def detail(movie_id: int):
             WHERE mg.movieId = :movie_id
         """)
         genres_result = conn.execute(genres_query, {"movie_id": movie_id}).fetchall()
-        genres = [genre[0] for genre in genres_result]
+        genres = [{"name": genre[0], "slug": genre[0].lower().replace(' ', '-')} for genre in genres_result]
         
-    movie = {
-        "id": r["movieId"],
-        "title": r["title"],
-        "year": r.get("releaseYear"),
+        movie = {
+            "id": r["movieId"],
+            "title": r["title"],
+            "year": r.get("releaseYear"),
             "duration": "120 phút",  # Default duration
             "genres": genres,
             "rating": 5.0,  # Default rating
-                    "poster": r.get("posterUrl") if r.get("posterUrl") and r.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={r['title'][:20].replace(' ', '+')}",
-        "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
-        "description": r.get("overview") or "",
-        "sources": [{"label": "720p", "url": "https://www.w3schools.com/html/movie.mp4"}],
-    }
+            "poster": r.get("posterUrl") if r.get("posterUrl") and r.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={r['title'][:20].replace(' ', '+')}",
+            "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
+            "description": r.get("overview") or "",
+            "sources": [{"label": "720p", "url": "https://www.w3schools.com/html/movie.mp4"}],
+        }
     
     # CONTENT-BASED: Phim liên quan sử dụng ContentBasedRecommender
     related = []
@@ -384,7 +421,7 @@ def detail(movie_id: int):
             print(f"Fallback error: {fallback_error}")
     related = []
     
-    return render_template("detail.html", movie=movie, related=related)
+    return render_template("watch.html", movie=movie, related=related)
 
 
 @main_bp.route("/watch/<int:movie_id>")
@@ -1089,6 +1126,27 @@ def search_suggestions():
             "success": False,
             "error": str(e)
         }), 500
+
+@main_bp.route("/the-loai/<string:genre_slug>")
+def genre_page(genre_slug):
+    """Redirect đến trang chủ với filter thể loại"""
+    if not session.get("user_id"):
+        return redirect(url_for("main.login"))
+    
+    # Mapping từ slug sang tên thể loại
+    genre_mapping = {
+        'action': 'Action',
+        'adventure': 'Adventure', 
+        'comedy': 'Comedy',
+        'horror': 'Horror'
+    }
+    
+    genre_name = genre_mapping.get(genre_slug)
+    if not genre_name:
+        return redirect(url_for('main.home'))
+    
+    # Redirect về trang chủ với genre filter
+    return redirect(url_for('main.home', genre=genre_name))
 
 @main_bp.route("/search")
 def search():

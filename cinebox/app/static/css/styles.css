@@ -87,3 +87,18 @@ h3{margin:24px 0 12px}
 .btn-delete{background-color:#dc3545!important;color:white!important;border:1px solid #dc3545!important}
 .btn-delete:hover{background-color:#c82333!important;border-color:#bd2130!important}
 
+/* Movie Genres */
+.movie-genres{margin:20px 0}
+.movie-genres h3{color:var(--text);margin-bottom:10px;font-size:1.1em}
+.genre-tags{display:flex;flex-wrap:wrap;gap:8px}
+.genre-tag{background:var(--panel);color:var(--text);padding:6px 12px;border-radius:20px;text-decoration:none;font-size:0.9em;transition:all 0.2s ease;border:1px solid rgba(255,255,255,.1)}
+.genre-tag:hover{background:var(--primary);color:#fff;transform:translateY(-1px);box-shadow:0 2px 8px rgba(59,130,246,0.3)}
+
+/* Genre Filter */
+.genre-filter{background:var(--panel);border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:20px;margin:20px 0}
+.genre-filter-container h3{color:var(--text);margin-bottom:15px;font-size:1.1em}
+.genre-buttons{display:flex;flex-wrap:wrap;gap:10px}
+.genre-btn{background:var(--panel-2);color:var(--text);padding:8px 16px;border-radius:20px;text-decoration:none;font-size:0.9em;transition:all 0.2s ease;border:1px solid rgba(255,255,255,.1)}
+.genre-btn:hover{background:var(--primary);color:#fff;transform:translateY(-1px);text-decoration:none}
+.genre-btn.active{background:var(--primary);color:#fff;font-weight:600;box-shadow:0 2px 8px rgba(59,130,246,0.3)}
+
