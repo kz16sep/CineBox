@@ -1,12 +1,24 @@
 {% extends 'base.html' %}
 {% block title %}{{ movie.title }} · CineBox{% endblock %}
 {% block content %}
+
+<!-- Toast Notification -->
+<div id="toast" class="toast">
+  <div class="toast-content">
+    <span id="toast-message"></span>
+  </div>
+</div>
 <section class="detail">
   <!-- Movie Hero Section -->
   <div class="detail-hero">
     <div class="hero-backdrop" style="background-image: url('{{ movie.backdrop }}')"></div>
     <div class="hero-content">
       <div class="movie-poster">
+        <!-- Back Button -->
+        <button class="back-button" onclick="history.back()" title="Quay về trang trước">
+          <span class="back-icon">←</span>
+          <span class="back-text">Quay lại</span>
+        </button>
         <img src="{{ movie.poster }}" alt="{{ movie.title }}" class="poster-img">
       </div>
       <div class="movie-info">
@@ -65,7 +77,6 @@
 <section class="related-section">
   <h3>🎬 Phim liên quan & Gợi ý cho bạn</h3>
   <div class="cards-container">
-    <button class="scroll-btn scroll-left" onclick="scrollCards('left')">‹</button>
     <div class="cards" id="relatedCards">
     {% for m in related %}
     <a class="card" href="{{ url_for('main.detail', movie_id=m.movieId) }}">
@@ -83,12 +94,113 @@
     </a>
     {% endfor %}
     </div>
-    <button class="scroll-btn scroll-right" onclick="scrollCards('right')">›</button>
   </div>
+  
+  <!-- Pagination cho related movies -->
+  {% if related_pagination and related_pagination.pages > 1 %}
+  <div class="pagination">
+    <div class="pagination-info">
+      <span>Trang {{ related_pagination.page }} / {{ related_pagination.pages }}</span>
+    </div>
+    <div class="pagination-controls">
+      {% if related_pagination.has_prev %}
+        <a href="{{ url_for('main.detail', movie_id=movie_id, related_page=related_pagination.prev_num) }}" class="btn-pagination">‹ Trước</a>
+      {% endif %}
+      
+      <div class="page-numbers">
+        {% for page_num in range(1, related_pagination.pages + 1) %}
+          {% if page_num == related_pagination.page %}
+            <span class="page-number current">{{ page_num }}</span>
+          {% elif page_num <= 3 or page_num > related_pagination.pages - 3 or (page_num >= related_pagination.page - 1 and page_num <= related_pagination.page + 1) %}
+            <a href="{{ url_for('main.detail', movie_id=movie_id, related_page=page_num) }}" class="page-number">{{ page_num }}</a>
+          {% elif page_num == 4 or page_num == related_pagination.pages - 3 %}
+            <span class="page-ellipsis">...</span>
+          {% endif %}
+        {% endfor %}
+      </div>
+      
+      {% if related_pagination.has_next %}
+        <a href="{{ url_for('main.detail', movie_id=movie_id, related_page=related_pagination.next_num) }}" class="btn-pagination">Tiếp ›</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
 </section>
 {% endif %}
 
 <style>
+/* Toast Notification Styles */
+.toast {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  background: #2d3748;
+  color: white;
+  padding: 16px 24px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  transform: translateX(400px);
+  transition: transform 0.3s ease-in-out;
+  max-width: 300px;
+  border-left: 4px solid #48bb78;
+}
+
+.toast.show {
+  transform: translateX(0);
+}
+
+.toast-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toast.success {
+  border-left-color: #48bb78;
+}
+
+.toast.error {
+  border-left-color: #f56565;
+}
+
+/* Back Button Styles */
+.back-button {
+  position: absolute;
+  top: 15px;
+  left: 15px;
+  z-index: 10;
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 25px;
+  padding: 10px 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  backdrop-filter: blur(10px);
+}
+
+.back-button:hover {
+  background: rgba(59, 130, 246, 0.9);
+  border-color: #3b82f6;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(59, 130, 246, 0.4);
+}
+
+.back-icon {
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.back-text {
+  font-size: 14px;
+}
+
 /* Detail Hero Styles */
 .detail-hero {
   position: relative;
@@ -528,6 +640,21 @@
 </style>
 
 <script>
+// Toast notification functions
+function showToast(message, type = 'success') {
+  const toast = document.getElementById('toast');
+  const toastMessage = document.getElementById('toast-message');
+  
+  toastMessage.textContent = message;
+  toast.className = `toast ${type}`;
+  toast.classList.add('show');
+  
+  // Auto hide after 3 seconds
+  setTimeout(() => {
+    toast.classList.remove('show');
+  }, 3000);
+}
+
 function addToWatchlist(movieId) {
   fetch(`/add-watchlist/${movieId}`, {
     method: 'POST',
@@ -538,14 +665,14 @@ function addToWatchlist(movieId) {
   .then(response => response.json())
   .then(data => {
     if (data.success) {
-      alert('✅ ' + data.message);
+      showToast('✅ ' + data.message, 'success');
     } else {
-      alert('❌ ' + data.message);
+      showToast('❌ ' + data.message, 'error');
     }
   })
   .catch(error => {
     console.error('Error:', error);
-    alert('❌ Có lỗi xảy ra khi thêm vào danh sách xem sau');
+    showToast('❌ Có lỗi xảy ra khi thêm vào danh sách xem sau', 'error');
   });
 }
 
@@ -559,14 +686,14 @@ function addToFavorites(movieId) {
   .then(response => response.json())
   .then(data => {
     if (data.success) {
-      alert('✅ ' + data.message);
+      showToast('✅ ' + data.message, 'success');
     } else {
-      alert('❌ ' + data.message);
+      showToast('❌ ' + data.message, 'error');
     }
   })
   .catch(error => {
     console.error('Error:', error);
-    alert('❌ Có lỗi xảy ra khi thêm vào danh sách yêu thích');
+    showToast('❌ Có lỗi xảy ra khi thêm vào danh sách yêu thích', 'error');
   });
 }
 

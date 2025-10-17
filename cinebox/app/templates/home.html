@@ -2,16 +2,44 @@
 {% block title %}Trang chủ · CineBox{% endblock %}
 {% block content %}
 <section class="hero">
-  <div class="hero-card">
-    <div class="hero-text">
-      <span class="badge">NEW</span>
-      <h2>{{ latest_movies[0].title }}</h2>
-      <p>{{ latest_movies[0].description }}</p>
-      <div class="actions">
-        <a class="btn btn-primary" href="{{ url_for('main.watch', movie_id=latest_movies[0].id) }}">Xem ngay</a>
-        <a class="btn btn-secondary" href="{{ url_for('main.detail', movie_id=latest_movies[0].id) }}">Thêm vào danh sách</a>
+  <div class="hero-carousel">
+    {% for movie in carousel_movies %}
+    <div class="hero-slide {{ 'active' if loop.first else '' }}" data-slide="{{ loop.index0 }}">
+      <div class="hero-backdrop" style="background-image: url('{{ movie.backdrop }}')"></div>
+      <div class="hero-overlay"></div>
+      <div class="hero-content">
+        <div class="hero-poster">
+          <img src="{{ movie.poster }}" alt="{{ movie.title }}" class="poster-img">
+        </div>
+        <div class="hero-text">
+          <span class="badge">NEW</span>
+          <h1>{{ movie.title }}</h1>
+          <p class="hero-description">{{ movie.description }}</p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="{{ url_for('main.watch', movie_id=movie.id) }}">
+              <span class="btn-icon">▶</span>
+              Xem ngay
+            </a>
+            <a class="btn btn-secondary" href="{{ url_for('main.detail', movie_id=movie.id) }}">
+              <span class="btn-icon">+</span>
+              Thêm vào danh sách
+            </a>
+          </div>
+        </div>
       </div>
     </div>
+    {% endfor %}
+  </div>
+  
+  <!-- Carousel Controls -->
+  <div class="carousel-controls">
+    <button class="carousel-btn prev-btn" onclick="changeSlide(-1)">‹</button>
+    <div class="carousel-dots">
+      {% for movie in carousel_movies %}
+      <button class="dot {{ 'active' if loop.first else '' }}" onclick="currentSlide({{ loop.index }})"></button>
+      {% endfor %}
+    </div>
+    <button class="carousel-btn next-btn" onclick="changeSlide(1)">›</button>
   </div>
 </section>
 
@@ -28,22 +56,22 @@
       </a>
       
       <!-- 4 thể loại chính -->
-      <a href="{{ url_for('main.genre_page', genre_slug='action') }}" 
+      <a href="{{ url_for('main.home', genre='Action') }}" 
          class="genre-btn {{ 'active' if genre_filter == 'Action' else '' }}"
          data-genre="action">
         🎬 Action
       </a>
-      <a href="{{ url_for('main.genre_page', genre_slug='adventure') }}" 
+      <a href="{{ url_for('main.home', genre='Adventure') }}" 
          class="genre-btn {{ 'active' if genre_filter == 'Adventure' else '' }}"
          data-genre="adventure">
         🗺️ Adventure
       </a>
-      <a href="{{ url_for('main.genre_page', genre_slug='comedy') }}" 
+      <a href="{{ url_for('main.home', genre='Comedy') }}" 
          class="genre-btn {{ 'active' if genre_filter == 'Comedy' else '' }}"
          data-genre="comedy">
         😂 Comedy
       </a>
-      <a href="{{ url_for('main.genre_page', genre_slug='horror') }}" 
+      <a href="{{ url_for('main.home', genre='Horror') }}" 
          class="genre-btn {{ 'active' if genre_filter == 'Horror' else '' }}"
          data-genre="horror">
         👻 Horror
@@ -61,9 +89,10 @@
   </div>
 </section>
 
-<!-- 1. Phim mới nhất (12 phim, không phân trang) -->
+<!-- 1. Phim mới nhất (12 phim, không phân trang) - chỉ hiển thị khi không có genre filter -->
+{% if not genre_filter %}
 <section>
-  <h3>🆕 {% if genre_filter %}{{ genre_filter }} Movies{% else %}Phim mới nhất{% endif %}</h3>
+  <h3>🆕 Phim mới nhất</h3>
   <div class="cards">
     {% for m in latest_movies %}
     <a class="card" href="{{ url_for('main.detail', movie_id=m.id) }}">
@@ -74,36 +103,8 @@
     {% endfor %}
   </div>
 </section>
-
-<!-- Pagination cho trang genre -->
-{% if genre_filter and pagination and pagination.pages > 1 %}
-<div class="pagination">
-  <div class="pagination-info">
-    <span>Trang {{ pagination.page }} / {{ pagination.pages }}</span>
-  </div>
-  <div class="pagination-controls">
-    {% if pagination.has_prev %}
-      <a href="{{ url_for('main.home', genre=genre_filter, page=pagination.prev_num) }}" class="btn-pagination">‹ Trước</a>
-    {% endif %}
-    
-    <div class="page-numbers">
-      {% for page_num in range(1, pagination.pages + 1) %}
-        {% if page_num == pagination.page %}
-          <span class="page-number current">{{ page_num }}</span>
-        {% elif page_num <= 3 or page_num > pagination.pages - 3 or (page_num >= pagination.page - 1 and page_num <= pagination.page + 1) %}
-          <a href="{{ url_for('main.home', genre=genre_filter, page=page_num) }}" class="page-number">{{ page_num }}</a>
-        {% elif page_num == 4 or page_num == pagination.pages - 3 %}
-          <span class="page-ellipsis">...</span>
-        {% endif %}
-      {% endfor %}
-    </div>
-    
-    {% if pagination.has_next %}
-      <a href="{{ url_for('main.home', genre=genre_filter, page=pagination.next_num) }}" class="btn-pagination">Tiếp ›</a>
-    {% endif %}
-  </div>
-</div>
 {% endif %}
+
 
 <!-- 2. Phim được đề xuất cho bạn (chỉ hiển thị khi không có genre filter) -->
 {% if not genre_filter %}
@@ -121,12 +122,14 @@
 </section>
 {% endif %}
 
-<!-- 3. Tất cả phim (có phân trang) - chỉ hiển thị khi không có genre filter -->
-{% if all_movies and not genre_filter %}
+<!-- 3. Tất cả phim (có phân trang) -->
+{% if all_movies %}
 <section class="all-movies movies-section">
   <div class="section-header">
     {% if search_query %}
       <h3>🔍 Kết quả tìm kiếm cho "{{ search_query }}"</h3>
+    {% elif genre_filter %}
+      <h3>🎬 Phim {{ genre_filter }}</h3>
     {% else %}
       <h3>🎬 Tất cả phim</h3>
     {% endif %}
@@ -137,7 +140,7 @@
     <a class="card" href="{{ url_for('main.detail', movie_id=m.id) }}">
       <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
       <div class="card-content">
-        <div class="card-title">{{ m.title }}{% if m.year %} ({{ m.year }}){% endif %}</div>
+        <div class="card-title">{{ m.title }}</div>
         <div class="card-meta">
           <span class="upload-time">Phim {{ m.id }}</span>
         </div>
@@ -201,9 +204,330 @@
 {% endif %}
 
 <style>
+/* Hero Section */
+.hero {
+  position: relative;
+  min-height: 50vh;
+  margin-bottom: 30px;
+  border-radius: 15px;
+  overflow: hidden;
+  box-shadow: 0 15px 40px rgba(0, 0, 0, 0.3);
+}
+
+.hero-carousel {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.hero-slide {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 1s ease-in-out;
+}
+
+.hero-slide.active {
+  opacity: 1;
+}
+
+.hero-backdrop {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  filter: blur(3px);
+  transform: scale(1.1);
+}
+
+.hero-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, rgba(0, 0, 0, 0.8), rgba(0, 0, 0, 0.4));
+  z-index: 1;
+}
+
+.hero-content {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  min-height: 50vh;
+  padding: 30px;
+  max-width: 1000px;
+  margin: 0 auto;
+  gap: 30px;
+}
+
+.hero-poster {
+  flex-shrink: 0;
+  width: 220px;
+  height: 330px;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.1);
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  background: linear-gradient(145deg, #1a1a1a, #2d2d2d);
+}
+
+.hero-poster::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(45deg, rgba(255, 107, 107, 0.1), rgba(255, 255, 255, 0.05));
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  z-index: 1;
+}
+
+.hero-poster:hover {
+  transform: scale(1.08) translateY(-5px);
+  box-shadow: 0 30px 70px rgba(0, 0, 0, 0.8), 0 0 0 2px rgba(255, 107, 107, 0.3);
+}
+
+.hero-poster:hover::before {
+  opacity: 1;
+}
+
+.poster-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  z-index: 2;
+}
+
+.hero-poster:hover .poster-img {
+  transform: scale(1.05);
+}
+
+.hero-text {
+  flex: 1;
+  color: white;
+}
+
+.badge {
+  display: inline-block;
+  background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+  color: white;
+  padding: 10px 20px;
+  border-radius: 30px;
+  font-size: 0.95rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  margin-bottom: 25px;
+  box-shadow: 0 6px 20px rgba(255, 107, 107, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.1);
+  position: relative;
+  overflow: hidden;
+}
+
+.badge::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  transition: left 0.5s ease;
+}
+
+.badge:hover::before {
+  left: 100%;
+}
+
+.hero-text h1 {
+  font-size: 2.8rem;
+  font-weight: 800;
+  margin: 0 0 15px 0;
+  line-height: 1.1;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+  background: linear-gradient(135deg, #fff, #e0e0e0);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.hero-description {
+  font-size: 1.1rem;
+  line-height: 1.5;
+  margin: 0 0 25px 0;
+  color: rgba(255, 255, 255, 0.9);
+  max-width: 500px;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.hero-actions {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.hero-actions .btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 35px;
+  font-size: 1.15rem;
+  font-weight: 700;
+  border-radius: 50px;
+  text-decoration: none;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  position: relative;
+  overflow: hidden;
+}
+
+.hero-actions .btn-primary {
+  background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+  color: white;
+  border: none;
+}
+
+.hero-actions .btn-primary:hover {
+  transform: translateY(-5px) scale(1.05);
+  box-shadow: 0 15px 40px rgba(255, 107, 107, 0.5);
+  background: linear-gradient(135deg, #ff7b7b, #ff6b24);
+}
+
+.hero-actions .btn-secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  backdrop-filter: blur(10px);
+}
+
+.hero-actions .btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.6);
+  transform: translateY(-5px) scale(1.05);
+  box-shadow: 0 15px 40px rgba(255, 255, 255, 0.2);
+}
+
+.btn-icon {
+  font-size: 1.2rem;
+}
+
+/* Carousel Controls */
+.carousel-controls {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  z-index: 10;
+}
+
+.carousel-btn {
+  background: rgba(255, 255, 255, 0.2);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  color: white;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  font-size: 1.5rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.carousel-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.5);
+  transform: scale(1.1);
+}
+
+.carousel-dots {
+  display: flex;
+  gap: 8px;
+}
+
+.dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.dot.active {
+  background: #ff6b6b;
+  transform: scale(1.2);
+}
+
+.dot:hover {
+  background: rgba(255, 255, 255, 0.7);
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .hero-content {
+    flex-direction: column;
+    text-align: center;
+    padding: 20px;
+    gap: 20px;
+  }
+  
+  .hero-poster {
+    width: 180px;
+    height: 270px;
+  }
+  
+  .hero-text h1 {
+    font-size: 2.5rem;
+  }
+  
+  .hero-description {
+    font-size: 1rem;
+  }
+  
+  .hero-actions {
+    justify-content: center;
+  }
+  
+  .carousel-controls {
+    bottom: 10px;
+  }
+  
+  .carousel-btn {
+    width: 35px;
+    height: 35px;
+    font-size: 1.2rem;
+  }
+  
+  .dot {
+    width: 10px;
+    height: 10px;
+  }
+}
+
 /* Genre Filter Section */
 .genre-filter {
-  margin: 30px 0;
+  margin: 20px 0 40px 0;
   padding: 20px 0;
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
   border-radius: 15px;
@@ -758,6 +1082,80 @@ function attachSearchListeners() {
         });
     }
 }
+
+// Carousel functionality
+let currentSlideIndex = 0;
+let slideInterval;
+const slides = document.querySelectorAll('.hero-slide');
+const dots = document.querySelectorAll('.dot');
+const totalSlides = slides.length;
+
+function showSlide(index) {
+    // Remove active class from all slides and dots
+    slides.forEach(slide => slide.classList.remove('active'));
+    dots.forEach(dot => dot.classList.remove('active'));
+    
+    // Add active class to current slide and dot
+    if (slides[index]) {
+        slides[index].classList.add('active');
+    }
+    if (dots[index]) {
+        dots[index].classList.add('active');
+    }
+    
+    currentSlideIndex = index;
+}
+
+function nextSlide() {
+    const nextIndex = (currentSlideIndex + 1) % totalSlides;
+    showSlide(nextIndex);
+}
+
+function prevSlide() {
+    const prevIndex = (currentSlideIndex - 1 + totalSlides) % totalSlides;
+    showSlide(prevIndex);
+}
+
+function changeSlide(direction) {
+    clearInterval(slideInterval);
+    if (direction === 1) {
+        nextSlide();
+    } else {
+        prevSlide();
+    }
+    // Reset timer - đếm lại từ đầu
+    setTimeout(startAutoSlide, 100);
+}
+
+function currentSlide(index) {
+    clearInterval(slideInterval);
+    showSlide(index - 1);
+    // Reset timer - đếm lại từ đầu
+    setTimeout(startAutoSlide, 100);
+}
+
+function startAutoSlide() {
+    slideInterval = setInterval(nextSlide, 7000); // 7 seconds
+}
+
+function stopAutoSlide() {
+    clearInterval(slideInterval);
+}
+
+// Initialize carousel
+document.addEventListener('DOMContentLoaded', function() {
+    if (totalSlides > 0) {
+        showSlide(0);
+        startAutoSlide();
+        
+        // Pause on hover
+        const hero = document.querySelector('.hero');
+        if (hero) {
+            hero.addEventListener('mouseenter', stopAutoSlide);
+            hero.addEventListener('mouseleave', startAutoSlide);
+        }
+    }
+});
 </script>
 {% endblock %}
 

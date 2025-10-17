@@ -69,7 +69,7 @@
       <a class="card" href="{{ url_for('main.detail', movie_id=m.id) }}">
         <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
         <div class="card-content">
-          <div class="card-title">{{ m.title }}{% if m.year %} ({{ m.year }}){% endif %}</div>
+          <div class="card-title">{{ m.title }}</div>
         <div class="card-meta">
           <span class="upload-time">Movie {{ m.id }}</span>
         </div>

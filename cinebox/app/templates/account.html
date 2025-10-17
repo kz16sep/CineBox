@@ -77,7 +77,7 @@
                 <div class="movie-grid">
                     {% for movie in watchlist %}
                     <div class="movie-card">
-                        <a href="{{ url_for('main.movie_detail', movie_id=movie.movieId) }}">
+                        <a href="{{ url_for('main.detail', movie_id=movie.movieId) }}">
                             <img src="{{ movie.posterUrl or url_for('static', filename='img/poster_default.png') }}" 
                                  alt="{{ movie.title }}" class="movie-poster">
                             <div class="movie-info">
@@ -92,6 +92,36 @@
                     </div>
                     {% endfor %}
                 </div>
+                
+                <!-- Pagination cho watchlist -->
+                {% if watchlist_pagination and watchlist_pagination.pages > 1 %}
+                <div class="pagination">
+                    <div class="pagination-info">
+                        <span>Trang {{ watchlist_pagination.page }} / {{ watchlist_pagination.pages }}</span>
+                    </div>
+                    <div class="pagination-controls">
+                        {% if watchlist_pagination.has_prev %}
+                            <a href="{{ url_for('main.account', watchlist_page=watchlist_pagination.prev_num, favorites_page=favorites_page) }}" class="btn-pagination">‹ Trước</a>
+                        {% endif %}
+                        
+                        <div class="page-numbers">
+                            {% for page_num in range(1, watchlist_pagination.pages + 1) %}
+                                {% if page_num == watchlist_pagination.page %}
+                                    <span class="page-number current">{{ page_num }}</span>
+                                {% elif page_num <= 3 or page_num > watchlist_pagination.pages - 3 or (page_num >= watchlist_pagination.page - 1 and page_num <= watchlist_pagination.page + 1) %}
+                                    <a href="{{ url_for('main.account', watchlist_page=page_num, favorites_page=favorites_page) }}" class="page-number">{{ page_num }}</a>
+                                {% elif page_num == 4 or page_num == watchlist_pagination.pages - 3 %}
+                                    <span class="page-ellipsis">...</span>
+                                {% endif %}
+                            {% endfor %}
+                        </div>
+                        
+                        {% if watchlist_pagination.has_next %}
+                            <a href="{{ url_for('main.account', watchlist_page=watchlist_pagination.next_num, favorites_page=favorites_page) }}" class="btn-pagination">Tiếp ›</a>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endif %}
             {% else %}
                 <div class="empty-state">
                     <p>📺 Bạn chưa có phim nào trong danh sách xem sau</p>
@@ -111,7 +141,7 @@
                 <div class="movie-grid">
                     {% for movie in favorites %}
                     <div class="movie-card">
-                        <a href="{{ url_for('main.movie_detail', movie_id=movie.movieId) }}">
+                        <a href="{{ url_for('main.detail', movie_id=movie.movieId) }}">
                             <img src="{{ movie.posterUrl or url_for('static', filename='img/poster_default.png') }}" 
                                  alt="{{ movie.title }}" class="movie-poster">
                             <div class="movie-info">
@@ -126,6 +156,36 @@
                     </div>
                     {% endfor %}
                 </div>
+                
+                <!-- Pagination cho favorites -->
+                {% if favorites_pagination and favorites_pagination.pages > 1 %}
+                <div class="pagination">
+                    <div class="pagination-info">
+                        <span>Trang {{ favorites_pagination.page }} / {{ favorites_pagination.pages }}</span>
+                    </div>
+                    <div class="pagination-controls">
+                        {% if favorites_pagination.has_prev %}
+                            <a href="{{ url_for('main.account', watchlist_page=watchlist_page, favorites_page=favorites_pagination.prev_num) }}" class="btn-pagination">‹ Trước</a>
+                        {% endif %}
+                        
+                        <div class="page-numbers">
+                            {% for page_num in range(1, favorites_pagination.pages + 1) %}
+                                {% if page_num == favorites_pagination.page %}
+                                    <span class="page-number current">{{ page_num }}</span>
+                                {% elif page_num <= 3 or page_num > favorites_pagination.pages - 3 or (page_num >= favorites_pagination.page - 1 and page_num <= favorites_pagination.page + 1) %}
+                                    <a href="{{ url_for('main.account', watchlist_page=watchlist_page, favorites_page=page_num) }}" class="page-number">{{ page_num }}</a>
+                                {% elif page_num == 4 or page_num == favorites_pagination.pages - 3 %}
+                                    <span class="page-ellipsis">...</span>
+                                {% endif %}
+                            {% endfor %}
+                        </div>
+                        
+                        {% if favorites_pagination.has_next %}
+                            <a href="{{ url_for('main.account', watchlist_page=watchlist_page, favorites_page=favorites_pagination.next_num) }}" class="btn-pagination">Tiếp ›</a>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endif %}
             {% else %}
                 <div class="empty-state">
                     <p>💔 Bạn chưa có phim yêu thích nào</p>

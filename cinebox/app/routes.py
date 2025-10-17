@@ -80,8 +80,26 @@ def home():
                 }
                 for r in rows
             ]
+            
+            # Tạo carousel_movies từ 6 phim mới nhất (luôn lấy từ tất cả phim, không phụ thuộc genre)
+            carousel_rows = conn.execute(text(
+                "SELECT TOP 6 movieId, title, posterUrl, backdropUrl, overview, createdAt FROM cine.Movie ORDER BY createdAt DESC, movieId DESC"
+            )).mappings().all()
+            
+            carousel_movies = [
+                {
+                    "id": r["movieId"],
+                    "title": r["title"],
+                    "poster": r.get("posterUrl") if r.get("posterUrl") and r.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={r['title'][:20].replace(' ', '+')}",
+                    "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
+                    "description": (r.get("overview") or "")[:160],
+                    "createdAt": r.get("createdAt"),
+                }
+                for r in carousel_rows
+            ]
     except Exception:
         latest_movies = []
+        carousel_movies = []
     
     # Personal recommendations (gợi ý cá nhân)
     user_id = session.get("user_id")
@@ -187,7 +205,7 @@ def home():
                 # Lấy phim theo thể loại với phân trang
                 print(f"Debug - Getting movies for genre '{genre_filter}', page {page}, offset {offset}, per_page {per_page}")
                 all_rows = conn.execute(text("""
-                    SELECT m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear
+                    SELECT movieId, title, posterUrl, backdropUrl, overview, releaseYear
                     FROM (
                         SELECT DISTINCT m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear,
                                ROW_NUMBER() OVER (ORDER BY m.movieId DESC) as rn
@@ -199,6 +217,19 @@ def home():
                     WHERE rn > :offset AND rn <= :offset + :per_page
                 """), {"genre": genre_filter, "offset": offset, "per_page": per_page}).mappings().all()
                 print(f"Debug - Found {len(all_rows)} movies for genre '{genre_filter}' on page {page}")
+                
+                # Tạo pagination info cho genre
+                pagination = {
+                    "page": page,
+                    "per_page": per_page,
+                    "total": total_movies,
+                    "pages": total_pages,
+                    "has_prev": page > 1,
+                    "has_next": page < total_pages,
+                    "prev_num": page - 1 if page > 1 else None,
+                    "next_num": page + 1 if page < total_pages else None
+                }
+                print(f"Debug - Genre pagination created: {pagination}")
             else:
                 # Lấy tất cả phim
                 # Đếm tổng số phim
@@ -231,23 +262,30 @@ def home():
                 }
                 for r in all_rows
             ]
+            print(f"Debug - all_movies length: {len(all_movies)}")
+            if all_movies:
+                print(f"Debug - First movie: {all_movies[0]['title']} (ID: {all_movies[0]['id']})")
+                print(f"Debug - Last movie: {all_movies[-1]['title']} (ID: {all_movies[-1]['id']})")
             
-            # Tạo pagination info
-            pagination = {
-                "page": page,
-                "per_page": per_page,
-                "total": total_movies,
-                "pages": total_pages,
-                "has_prev": page > 1,
-                "has_next": page < total_pages,
-                "prev_num": page - 1 if page > 1 else None,
-                "next_num": page + 1 if page < total_pages else None
-            }
+            # Tạo pagination info cho all movies (chỉ khi không có genre filter hoặc search)
+            if not genre_filter and not search_query:
+                pagination = {
+                    "page": page,
+                    "per_page": per_page,
+                    "total": total_movies,
+                    "pages": total_pages,
+                    "has_prev": page > 1,
+                    "has_next": page < total_pages,
+                    "prev_num": page - 1 if page > 1 else None,
+                    "next_num": page + 1 if page < total_pages else None
+                }
             
     except Exception as e:
         print(f"Error getting all movies: {e}")
         all_movies = []
         pagination = None
+        genre_filter = None
+        search_query = None
     
     # Debug: In ra thông tin all_movies
     print(f"Debug - all_movies length: {len(all_movies) if all_movies else 0}")
@@ -321,8 +359,12 @@ def home():
             },
         ]
     
+    print(f"Debug - Final pagination: {pagination}")
+    print(f"Debug - Final all_movies length: {len(all_movies) if all_movies else 0}")
+    
     return render_template("home.html", 
                          latest_movies=latest_movies,  # Phim mới nhất (12 phim, không phân trang)
+                         carousel_movies=carousel_movies,  # Carousel phim mới nhất (6 phim)
                          recommended=personal_recommendations,  # Phim đề xuất
                          all_movies=all_movies,  # Tất cả phim (có phân trang)
                          pagination=pagination,
@@ -412,6 +454,10 @@ def detail(movie_id: int):
     if not session.get("user_id"):
         return redirect(url_for("main.login"))
     
+    # Lấy tham số phân trang cho related movies
+    related_page = request.args.get('related_page', 1, type=int)
+    related_per_page = 6
+    
     with current_app.db_engine.connect() as conn:
         # Lấy thông tin phim chính
         r = conn.execute(text(
@@ -446,12 +492,21 @@ def detail(movie_id: int):
     
     # CONTENT-BASED: Phim liên quan sử dụng ContentBasedRecommender
     related = []
+    related_pagination = None
     try:
         # Tạo recommender instance
         recommender = ContentBasedRecommender(current_app.db_engine)
         
-        # Lấy phim liên quan từ model AI
-        related_movies = recommender.get_related_movies(movie_id, limit=6)
+        # Lấy tất cả phim liên quan từ model AI (không giới hạn)
+        all_related_movies = recommender.get_related_movies(movie_id, limit=100)  # Lấy nhiều hơn để phân trang
+        
+        # Tính toán pagination
+        total_related = len(all_related_movies)
+        total_pages = (total_related + related_per_page - 1) // related_per_page
+        offset = (related_page - 1) * related_per_page
+        
+        # Lấy phim cho trang hiện tại
+        related_movies = all_related_movies[offset:offset + related_per_page]
         
         # Format data cho template
         related = [
@@ -465,6 +520,18 @@ def detail(movie_id: int):
             }
             for movie in related_movies
         ]
+        
+        # Tạo pagination cho related movies
+        related_pagination = {
+            "page": related_page,
+            "per_page": related_per_page,
+            "total": total_related,
+            "pages": total_pages,
+            "has_prev": related_page > 1,
+            "has_next": related_page < total_pages,
+            "prev_num": related_page - 1 if related_page > 1 else None,
+            "next_num": related_page + 1 if related_page < total_pages else None
+        }
     except Exception as e:
         print(f"Error getting related movies: {e}")
         # Fallback: lấy phim ngẫu nhiên
@@ -491,8 +558,9 @@ def detail(movie_id: int):
         except Exception as fallback_error:
             print(f"Fallback error: {fallback_error}")
             related = []
+            related_pagination = None
     
-    return render_template("detail.html", movie=movie, related=related)
+    return render_template("detail.html", movie=movie, related=related, related_pagination=related_pagination, movie_id=movie_id)
 
 
 @main_bp.route("/watch/<int:movie_id>")
@@ -630,6 +698,11 @@ def account():
     
     user_id = session.get("user_id")
     
+    # Lấy tham số phân trang
+    watchlist_page = request.args.get('watchlist_page', 1, type=int)
+    favorites_page = request.args.get('favorites_page', 1, type=int)
+    per_page = 12
+    
     # Lấy thông tin user
     try:
         with current_app.db_engine.connect() as conn:
@@ -647,34 +720,82 @@ def account():
             if not user_info:
                 return redirect(url_for("main.login"))
             
-            # Lấy danh sách xem sau (watchlist)
+            # Lấy danh sách xem sau (watchlist) với phân trang
+            watchlist_total = conn.execute(text("""
+                SELECT COUNT(*) FROM [cine].[WatchList] WHERE userId = :user_id
+            """), {"user_id": user_id}).scalar()
+            
+            watchlist_offset = (watchlist_page - 1) * per_page
             watchlist = conn.execute(text("""
                 SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, wl.addedAt
                 FROM [cine].[WatchList] wl
                 JOIN [cine].[Movie] m ON wl.movieId = m.movieId
                 WHERE wl.userId = :user_id
                 ORDER BY wl.addedAt DESC
-            """), {"user_id": user_id}).mappings().all()
+                OFFSET :offset ROWS
+                FETCH NEXT :per_page ROWS ONLY
+            """), {"user_id": user_id, "offset": watchlist_offset, "per_page": per_page}).mappings().all()
             
-            # Lấy danh sách yêu thích (favorites)
+            # Lấy danh sách yêu thích (favorites) với phân trang
+            favorites_total = conn.execute(text("""
+                SELECT COUNT(*) FROM [cine].[Favorite] WHERE userId = :user_id
+            """), {"user_id": user_id}).scalar()
+            
+            favorites_offset = (favorites_page - 1) * per_page
             favorites = conn.execute(text("""
                 SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, f.addedAt
                 FROM [cine].[Favorite] f
                 JOIN [cine].[Movie] m ON f.movieId = m.movieId
                 WHERE f.userId = :user_id
                 ORDER BY f.addedAt DESC
-            """), {"user_id": user_id}).mappings().all()
+                OFFSET :offset ROWS
+                FETCH NEXT :per_page ROWS ONLY
+            """), {"user_id": user_id, "offset": favorites_offset, "per_page": per_page}).mappings().all()
+            
+            # Tạo pagination cho watchlist
+            watchlist_pages = (watchlist_total + per_page - 1) // per_page
+            watchlist_pagination = {
+                "page": watchlist_page,
+                "per_page": per_page,
+                "total": watchlist_total,
+                "pages": watchlist_pages,
+                "has_prev": watchlist_page > 1,
+                "has_next": watchlist_page < watchlist_pages,
+                "prev_num": watchlist_page - 1 if watchlist_page > 1 else None,
+                "next_num": watchlist_page + 1 if watchlist_page < watchlist_pages else None
+            }
+            
+            # Tạo pagination cho favorites
+            favorites_pages = (favorites_total + per_page - 1) // per_page
+            favorites_pagination = {
+                "page": favorites_page,
+                "per_page": per_page,
+                "total": favorites_total,
+                "pages": favorites_pages,
+                "has_prev": favorites_page > 1,
+                "has_next": favorites_page < favorites_pages,
+                "prev_num": favorites_page - 1 if favorites_page > 1 else None,
+                "next_num": favorites_page + 1 if favorites_page < favorites_pages else None
+            }
             
     except Exception as e:
         print(f"Error getting account info: {e}")
         user_info = None
         watchlist = []
         favorites = []
+        watchlist_pagination = None
+        favorites_pagination = None
+        watchlist_page = 1
+        favorites_page = 1
     
     return render_template("account.html", 
                          user=user_info,
                          watchlist=watchlist,
-                         favorites=favorites)
+                         favorites=favorites,
+                         watchlist_pagination=watchlist_pagination,
+                         favorites_pagination=favorites_pagination,
+                         watchlist_page=watchlist_page,
+                         favorites_page=favorites_page)
 
 
 @main_bp.route("/update-profile", methods=["POST"])
