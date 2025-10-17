@@ -9,20 +9,62 @@
       <h3>📊 Thống kê tổng quan</h3>
       <div class="stats-grid">
         <div class="stat-item">
-          <span class="stat-number">{{ total_movies or 0 }}</span>
+          <span class="stat-number">{{ "{:,}".format(total_movies or 0) }}</span>
           <span class="stat-label">Tổng số phim</span>
         </div>
         <div class="stat-item">
-          <span class="stat-number">{{ total_users or 0 }}</span>
+          <span class="stat-number">{{ "{:,}".format(total_users or 0) }}</span>
           <span class="stat-label">Tổng số người dùng</span>
         </div>
         <div class="stat-item">
-          <span class="stat-number">{{ total_views or 0 }}</span>
+          <span class="stat-number">{{ "{:,}".format(total_views or 0) }}</span>
           <span class="stat-label">Tổng lượt xem</span>
         </div>
         <div class="stat-item">
-          <span class="stat-number">{{ active_users or 0 }}</span>
+          <span class="stat-number">{{ "{:,}".format(active_users or 0) }}</span>
           <span class="stat-label">Người dùng hoạt động</span>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Thống kê theo thể loại -->
+    {% if genre_stats %}
+    <div class="stat-card">
+      <h3>🎭 Thống kê theo thể loại</h3>
+      <div class="genre-stats">
+        {% for genre in genre_stats[:8] %}
+        <div class="genre-stat-item">
+          <span class="genre-name">{{ genre.name }}</span>
+          <span class="genre-count">{{ genre.movie_count }} phim</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    
+    <!-- Phim và người dùng mới nhất -->
+    <div class="recent-activity">
+      <div class="recent-card">
+        <h3>🎬 Phim mới nhất</h3>
+        <div class="recent-list">
+          {% for movie in recent_movies %}
+          <div class="recent-item">
+            <span class="recent-title">{{ movie.title }}</span>
+            <span class="recent-date">{{ movie.createdAt.strftime('%d/%m/%Y') if movie.createdAt else 'N/A' }}</span>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      
+      <div class="recent-card">
+        <h3>👥 Người dùng mới nhất</h3>
+        <div class="recent-list">
+          {% for user in recent_users %}
+          <div class="recent-item">
+            <span class="recent-title">{{ user.email }}</span>
+            <span class="recent-date">{{ user.createdAt.strftime('%d/%m/%Y') if user.createdAt else 'N/A' }}</span>
+          </div>
+          {% endfor %}
         </div>
       </div>
     </div>
@@ -159,6 +201,86 @@
   font-size: 0.9rem;
 }
 
+/* Thống kê theo thể loại */
+.genre-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 15px;
+}
+
+.genre-stat-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 15px;
+  background: var(--panel-2);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.genre-name {
+  color: #fff;
+  font-weight: 500;
+}
+
+.genre-count {
+  color: var(--primary);
+  font-weight: bold;
+}
+
+/* Hoạt động gần đây */
+.recent-activity {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.recent-card {
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  padding: 25px;
+}
+
+.recent-card h3 {
+  color: #fff;
+  margin-bottom: 15px;
+  font-size: 1.2rem;
+}
+
+.recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.recent-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px;
+  background: var(--panel-2);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.recent-title {
+  color: #fff;
+  font-size: 0.9rem;
+  flex: 1;
+  margin-right: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-date {
+  color: var(--muted);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
 @media (max-width: 768px) {
   .admin {
     padding: 15px;
@@ -170,6 +292,24 @@
   
   .action-grid {
     grid-template-columns: 1fr;
+  }
+  
+  .genre-stats {
+    grid-template-columns: 1fr;
+  }
+  
+  .recent-activity {
+    grid-template-columns: 1fr;
+  }
+  
+  .recent-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 5px;
+  }
+  
+  .recent-title {
+    margin-right: 0;
   }
 }
 </style>

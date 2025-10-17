@@ -165,20 +165,27 @@ def home():
             elif genre_filter:
                 # Lọc theo thể loại nếu được chọn
                 # Đếm tổng số phim theo thể loại
+                print(f"Debug - Filtering by genre: {genre_filter}")
                 total_count = conn.execute(text("""
-                    SELECT COUNT(DISTINCT m.movieId)
-                    FROM cine.Movie m
-                    JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
-                    JOIN cine.Genre g ON mg.genreId = g.genreId
-                    WHERE g.name = :genre
+                    SELECT COUNT(*)
+                    FROM (
+                        SELECT DISTINCT m.movieId
+                        FROM cine.Movie m
+                        JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                        JOIN cine.Genre g ON mg.genreId = g.genreId
+                        WHERE g.name = :genre
+                    ) t
                 """), {"genre": genre_filter}).scalar()
                 total_movies = total_count
+                print(f"Debug - Total movies for genre '{genre_filter}': {total_movies}")
                 
                 # Tính toán phân trang
                 total_pages = (total_movies + per_page - 1) // per_page
                 offset = (page - 1) * per_page
+                print(f"Debug - Pagination: total_movies={total_movies}, per_page={per_page}, total_pages={total_pages}, page={page}, offset={offset}")
                 
                 # Lấy phim theo thể loại với phân trang
+                print(f"Debug - Getting movies for genre '{genre_filter}', page {page}, offset {offset}, per_page {per_page}")
                 all_rows = conn.execute(text("""
                     SELECT m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear
                     FROM (
@@ -191,6 +198,7 @@ def home():
                     ) t
                     WHERE rn > :offset AND rn <= :offset + :per_page
                 """), {"genre": genre_filter, "offset": offset, "per_page": per_page}).mappings().all()
+                print(f"Debug - Found {len(all_rows)} movies for genre '{genre_filter}' on page {page}")
             else:
                 # Lấy tất cả phim
                 # Đếm tổng số phim
@@ -246,6 +254,8 @@ def home():
     print(f"Debug - latest_movies length: {len(latest_movies) if latest_movies else 0}")
     print(f"Debug - genre_filter: '{genre_filter}'")
     print(f"Debug - search_query: '{search_query}'")
+    print(f"Debug - pagination: {pagination}")
+    print(f"Debug - total_movies: {total_movies}")
     print(f"Debug - URL: {request.url}")
     
     # Lấy danh sách tất cả thể loại từ database
@@ -272,8 +282,8 @@ def home():
         print(f"Error getting genres: {e}")
         all_genres = []
     
-    # Fallback nếu all_movies rỗng
-    if not all_movies:
+    # Fallback nếu all_movies rỗng (chỉ khi không có genre_filter và search_query)
+    if not all_movies and not genre_filter and not search_query:
         print("Debug - all_movies is empty, using fallback")
         all_movies = latest_movies[:12]  # Sử dụng latest_movies làm fallback
         pagination = {
@@ -286,6 +296,9 @@ def home():
             "prev_num": None,
             "next_num": None
         }
+    elif not all_movies and (genre_filter or search_query):
+        print("Debug - No movies found for filter/search, keeping empty list")
+        # Giữ all_movies rỗng và pagination None để hiển thị "Không tìm thấy phim"
     
     if not latest_movies:
         # Fallback demo data to avoid empty list errors in templates
@@ -458,23 +471,23 @@ def detail(movie_id: int):
         try:
             with current_app.db_engine.connect() as conn:
                 fallback_rows = conn.execute(text("""
-                SELECT TOP 6 movieId, title, posterUrl, releaseYear
-                FROM cine.Movie 
-                WHERE movieId != :id
-                ORDER BY NEWID()
-            """), {"id": movie_id}).mappings().all()
+                    SELECT TOP 6 movieId, title, posterUrl, releaseYear
+                    FROM cine.Movie 
+                    WHERE movieId != :id
+                    ORDER BY NEWID()
+                """), {"id": movie_id}).mappings().all()
             
-                related = [
-                    {
-                        "movieId": row["movieId"],
-                        "title": row["title"],
-                        "posterUrl": row.get("posterUrl") if row.get("posterUrl") and row.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={row['title'][:20].replace(' ', '+')}",
-                        "similarity": 0.0,
-                        "overview": "",
-                        "releaseYear": row.get("releaseYear")
-                    }
-                    for row in fallback_rows
-                ]
+            related = [
+                {
+                    "movieId": row["movieId"],
+                    "title": row["title"],
+                    "posterUrl": row.get("posterUrl") if row.get("posterUrl") and row.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={row['title'][:20].replace(' ', '+')}",
+                    "similarity": 0.0,
+                    "overview": "",
+                    "releaseYear": row.get("releaseYear")
+                }
+                for row in fallback_rows
+            ]
         except Exception as fallback_error:
             print(f"Fallback error: {fallback_error}")
             related = []
@@ -557,7 +570,7 @@ def watch(movie_id: int):
         print(f"Error getting related movies: {e}")
         related_movies = []
     
-        # Fallback: lấy phim ngẫu nhiên nếu không có recommendations
+    # Fallback: lấy phim ngẫu nhiên nếu không có recommendations
     if not related_movies:
         try:
             with current_app.db_engine.connect() as conn:
@@ -567,17 +580,17 @@ def watch(movie_id: int):
                     WHERE movieId != :id
                     ORDER BY NEWID()
                 """), {"id": movie_id}).mappings().all()
-                
-                related_movies = [
-                    {
-                        "movieId": row["movieId"],
-                        "title": row["title"],
-                        "posterUrl": row.get("posterUrl") if row.get("posterUrl") and row.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={row['title'][:20].replace(' ', '+')}",
-                        "releaseYear": row.get("releaseYear"),
-                        "similarity": 0.0
-                    }
-                    for row in fallback_rows
-                ]
+            
+            related_movies = [
+                {
+                    "movieId": row["movieId"],
+                    "title": row["title"],
+                    "posterUrl": row.get("posterUrl") if row.get("posterUrl") and row.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={row['title'][:20].replace(' ', '+')}",
+                    "releaseYear": row.get("releaseYear"),
+                    "similarity": 0.0
+                }
+                for row in fallback_rows
+            ]
         except Exception as fallback_error:
             print(f"Fallback error: {fallback_error}")
             # Fallback cuối cùng - tạo dữ liệu demo
@@ -912,7 +925,54 @@ def remove_favorite(movie_id):
 @admin_required
 def admin_dashboard():
     """Trang chủ admin"""
-    return render_template("admin_dashboard.html")
+    try:
+        with current_app.db_engine.connect() as conn:
+            # Lấy thống kê tổng quan
+            total_movies = conn.execute(text("SELECT COUNT(*) FROM cine.Movie")).scalar()
+            total_users = conn.execute(text("SELECT COUNT(*) FROM cine.[User]")).scalar()
+            total_views = conn.execute(text("SELECT SUM(viewCount) FROM cine.Movie")).scalar() or 0
+            active_users = conn.execute(text("SELECT COUNT(*) FROM cine.[User] WHERE status = 'active'")).scalar()
+            
+            # Lấy thống kê bổ sung
+            recent_movies = conn.execute(text("""
+                SELECT TOP 5 movieId, title, createdAt 
+                FROM cine.Movie 
+                ORDER BY createdAt DESC
+            """)).mappings().all()
+            
+            recent_users = conn.execute(text("""
+                SELECT TOP 5 userId, email, createdAt 
+                FROM cine.[User] 
+                ORDER BY createdAt DESC
+            """)).mappings().all()
+            
+            # Thống kê theo thể loại
+            genre_stats = conn.execute(text("""
+                SELECT g.name, COUNT(mg.movieId) as movie_count
+                FROM cine.Genre g
+                LEFT JOIN cine.MovieGenre mg ON g.genreId = mg.genreId
+                GROUP BY g.genreId, g.name
+                ORDER BY movie_count DESC
+            """)).mappings().all()
+            
+        return render_template("admin_dashboard.html", 
+                             total_movies=total_movies,
+                             total_users=total_users,
+                             total_views=total_views,
+                             active_users=active_users,
+                             recent_movies=recent_movies,
+                             recent_users=recent_users,
+                             genre_stats=genre_stats)
+    except Exception as e:
+        print(f"Error getting admin dashboard stats: {e}")
+        return render_template("admin_dashboard.html", 
+                             total_movies=0,
+                             total_users=0,
+                             total_views=0,
+                             active_users=0,
+                             recent_movies=[],
+                             recent_users=[],
+                             genre_stats=[])
 
 @main_bp.route("/admin/movies")
 @admin_required
@@ -1138,7 +1198,7 @@ def admin_movie_create():
                     "backdrop": backdrop_url if backdrop_url else None,
                     "views": views
                 })
-            
+                
                 # Lấy movieId vừa tạo
                 movie_id = result.lastrowid
                 
@@ -1151,7 +1211,7 @@ def admin_movie_create():
                         """), {"movieId": movie_id, "genreId": int(genre_id)})
                 
                 flash("✅ Thêm phim thành công!", "success")
-            return redirect(url_for("main.admin_movies"))
+                return redirect(url_for("main.admin_movies"))
     
         except Exception as e:
             flash(f"❌ Lỗi khi thêm phim: {str(e)}", "error")
@@ -1191,7 +1251,7 @@ def admin_movie_edit(movie_id):
         try:
             with current_app.db_engine.begin() as conn:
                 conn.execute(text("""
-                    UPDATE cine.Movie
+                UPDATE cine.Movie
                     SET title = :title, releaseYear = :year, overview = :overview, 
                         posterUrl = :poster, backdropUrl = :backdrop
                     WHERE movieId = :id
@@ -1205,11 +1265,11 @@ def admin_movie_edit(movie_id):
                 })
                 
                 flash("Cập nhật phim thành công!", "success")
-            return redirect(url_for("main.admin_movies"))
+                return redirect(url_for("main.admin_movies"))
         except Exception as e:
             flash(f"Lỗi khi cập nhật phim: {str(e)}", "error")
     
-    # Lấy thông tin phim
+        # Lấy thông tin phim
     try:
         with current_app.db_engine.connect() as conn:
             movie = conn.execute(text("""

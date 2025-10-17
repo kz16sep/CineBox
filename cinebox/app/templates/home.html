@@ -76,7 +76,7 @@
 </section>
 
 <!-- Pagination cho trang genre -->
-{% if genre_filter and pagination %}
+{% if genre_filter and pagination and pagination.pages > 1 %}
 <div class="pagination">
   <div class="pagination-info">
     <span>Trang {{ pagination.page }} / {{ pagination.pages }}</span>
