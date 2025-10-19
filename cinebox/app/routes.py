@@ -765,14 +765,14 @@ def account():
                 
                 watchlist_offset = (watchlist_page - 1) * per_page
                 watchlist = conn.execute(text("""
-                    SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, wl.addedAt
-                    FROM [cine].[WatchList] wl
-                    JOIN [cine].[Movie] m ON wl.movieId = m.movieId
-                    WHERE wl.userId = :user_id
-                    ORDER BY wl.addedAt DESC
-                    OFFSET :offset ROWS
-                    FETCH NEXT :per_page ROWS ONLY
-                """), {"user_id": user_id, "offset": watchlist_offset, "per_page": per_page}).mappings().all()
+                SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, wl.addedAt
+                FROM [cine].[WatchList] wl
+                JOIN [cine].[Movie] m ON wl.movieId = m.movieId
+                WHERE wl.userId = :user_id
+                ORDER BY wl.addedAt DESC
+                OFFSET :offset ROWS
+                FETCH NEXT :per_page ROWS ONLY
+            """), {"user_id": user_id, "offset": watchlist_offset, "per_page": per_page}).mappings().all()
             
             # Lấy danh sách yêu thích (favorites) với phân trang và tìm kiếm
             if favorites_search:
@@ -815,14 +815,14 @@ def account():
                 
                 favorites_offset = (favorites_page - 1) * per_page
                 favorites = conn.execute(text("""
-                    SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, f.addedAt
-                    FROM [cine].[Favorite] f
-                    JOIN [cine].[Movie] m ON f.movieId = m.movieId
-                    WHERE f.userId = :user_id
-                    ORDER BY f.addedAt DESC
-                    OFFSET :offset ROWS
-                    FETCH NEXT :per_page ROWS ONLY
-                """), {"user_id": user_id, "offset": favorites_offset, "per_page": per_page}).mappings().all()
+                SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, f.addedAt
+                FROM [cine].[Favorite] f
+                JOIN [cine].[Movie] m ON f.movieId = m.movieId
+                WHERE f.userId = :user_id
+                ORDER BY f.addedAt DESC
+                OFFSET :offset ROWS
+                FETCH NEXT :per_page ROWS ONLY
+            """), {"user_id": user_id, "offset": favorites_offset, "per_page": per_page}).mappings().all()
             
             # Tạo pagination cho watchlist
             watchlist_pages = (watchlist_total + per_page - 1) // per_page
@@ -2393,5 +2393,58 @@ def genre_page(genre_slug):
     
     # Redirect về trang chủ với genre filter
     return redirect(url_for('main.home', genre=genre_name))
+
+
+@main_bp.route('/api/search/suggestions')
+def search_suggestions():
+    """API endpoint để lấy gợi ý tìm kiếm phim"""
+    try:
+        query = request.args.get('q', '').strip()
+        limit = request.args.get('limit', 10, type=int)
+        
+        if not query or len(query) < 2:
+            return jsonify({
+                "success": True,
+                "suggestions": []
+            })
+        
+        with current_app.db_engine.connect() as conn:
+            # Tìm kiếm phim theo title (case-insensitive)
+            suggestions = conn.execute(text(f"""
+                SELECT TOP {limit} movieId, title, releaseYear, posterUrl
+                FROM cine.Movie 
+                WHERE title LIKE :query
+                ORDER BY 
+                    CASE 
+                        WHEN title LIKE :exact_query THEN 1
+                        WHEN title LIKE :start_query THEN 2
+                        ELSE 3
+                    END,
+                    title
+            """), {
+                "query": f"%{query}%",
+                "exact_query": f"{query}%",
+                "start_query": f"{query}%"
+            }).mappings().all()
+            
+            results = []
+            for row in suggestions:
+                results.append({
+                    "id": row["movieId"],
+                    "title": row["title"],
+                    "year": row.get("releaseYear"),
+                    "poster": row.get("posterUrl") if row.get("posterUrl") and row.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={row['title'][:20].replace(' ', '+')}"
+                })
+            
+            return jsonify({
+                "success": True,
+                "suggestions": results
+            })
+            
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 
