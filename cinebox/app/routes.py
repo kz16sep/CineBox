@@ -5,6 +5,7 @@ import sys
 import os
 import time
 import uuid
+import re
 from werkzeug.utils import secure_filename
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from content_based_recommender import ContentBasedRecommender
@@ -698,18 +699,21 @@ def account():
     
     user_id = session.get("user_id")
     
-    # Lấy tham số phân trang
+    # Lấy tham số phân trang và tìm kiếm
     watchlist_page = request.args.get('watchlist_page', 1, type=int)
     favorites_page = request.args.get('favorites_page', 1, type=int)
-    per_page = 12
+    watchlist_search = request.args.get('watchlist_search', '', type=str).strip()
+    favorites_search = request.args.get('favorites_search', '', type=str).strip()
+    per_page = 8
     
     # Lấy thông tin user
     try:
         with current_app.db_engine.connect() as conn:
             user_info = conn.execute(text("""
-                SELECT u.userId, u.email, u.avatarUrl, u.phone, u.status, u.createdAt, u.lastLoginAt, r.roleName
+                SELECT u.userId, u.email, u.avatarUrl, u.phone, u.status, u.createdAt, u.lastLoginAt, r.roleName, a.username
                 FROM [cine].[User] u
                 JOIN [cine].[Role] r ON u.roleId = r.roleId
+                LEFT JOIN [cine].[Account] a ON a.userId = u.userId
                 WHERE u.userId = :user_id
             """), {"user_id": user_id}).mappings().first()
             
@@ -720,37 +724,105 @@ def account():
             if not user_info:
                 return redirect(url_for("main.login"))
             
-            # Lấy danh sách xem sau (watchlist) với phân trang
-            watchlist_total = conn.execute(text("""
-                SELECT COUNT(*) FROM [cine].[WatchList] WHERE userId = :user_id
-            """), {"user_id": user_id}).scalar()
+            # Lấy danh sách xem sau (watchlist) với phân trang và tìm kiếm
+            if watchlist_search:
+                # Query với tìm kiếm
+                watchlist_total = conn.execute(text("""
+                    SELECT COUNT(*) 
+                    FROM [cine].[WatchList] wl
+                    JOIN [cine].[Movie] m ON wl.movieId = m.movieId
+                    WHERE wl.userId = :user_id AND m.title LIKE :search
+                """), {"user_id": user_id, "search": f"%{watchlist_search}%"}).scalar()
+                
+                watchlist_offset = (watchlist_page - 1) * per_page
+                watchlist = conn.execute(text("""
+                    SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, wl.addedAt
+                    FROM [cine].[WatchList] wl
+                    JOIN [cine].[Movie] m ON wl.movieId = m.movieId
+                    WHERE wl.userId = :user_id AND m.title LIKE :search
+                    ORDER BY 
+                        CASE 
+                            WHEN m.title LIKE :exact_search THEN 1
+                            WHEN m.title LIKE :start_search THEN 2
+                            ELSE 3
+                        END,
+                        wl.addedAt DESC
+                    OFFSET :offset ROWS
+                    FETCH NEXT :per_page ROWS ONLY
+                """), {
+                    "user_id": user_id, 
+                    "search": f"%{watchlist_search}%",
+                    "exact_search": f"{watchlist_search}%",
+                    "start_search": f"{watchlist_search}%",
+                    "offset": watchlist_offset, 
+                    "per_page": per_page
+                }).mappings().all()
+            else:
+                # Query không tìm kiếm
+                watchlist_total = conn.execute(text("""
+                    SELECT COUNT(*) FROM [cine].[WatchList] WHERE userId = :user_id
+                """), {"user_id": user_id}).scalar()
+                
+                watchlist_offset = (watchlist_page - 1) * per_page
+                watchlist = conn.execute(text("""
+                    SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, wl.addedAt
+                    FROM [cine].[WatchList] wl
+                    JOIN [cine].[Movie] m ON wl.movieId = m.movieId
+                    WHERE wl.userId = :user_id
+                    ORDER BY wl.addedAt DESC
+                    OFFSET :offset ROWS
+                    FETCH NEXT :per_page ROWS ONLY
+                """), {"user_id": user_id, "offset": watchlist_offset, "per_page": per_page}).mappings().all()
             
-            watchlist_offset = (watchlist_page - 1) * per_page
-            watchlist = conn.execute(text("""
-                SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, wl.addedAt
-                FROM [cine].[WatchList] wl
-                JOIN [cine].[Movie] m ON wl.movieId = m.movieId
-                WHERE wl.userId = :user_id
-                ORDER BY wl.addedAt DESC
-                OFFSET :offset ROWS
-                FETCH NEXT :per_page ROWS ONLY
-            """), {"user_id": user_id, "offset": watchlist_offset, "per_page": per_page}).mappings().all()
-            
-            # Lấy danh sách yêu thích (favorites) với phân trang
-            favorites_total = conn.execute(text("""
-                SELECT COUNT(*) FROM [cine].[Favorite] WHERE userId = :user_id
-            """), {"user_id": user_id}).scalar()
-            
-            favorites_offset = (favorites_page - 1) * per_page
-            favorites = conn.execute(text("""
-                SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, f.addedAt
-                FROM [cine].[Favorite] f
-                JOIN [cine].[Movie] m ON f.movieId = m.movieId
-                WHERE f.userId = :user_id
-                ORDER BY f.addedAt DESC
-                OFFSET :offset ROWS
-                FETCH NEXT :per_page ROWS ONLY
-            """), {"user_id": user_id, "offset": favorites_offset, "per_page": per_page}).mappings().all()
+            # Lấy danh sách yêu thích (favorites) với phân trang và tìm kiếm
+            if favorites_search:
+                # Query với tìm kiếm
+                favorites_total = conn.execute(text("""
+                    SELECT COUNT(*) 
+                    FROM [cine].[Favorite] f
+                    JOIN [cine].[Movie] m ON f.movieId = m.movieId
+                    WHERE f.userId = :user_id AND m.title LIKE :search
+                """), {"user_id": user_id, "search": f"%{favorites_search}%"}).scalar()
+                
+                favorites_offset = (favorites_page - 1) * per_page
+                favorites = conn.execute(text("""
+                    SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, f.addedAt
+                    FROM [cine].[Favorite] f
+                    JOIN [cine].[Movie] m ON f.movieId = m.movieId
+                    WHERE f.userId = :user_id AND m.title LIKE :search
+                    ORDER BY 
+                        CASE 
+                            WHEN m.title LIKE :exact_search THEN 1
+                            WHEN m.title LIKE :start_search THEN 2
+                            ELSE 3
+                        END,
+                        f.addedAt DESC
+                    OFFSET :offset ROWS
+                    FETCH NEXT :per_page ROWS ONLY
+                """), {
+                    "user_id": user_id, 
+                    "search": f"%{favorites_search}%",
+                    "exact_search": f"{favorites_search}%",
+                    "start_search": f"{favorites_search}%",
+                    "offset": favorites_offset, 
+                    "per_page": per_page
+                }).mappings().all()
+            else:
+                # Query không tìm kiếm
+                favorites_total = conn.execute(text("""
+                    SELECT COUNT(*) FROM [cine].[Favorite] WHERE userId = :user_id
+                """), {"user_id": user_id}).scalar()
+                
+                favorites_offset = (favorites_page - 1) * per_page
+                favorites = conn.execute(text("""
+                    SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, f.addedAt
+                    FROM [cine].[Favorite] f
+                    JOIN [cine].[Movie] m ON f.movieId = m.movieId
+                    WHERE f.userId = :user_id
+                    ORDER BY f.addedAt DESC
+                    OFFSET :offset ROWS
+                    FETCH NEXT :per_page ROWS ONLY
+                """), {"user_id": user_id, "offset": favorites_offset, "per_page": per_page}).mappings().all()
             
             # Tạo pagination cho watchlist
             watchlist_pages = (watchlist_total + per_page - 1) // per_page
@@ -795,7 +867,9 @@ def account():
                          watchlist_pagination=watchlist_pagination,
                          favorites_pagination=favorites_pagination,
                          watchlist_page=watchlist_page,
-                         favorites_page=favorites_page)
+                         favorites_page=favorites_page,
+                         watchlist_search=watchlist_search,
+                         favorites_search=favorites_search)
 
 
 @main_bp.route("/update-profile", methods=["POST"])
@@ -805,11 +879,94 @@ def update_profile():
         return redirect(url_for("main.login"))
     
     user_id = session.get("user_id")
+    username = request.form.get("username", "").strip()
     phone = request.form.get("phone", "").strip()
+    current_password = request.form.get("current_password", "").strip()
+    new_password = request.form.get("new_password", "").strip()
+    confirm_password = request.form.get("confirm_password", "").strip()
+    
+    # Validation
+    errors = []
+    
+    # Username validation (NVARCHAR(100) - max 100 chars, alphanumeric + special chars)
+    if username:
+        username_pattern = r'^[a-zA-Z0-9._\u00C0-\u017F\u1E00-\u1EFF\u0100-\u017F\u0180-\u024F -]+$'
+        if not re.match(username_pattern, username):
+            errors.append("Tên người dùng chỉ được chứa chữ cái (có dấu), số, dấu chấm, gạch dưới, gạch ngang và khoảng trắng")
+        elif len(username) < 3:
+            errors.append("Tên người dùng phải có ít nhất 3 ký tự")
+        elif len(username) > 100:
+            errors.append("Tên người dùng không được quá 100 ký tự")
+    
+    # Phone validation (NVARCHAR(20) - max 20 chars, Vietnamese phone format)
+    if phone:
+        phone_pattern = r'^(\+84|84|0)[1-9][0-9]{8,9}$'
+        if not re.match(phone_pattern, phone):
+            errors.append("Số điện thoại không hợp lệ. Vui lòng nhập số điện thoại Việt Nam (10-11 số)")
+        elif len(phone) > 20:
+            errors.append("Số điện thoại không được quá 20 ký tự")
+    
+    # Password validation
+    if new_password:
+        if not current_password:
+            errors.append("Vui lòng nhập mật khẩu hiện tại")
+        elif len(new_password) < 6:
+            errors.append("Mật khẩu mới phải có ít nhất 6 ký tự")
+        elif len(new_password) > 100:  # Reasonable limit for password
+            errors.append("Mật khẩu mới không được quá 100 ký tự")
+        elif new_password != confirm_password:
+            errors.append("Mật khẩu xác nhận không khớp")
+    
+    # If there are validation errors, redirect back with error
+    if errors:
+        flash("; ".join(errors), "error")
+        return redirect(url_for("main.account"))
     
     try:
         with current_app.db_engine.begin() as conn:
-            # Cập nhật thông tin cơ bản
+            # Check if username already exists (if changing username)
+            if username:
+                existing_username = conn.execute(text("""
+                    SELECT 1 FROM [cine].[Account] 
+                    WHERE username = :username AND userId != :user_id
+                """), {"username": username, "user_id": user_id}).scalar()
+                
+                if existing_username:
+                    flash("Tên người dùng đã được sử dụng bởi người dùng khác", "error")
+                    return redirect(url_for("main.account"))
+            
+            # Verify current password if changing password
+            if new_password:
+                # Check current password
+                password_check = conn.execute(text("""
+                    SELECT 1 FROM [cine].[Account] 
+                    WHERE userId = :user_id 
+                    AND passwordHash = HASHBYTES('SHA2_256', CONVERT(VARBINARY(512), :current_password))
+                """), {"user_id": user_id, "current_password": current_password}).scalar()
+                
+                if not password_check:
+                    flash("Mật khẩu hiện tại không đúng", "error")
+                    return redirect(url_for("main.account"))
+                
+                # Update password
+                conn.execute(text("""
+                    UPDATE [cine].[Account] 
+                    SET passwordHash = HASHBYTES('SHA2_256', CONVERT(VARBINARY(512), :new_password))
+                    WHERE userId = :user_id
+                """), {"new_password": new_password, "user_id": user_id})
+            
+            # Update username if provided
+            if username:
+                conn.execute(text("""
+                    UPDATE [cine].[Account] 
+                    SET username = :username
+                    WHERE userId = :user_id
+                """), {"username": username, "user_id": user_id})
+                
+                # Update session with new username
+                session['username'] = username
+            
+            # Update phone
             conn.execute(text("""
                 UPDATE [cine].[User] 
                 SET phone = :phone
@@ -840,11 +997,211 @@ def update_profile():
                     # Cập nhật session với avatar mới
                     session['avatar'] = avatar_url
         
+        # Success message
+        success_msg = "Cập nhật thông tin thành công!"
+        if username:
+            success_msg += " Tên người dùng đã được cập nhật."
+        if new_password:
+            success_msg += " Mật khẩu đã được thay đổi."
+        if phone:
+            success_msg += " Số điện thoại đã được cập nhật."
+        
+        flash(success_msg, "success")
         return redirect(url_for("main.account"))
         
     except Exception as e:
         print(f"Error updating profile: {e}")
+        flash(f"Lỗi khi cập nhật: {str(e)}", "error")
         return redirect(url_for("main.account"))
+
+@main_bp.route('/update-password', methods=['POST'])
+def update_password():
+    """Cập nhật mật khẩu"""
+    if not session.get("user_id"):
+        return redirect(url_for("main.login"))
+    
+    user_id = session.get("user_id")
+    current_password = request.form.get("current_password", "").strip()
+    new_password = request.form.get("new_password", "").strip()
+    confirm_password = request.form.get("confirm_password", "").strip()
+    
+    # Validation
+    errors = []
+    
+    if not current_password:
+        errors.append("Vui lòng nhập mật khẩu hiện tại")
+    
+    if not new_password:
+        errors.append("Vui lòng nhập mật khẩu mới")
+    elif len(new_password) < 6:
+        errors.append("Mật khẩu mới phải có ít nhất 6 ký tự")
+    elif len(new_password) > 100:
+        errors.append("Mật khẩu mới không được quá 100 ký tự")
+    
+    if new_password != confirm_password:
+        errors.append("Mật khẩu xác nhận không khớp")
+    
+    if errors:
+        flash("; ".join(errors), "error")
+        return redirect(url_for("main.account"))
+    
+    try:
+        with current_app.db_engine.begin() as conn:
+            # Verify current password
+            password_check = conn.execute(text("""
+                SELECT 1 FROM [cine].[Account] 
+                WHERE userId = :user_id 
+                AND passwordHash = HASHBYTES('SHA2_256', CONVERT(VARBINARY(512), :current_password))
+            """), {"user_id": user_id, "current_password": current_password}).scalar()
+            
+            if not password_check:
+                flash("Mật khẩu hiện tại không đúng", "error")
+                return redirect(url_for("main.account"))
+            
+            # Update password
+            conn.execute(text("""
+                UPDATE [cine].[Account] 
+                SET passwordHash = HASHBYTES('SHA2_256', CONVERT(VARBINARY(512), :new_password))
+                WHERE userId = :user_id
+            """), {"new_password": new_password, "user_id": user_id})
+        
+        flash("Đổi mật khẩu thành công!", "success")
+        return redirect(url_for("main.account"))
+        
+    except Exception as e:
+        current_app.logger.error(f"Error updating password: {str(e)}")
+        flash("Có lỗi xảy ra khi đổi mật khẩu", "error")
+        return redirect(url_for("main.account"))
+
+@main_bp.route('/api/update-email', methods=['POST'])
+def api_update_email():
+    """API cập nhật email trực tiếp vào database"""
+    if not session.get("user_id"):
+        return jsonify({"success": False, "message": "Chưa đăng nhập"}), 401
+    
+    user_id = session.get("user_id")
+    data = request.get_json()
+    new_email = data.get('email', '').strip()
+    
+    # Validation
+    if not new_email:
+        return jsonify({"success": False, "message": "Vui lòng nhập email"}), 400
+    
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    if not re.match(email_pattern, new_email):
+        return jsonify({"success": False, "message": "Email không hợp lệ"}), 400
+    
+    if len(new_email) > 255:
+        return jsonify({"success": False, "message": "Email không được quá 255 ký tự"}), 400
+    
+    try:
+        with current_app.db_engine.begin() as conn:
+            # Check if email already exists
+            existing_email = conn.execute(text("""
+                SELECT 1 FROM [cine].[User] 
+                WHERE email = :email AND userId != :user_id
+            """), {"email": new_email, "user_id": user_id}).scalar()
+            
+            if existing_email:
+                return jsonify({"success": False, "message": "Email đã được sử dụng bởi người dùng khác"}), 400
+            
+            # Update email
+            conn.execute(text("""
+                UPDATE [cine].[User] 
+                SET email = :email
+                WHERE userId = :user_id
+            """), {"email": new_email, "user_id": user_id})
+        
+        return jsonify({"success": True, "message": "Email đã được cập nhật thành công"})
+        
+    except Exception as e:
+        current_app.logger.error(f"Error updating email: {str(e)}")
+        return jsonify({"success": False, "message": "Có lỗi xảy ra khi cập nhật email"}), 500
+
+@main_bp.route('/api/update-username', methods=['POST'])
+def api_update_username():
+    """API cập nhật username trực tiếp vào database"""
+    if not session.get("user_id"):
+        return jsonify({"success": False, "message": "Chưa đăng nhập"}), 401
+    
+    user_id = session.get("user_id")
+    data = request.get_json()
+    new_username = data.get('username', '').strip()
+    
+    # Validation
+    if not new_username:
+        return jsonify({"success": False, "message": "Vui lòng nhập tên người dùng"}), 400
+    
+    username_pattern = r'^[a-zA-Z0-9._\u00C0-\u017F\u1E00-\u1EFF\u0100-\u017F\u0180-\u024F -]+$'
+    if not re.match(username_pattern, new_username):
+        return jsonify({"success": False, "message": "Tên người dùng chỉ được chứa chữ cái (có dấu), số, dấu chấm, gạch dưới, gạch ngang và khoảng trắng"}), 400
+    
+    if len(new_username) < 3:
+        return jsonify({"success": False, "message": "Tên người dùng phải có ít nhất 3 ký tự"}), 400
+    
+    if len(new_username) > 100:
+        return jsonify({"success": False, "message": "Tên người dùng không được quá 100 ký tự"}), 400
+    
+    try:
+        with current_app.db_engine.begin() as conn:
+            # Check if username already exists
+            existing_username = conn.execute(text("""
+                SELECT 1 FROM [cine].[Account] 
+                WHERE username = :username AND userId != :user_id
+            """), {"username": new_username, "user_id": user_id}).scalar()
+            
+            if existing_username:
+                return jsonify({"success": False, "message": "Tên người dùng đã được sử dụng bởi người dùng khác"}), 400
+            
+            # Update username
+            conn.execute(text("""
+                UPDATE [cine].[Account] 
+                SET username = :username
+                WHERE userId = :user_id
+            """), {"username": new_username, "user_id": user_id})
+            
+            # Update session
+            session['username'] = new_username
+        
+        return jsonify({"success": True, "message": "Tên người dùng đã được cập nhật thành công"})
+        
+    except Exception as e:
+        current_app.logger.error(f"Error updating username: {str(e)}")
+        return jsonify({"success": False, "message": "Có lỗi xảy ra khi cập nhật tên người dùng"}), 500
+
+@main_bp.route('/api/update-phone', methods=['POST'])
+def api_update_phone():
+    """API cập nhật số điện thoại trực tiếp vào database"""
+    if not session.get("user_id"):
+        return jsonify({"success": False, "message": "Chưa đăng nhập"}), 401
+    
+    user_id = session.get("user_id")
+    data = request.get_json()
+    new_phone = data.get('phone', '').strip()
+    
+    # Validation
+    if new_phone:
+        phone_pattern = r'^(\+84|84|0)[1-9][0-9]{8,9}$'
+        if not re.match(phone_pattern, new_phone):
+            return jsonify({"success": False, "message": "Số điện thoại không hợp lệ. Vui lòng nhập số điện thoại Việt Nam (10-11 số)"}), 400
+        
+        if len(new_phone) > 20:
+            return jsonify({"success": False, "message": "Số điện thoại không được quá 20 ký tự"}), 400
+    
+    try:
+        with current_app.db_engine.begin() as conn:
+            # Update phone
+            conn.execute(text("""
+                UPDATE [cine].[User] 
+                SET phone = :phone
+                WHERE userId = :user_id
+            """), {"phone": new_phone if new_phone else None, "user_id": user_id})
+        
+        return jsonify({"success": True, "message": "Số điện thoại đã được cập nhật thành công"})
+        
+    except Exception as e:
+        current_app.logger.error(f"Error updating phone: {str(e)}")
+        return jsonify({"success": False, "message": "Có lỗi xảy ra khi cập nhật số điện thoại"}), 500
 
 
 @main_bp.route("/upload-avatar", methods=["POST"])
@@ -1036,6 +1393,202 @@ def remove_favorite(movie_id):
         return jsonify({"success": False, "message": "Có lỗi xảy ra"})
 
 
+@main_bp.route("/api/search-watchlist", methods=["GET"])
+def api_search_watchlist():
+    """API tìm kiếm watchlist với AJAX"""
+    if not session.get("user_id"):
+        return jsonify({"success": False, "message": "Chưa đăng nhập"})
+    
+    user_id = session.get("user_id")
+    search_query = request.args.get('q', '', type=str).strip()
+    page = request.args.get('page', 1, type=int)
+    per_page = 8
+    
+    try:
+        with current_app.db_engine.connect() as conn:
+            if search_query:
+                # Query với tìm kiếm
+                watchlist_total = conn.execute(text("""
+                    SELECT COUNT(*) 
+                    FROM [cine].[WatchList] wl
+                    JOIN [cine].[Movie] m ON wl.movieId = m.movieId
+                    WHERE wl.userId = :user_id AND m.title LIKE :search
+                """), {"user_id": user_id, "search": f"%{search_query}%"}).scalar()
+                
+                watchlist_offset = (page - 1) * per_page
+                watchlist = conn.execute(text("""
+                    SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, wl.addedAt
+                    FROM [cine].[WatchList] wl
+                    JOIN [cine].[Movie] m ON wl.movieId = m.movieId
+                    WHERE wl.userId = :user_id AND m.title LIKE :search
+                    ORDER BY 
+                        CASE 
+                            WHEN m.title LIKE :exact_search THEN 1
+                            WHEN m.title LIKE :start_search THEN 2
+                            ELSE 3
+                        END,
+                        wl.addedAt DESC
+                    OFFSET :offset ROWS
+                    FETCH NEXT :per_page ROWS ONLY
+                """), {
+                    "user_id": user_id, 
+                    "search": f"%{search_query}%",
+                    "exact_search": f"{search_query}%",
+                    "start_search": f"{search_query}%",
+                    "offset": watchlist_offset, 
+                    "per_page": per_page
+                }).mappings().all()
+            else:
+                # Query không tìm kiếm
+                watchlist_total = conn.execute(text("""
+                    SELECT COUNT(*) FROM [cine].[WatchList] WHERE userId = :user_id
+                """), {"user_id": user_id}).scalar()
+                
+                watchlist_offset = (page - 1) * per_page
+                watchlist = conn.execute(text("""
+                    SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, wl.addedAt
+                    FROM [cine].[WatchList] wl
+                    JOIN [cine].[Movie] m ON wl.movieId = m.movieId
+                    WHERE wl.userId = :user_id
+                    ORDER BY wl.addedAt DESC
+                    OFFSET :offset ROWS
+                    FETCH NEXT :per_page ROWS ONLY
+                """), {"user_id": user_id, "offset": watchlist_offset, "per_page": per_page}).mappings().all()
+            
+            # Tạo pagination
+            watchlist_pages = (watchlist_total + per_page - 1) // per_page
+            pagination = {
+                "page": page,
+                "per_page": per_page,
+                "total": watchlist_total,
+                "pages": watchlist_pages,
+                "has_prev": page > 1,
+                "has_next": page < watchlist_pages,
+                "prev_num": page - 1 if page > 1 else None,
+                "next_num": page + 1 if page < watchlist_pages else None
+            }
+            
+            # Format data
+            movies = []
+            for movie in watchlist:
+                movies.append({
+                    "id": movie["movieId"],
+                    "title": movie["title"],
+                    "poster": movie.get("posterUrl") if movie.get("posterUrl") and movie.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={movie['title'][:20].replace(' ', '+')}",
+                    "year": movie.get("releaseYear"),
+                    "addedAt": movie.get("addedAt").strftime('%d/%m/%Y') if movie.get("addedAt") else 'N/A'
+                })
+            
+            return jsonify({
+                "success": True,
+                "movies": movies,
+                "pagination": pagination,
+                "search_query": search_query
+            })
+            
+    except Exception as e:
+        print(f"Error searching watchlist: {e}")
+        return jsonify({"success": False, "message": "Có lỗi xảy ra"})
+
+
+@main_bp.route("/api/search-favorites", methods=["GET"])
+def api_search_favorites():
+    """API tìm kiếm favorites với AJAX"""
+    if not session.get("user_id"):
+        return jsonify({"success": False, "message": "Chưa đăng nhập"})
+    
+    user_id = session.get("user_id")
+    search_query = request.args.get('q', '', type=str).strip()
+    page = request.args.get('page', 1, type=int)
+    per_page = 8
+    
+    try:
+        with current_app.db_engine.connect() as conn:
+            if search_query:
+                # Query với tìm kiếm
+                favorites_total = conn.execute(text("""
+                    SELECT COUNT(*) 
+                    FROM [cine].[Favorite] f
+                    JOIN [cine].[Movie] m ON f.movieId = m.movieId
+                    WHERE f.userId = :user_id AND m.title LIKE :search
+                """), {"user_id": user_id, "search": f"%{search_query}%"}).scalar()
+                
+                favorites_offset = (page - 1) * per_page
+                favorites = conn.execute(text("""
+                    SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, f.addedAt
+                    FROM [cine].[Favorite] f
+                    JOIN [cine].[Movie] m ON f.movieId = m.movieId
+                    WHERE f.userId = :user_id AND m.title LIKE :search
+                    ORDER BY 
+                        CASE 
+                            WHEN m.title LIKE :exact_search THEN 1
+                            WHEN m.title LIKE :start_search THEN 2
+                            ELSE 3
+                        END,
+                        f.addedAt DESC
+                    OFFSET :offset ROWS
+                    FETCH NEXT :per_page ROWS ONLY
+                """), {
+                    "user_id": user_id, 
+                    "search": f"%{search_query}%",
+                    "exact_search": f"{search_query}%",
+                    "start_search": f"{search_query}%",
+                    "offset": favorites_offset, 
+                    "per_page": per_page
+                }).mappings().all()
+            else:
+                # Query không tìm kiếm
+                favorites_total = conn.execute(text("""
+                    SELECT COUNT(*) FROM [cine].[Favorite] WHERE userId = :user_id
+                """), {"user_id": user_id}).scalar()
+                
+                favorites_offset = (page - 1) * per_page
+                favorites = conn.execute(text("""
+                    SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, f.addedAt
+                    FROM [cine].[Favorite] f
+                    JOIN [cine].[Movie] m ON f.movieId = m.movieId
+                    WHERE f.userId = :user_id
+                    ORDER BY f.addedAt DESC
+                    OFFSET :offset ROWS
+                    FETCH NEXT :per_page ROWS ONLY
+                """), {"user_id": user_id, "offset": favorites_offset, "per_page": per_page}).mappings().all()
+            
+            # Tạo pagination
+            favorites_pages = (favorites_total + per_page - 1) // per_page
+            pagination = {
+                "page": page,
+                "per_page": per_page,
+                "total": favorites_total,
+                "pages": favorites_pages,
+                "has_prev": page > 1,
+                "has_next": page < favorites_pages,
+                "prev_num": page - 1 if page > 1 else None,
+                "next_num": page + 1 if page < favorites_pages else None
+            }
+            
+            # Format data
+            movies = []
+            for movie in favorites:
+                movies.append({
+                    "id": movie["movieId"],
+                    "title": movie["title"],
+                    "poster": movie.get("posterUrl") if movie.get("posterUrl") and movie.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={movie['title'][:20].replace(' ', '+')}",
+                    "year": movie.get("releaseYear"),
+                    "addedAt": movie.get("addedAt").strftime('%d/%m/%Y') if movie.get("addedAt") else 'N/A'
+                })
+            
+            return jsonify({
+                "success": True,
+                "movies": movies,
+                "pagination": pagination,
+                "search_query": search_query
+            })
+            
+    except Exception as e:
+        print(f"Error searching favorites: {e}")
+        return jsonify({"success": False, "message": "Có lỗi xảy ra"})
+
+
 
 
 
@@ -1191,7 +1744,6 @@ def admin_movies():
 @admin_required
 def admin_movie_create():
     """Tạo phim mới với validation đầy đủ"""
-    import re
     from datetime import datetime
     
     if request.method == "POST":
