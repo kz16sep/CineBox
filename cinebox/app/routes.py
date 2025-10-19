@@ -82,10 +82,20 @@ def home():
                 for r in rows
             ]
             
-            # Tạo carousel_movies từ 6 phim mới nhất (luôn lấy từ tất cả phim, không phụ thuộc genre)
-            carousel_rows = conn.execute(text(
-                "SELECT TOP 6 movieId, title, posterUrl, backdropUrl, overview, createdAt FROM cine.Movie ORDER BY createdAt DESC, movieId DESC"
-            )).mappings().all()
+            # Tạo carousel_movies từ 6 phim mới nhất (theo thể loại nếu có)
+            if genre_filter:
+                carousel_rows = conn.execute(text("""
+                    SELECT TOP 6 m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt
+                    FROM cine.Movie m
+                    JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                    JOIN cine.Genre g ON mg.genreId = g.genreId
+                    WHERE g.name = :genre
+                    ORDER BY m.createdAt DESC, m.movieId DESC
+                """), {"genre": genre_filter}).mappings().all()
+            else:
+                carousel_rows = conn.execute(text(
+                    "SELECT TOP 6 movieId, title, posterUrl, backdropUrl, overview, createdAt FROM cine.Movie ORDER BY createdAt DESC, movieId DESC"
+                )).mappings().all()
             
             carousel_movies = [
                 {

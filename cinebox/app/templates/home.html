@@ -1,37 +1,66 @@
 {% extends 'base.html' %}
-{% block title %}Trang chủ · CineBox{% endblock %}
+{% block title %}{% if genre_filter %}{{ genre_filter }} · CineBox{% else %}Trang chủ · CineBox{% endif %}{% endblock %}
 {% block content %}
 <section class="hero">
   <div class="hero-carousel">
-    {% for movie in carousel_movies %}
-    <div class="hero-slide {{ 'active' if loop.first else '' }}" data-slide="{{ loop.index0 }}">
-      <div class="hero-backdrop" style="background-image: url('{{ movie.backdrop }}')"></div>
-      <div class="hero-overlay"></div>
-      <div class="hero-content">
-        <div class="hero-poster">
-          <img src="{{ movie.poster }}" alt="{{ movie.title }}" class="poster-img">
-        </div>
-        <div class="hero-text">
-          <span class="badge">NEW</span>
-          <h1>{{ movie.title }}</h1>
-          <p class="hero-description">{{ movie.description }}</p>
-          <div class="hero-actions">
-            <a class="btn btn-primary" href="{{ url_for('main.watch', movie_id=movie.id) }}">
-              <span class="btn-icon">▶</span>
-              Xem ngay
-            </a>
-            <a class="btn btn-secondary" href="{{ url_for('main.detail', movie_id=movie.id) }}">
-              <span class="btn-icon">+</span>
-              Thêm vào danh sách
-            </a>
+    {% if carousel_movies %}
+      {% for movie in carousel_movies %}
+      <div class="hero-slide {{ 'active' if loop.first else '' }}" data-slide="{{ loop.index0 }}">
+        <div class="hero-backdrop" style="background-image: url('{{ movie.backdrop }}')"></div>
+        <div class="hero-overlay"></div>
+        <div class="hero-content">
+          <div class="hero-poster">
+            <img src="{{ movie.poster }}" alt="{{ movie.title }}" class="poster-img" onerror="this.src='/static/img/dune2.jpg'">
+          </div>
+          <div class="hero-text">
+            <span class="badge">{% if genre_filter %}{{ genre_filter }}{% else %}NEW{% endif %}</span>
+            <h1>{{ movie.title }}</h1>
+            <p class="hero-description">{{ movie.description }}</p>
+            <div class="hero-actions">
+              <a class="btn btn-primary" href="{{ url_for('main.watch', movie_id=movie.id) }}">
+                <span class="btn-icon">▶</span>
+                Xem ngay
+              </a>
+              <a class="btn btn-secondary" href="{{ url_for('main.detail', movie_id=movie.id) }}">
+                <span class="btn-icon">+</span>
+                Thêm vào danh sách
+              </a>
+            </div>
           </div>
         </div>
       </div>
-    </div>
-    {% endfor %}
+      {% endfor %}
+    {% else %}
+      <!-- Fallback khi không có phim -->
+      <div class="hero-slide active">
+        <div class="hero-backdrop" style="background-image: url('/static/img/dune2_backdrop.jpg')"></div>
+        <div class="hero-overlay"></div>
+        <div class="hero-content">
+          <div class="hero-poster">
+            <img src="/static/img/dune2.jpg" alt="Dune 2" class="poster-img">
+          </div>
+          <div class="hero-text">
+            <span class="badge">{% if genre_filter %}{{ genre_filter }}{% else %}NEW{% endif %}</span>
+            <h1>Dune: Part Two (2024)</h1>
+            <p class="hero-description">Paul Atreides unites with Chani and the Fremen while seeking revenge against the conspirators who destroyed his family.</p>
+            <div class="hero-actions">
+              <a class="btn btn-primary" href="#">
+                <span class="btn-icon">▶</span>
+                Xem ngay
+              </a>
+              <a class="btn btn-secondary" href="#">
+                <span class="btn-icon">+</span>
+                Thêm vào danh sách
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    {% endif %}
   </div>
   
   <!-- Carousel Controls -->
+  {% if carousel_movies and carousel_movies|length > 1 %}
   <div class="carousel-controls">
     <button class="carousel-btn prev-btn" onclick="changeSlide(-1)">‹</button>
     <div class="carousel-dots">
@@ -41,6 +70,7 @@
     </div>
     <button class="carousel-btn next-btn" onclick="changeSlide(1)">›</button>
   </div>
+  {% endif %}
 </section>
 
 <!-- Genre Filter Menu -->
@@ -93,6 +123,20 @@
 {% if not genre_filter %}
 <section>
   <h3>🆕 Phim mới nhất</h3>
+  <div class="cards">
+    {% for m in latest_movies %}
+    <a class="card" href="{{ url_for('main.detail', movie_id=m.id) }}">
+      <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
+      <div class="card-title">{{ m.title }}</div>
+      <div class="stars">★★★★★</div>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+{% else %}
+<!-- Hiển thị phim mới nhất của thể loại được chọn -->
+<section>
+  <h3>🆕 Phim {{ genre_filter }} mới nhất</h3>
   <div class="cards">
     {% for m in latest_movies %}
     <a class="card" href="{{ url_for('main.detail', movie_id=m.id) }}">
@@ -207,7 +251,7 @@
 /* Hero Section */
 .hero {
   position: relative;
-  min-height: 50vh;
+  min-height: 65vh;
   margin-bottom: 30px;
   border-radius: 15px;
   overflow: hidden;
@@ -262,7 +306,7 @@
   z-index: 2;
   display: flex;
   align-items: center;
-  min-height: 50vh;
+  min-height: 65vh;
   padding: 30px;
   max-width: 1000px;
   margin: 0 auto;
@@ -377,6 +421,7 @@
   display: flex;
   gap: 20px;
   flex-wrap: wrap;
+  margin-bottom: 60px; /* Add space to prevent overlap with carousel controls */
 }
 
 .hero-actions .btn {
@@ -432,7 +477,8 @@
   transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 15px;
+  justify-content: center;
+  gap: 40px;
   z-index: 10;
 }
 
@@ -511,6 +557,7 @@
   
   .carousel-controls {
     bottom: 10px;
+    gap: 30px;
   }
   
   .carousel-btn {
