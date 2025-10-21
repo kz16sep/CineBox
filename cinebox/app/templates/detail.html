@@ -28,7 +28,10 @@
           {% if movie.year %}<span class="meta-item">📅 {{ movie.year }}</span>{% endif %}
           {% if movie.duration %}<span class="meta-item">⏱️ {{ movie.duration }}</span>{% endif %}
           {% if movie.genres %}<span class="meta-item">🎭 {{ ', '.join(movie.genres|map(attribute='name')) }}</span>{% endif %}
-          <span class="meta-item">⭐ 5.0</span>
+          <span class="meta-item">
+            <span id="avg-rating-display">⭐ 0.0</span>
+            <span id="rating-count">(0 đánh giá)</span>
+          </span>
         </div>
         
         <div class="movie-actions">
@@ -38,12 +41,32 @@
           <a class="btn btn-secondary btn-trailer" href="{{ url_for('main.watch', movie_id=movie.id) }}?type=trailer">
             🎬 Xem trailer
           </a>
-          <button class="btn btn-secondary" onclick="addToWatchlist({{ movie.id }})">
-            📋 Xem sau
+          <button id="watchlistBtn" class="btn btn-secondary" onclick="toggleWatchlist({{ movie.id }})">
+            <span id="watchlistIcon">📋</span>
+            <span id="watchlistText">Xem sau</span>
           </button>
-          <button class="btn btn-secondary" onclick="addToFavorites({{ movie.id }})">
-            ❤️ Yêu thích
+          <button id="favoriteBtn" class="btn btn-secondary" onclick="toggleFavorite({{ movie.id }})">
+            <span id="favoriteIcon">🤍</span>
+            <span id="favoriteText">Yêu thích</span>
           </button>
+        </div>
+        
+        <!-- Rating Section -->
+        <div class="rating-section">
+          <h3>Đánh giá phim</h3>
+          <div class="rating-container">
+            <div class="star-rating" id="star-rating">
+              <span class="star" data-rating="1">★</span>
+              <span class="star" data-rating="2">★</span>
+              <span class="star" data-rating="3">★</span>
+              <span class="star" data-rating="4">★</span>
+              <span class="star" data-rating="5">★</span>
+            </div>
+            <div class="rating-info">
+              <span id="user-rating-text">Chưa đánh giá</span>
+              <button id="delete-rating-btn" class="btn-delete-rating" style="display: none;">Xóa đánh giá</button>
+            </div>
+          </div>
         </div>
         
         <!-- Movie Genres Section -->
@@ -79,19 +102,29 @@
   <div class="cards-container">
     <div class="cards" id="relatedCards">
     {% for m in related %}
-    <a class="card" href="{{ url_for('main.detail', movie_id=m.movieId) }}">
-      <div class="poster" style="background-image:url('{{ m.posterUrl }}')"></div>
-      <div class="card-content">
-        <div class="card-title">{{ m.title }}{% if m.releaseYear %} ({{ m.releaseYear }}){% endif %}</div>
-        {% if m.similarity %}
-        <div class="similarity-score">
-          <span class="similarity-label">Độ tương đồng:</span>
-          <span class="similarity-value">{{ "%.1f"|format(m.similarity * 100) }}%</span>
+    <div class="card">
+      <a href="{{ url_for('main.detail', movie_id=m.movieId) }}" class="card-link">
+        <div class="poster" style="background-image:url('{{ m.posterUrl }}')"></div>
+        <div class="card-content">
+          <div class="card-title">{{ m.title }}</div>
+          <div class="card-meta">
+            {% if m.releaseYear %}<span class="year">{{ m.releaseYear }}</span>{% endif %}
+            {% if m.country %}<span class="country">{{ m.country }}</span>{% endif %}
+          </div>
+          {% if m.genres %}<div class="card-genres">{{ m.genres }}</div>{% endif %}
+          {% if m.similarity %}
+          <div class="similarity-score">
+            <span class="similarity-label">Độ tương đồng:</span>
+            <span class="similarity-value">{{ "%.1f"|format(m.similarity * 100) }}%</span>
+          </div>
+          {% endif %}
+          <div class="movie-rating" data-movie-id="{{ m.id }}">
+            <span class="rating-stars">⭐ 0.0</span>
+            <!-- <span class="rating-count">(0)</span> -->
+          </div>
         </div>
-        {% endif %}
-        <div class="stars">★★★★★</div>
-      </div>
-    </a>
+      </a>
+    </div>
     {% endfor %}
     </div>
   </div>
@@ -311,6 +344,34 @@
 .btn-secondary:hover {
   background: rgba(255, 255, 255, 0.2);
   border-color: rgba(255, 255, 255, 0.5);
+}
+
+.btn-secondary.favorited {
+  background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+  border-color: #ff6b6b;
+  color: white;
+  box-shadow: 0 4px 15px rgba(255, 107, 107, 0.4);
+}
+
+.btn-secondary.favorited:hover {
+  background: linear-gradient(135deg, #ff7b7b, #ff6b24);
+  border-color: #ff7b7b;
+  box-shadow: 0 6px 20px rgba(255, 107, 107, 0.5);
+  transform: translateY(-2px);
+}
+
+.btn-secondary.watchlisted {
+  background: linear-gradient(135deg, #4CAF50, #45a049);
+  border-color: #4CAF50;
+  color: white;
+  box-shadow: 0 4px 15px rgba(76, 175, 80, 0.4);
+}
+
+.btn-secondary.watchlisted:hover {
+  background: linear-gradient(135deg, #45a049, #4CAF50);
+  border-color: #4CAF50;
+  box-shadow: 0 6px 20px rgba(76, 175, 80, 0.5);
+  transform: translateY(-2px);
 }
 
 .movie-description {
@@ -637,6 +698,213 @@
     0 0 20px rgba(59, 130, 246, 0.3),
     inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
+
+/* Rating Section Styles */
+.rating-section {
+  margin: 30px 0;
+  padding: 25px 0;
+  border-top: 2px solid rgba(255, 193, 7, 0.3);
+  background: linear-gradient(135deg, rgba(255, 193, 7, 0.05), rgba(255, 152, 0, 0.05));
+  border-radius: 15px;
+  position: relative;
+  overflow: hidden;
+}
+
+.rating-section::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #ffc107, #ff9800, #ff5722, #e91e63);
+  animation: shimmer 3s ease-in-out infinite;
+}
+
+.rating-section h3 {
+  color: #fff;
+  margin-bottom: 20px;
+  font-size: 1.4em;
+  font-weight: 700;
+  text-align: left;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  position: relative;
+}
+
+.rating-section h3::after {
+  content: '⭐';
+  margin-left: 10px;
+  font-size: 1.2em;
+}
+
+.rating-container {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  align-items: flex-start;
+}
+
+.star-rating {
+  display: flex;
+  gap: 5px;
+  font-size: 2rem;
+  cursor: pointer;
+}
+
+.star {
+  color: #666;
+  transition: all 0.3s ease;
+  user-select: none;
+  position: relative;
+}
+
+.star:hover,
+.star.active {
+  color: #ffc107;
+  transform: scale(1.1);
+  text-shadow: 0 0 10px rgba(255, 193, 7, 0.5);
+}
+
+.star:hover ~ .star {
+  color: #666;
+}
+
+.rating-info {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  flex-wrap: wrap;
+}
+
+#user-rating-text {
+  color: #fff;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.btn-delete-rating {
+  background: rgba(244, 67, 54, 0.8);
+  border: none;
+  color: white;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  backdrop-filter: blur(10px);
+}
+
+.btn-delete-rating:hover {
+  background: rgba(244, 67, 54, 1);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(244, 67, 54, 0.4);
+}
+
+#avg-rating-display {
+  color: #ffc107;
+  font-weight: bold;
+  font-size: 1.1rem;
+}
+
+#rating-count {
+  color: #ccc;
+  font-size: 0.9rem;
+  margin-left: 5px;
+}
+
+
+/* Responsive */
+@media (max-width: 768px) {
+  .rating-section {
+    margin: 20px 0;
+    padding: 20px 0;
+  }
+  
+  .star-rating {
+    font-size: 1.8rem;
+  }
+  
+  .rating-container {
+    align-items: center;
+  }
+  
+  .rating-info {
+    justify-content: center;
+    text-align: center;
+  }
+  
+  .comments-section {
+    margin: 30px 0;
+    padding: 20px 0;
+  }
+  
+  .comment-form {
+    padding: 15px;
+  }
+  
+  .comment-item {
+    padding: 15px;
+  }
+  
+  .replies {
+    margin-left: 10px;
+    padding-left: 10px;
+  }
+}
+
+/* Fix text color and remove underlines for related movies cards */
+.card-link {
+  text-decoration: none !important;
+  color: inherit !important;
+}
+
+.card-link:hover {
+  text-decoration: none !important;
+  color: inherit !important;
+}
+
+.card-title {
+  color: #fff !important;
+}
+
+.card-meta {
+  color: #fff !important;
+}
+
+.card-genres {
+  color: #fff !important;
+}
+
+.movie-rating {
+  color: #fff !important;
+}
+
+/* Fix pagination text color */
+.pagination-info {
+  color: #fff !important;
+}
+
+.pagination-info span {
+  color: #fff !important;
+}
+
+.btn-pagination {
+  color: #fff !important;
+}
+
+.page-number {
+  color: #fff !important;
+}
+
+.page-number.current {
+  color: #fff !important;
+}
+
+.page-ellipsis {
+  color: #fff !important;
+}
+
 </style>
 
 <script>
@@ -697,6 +965,118 @@ function addToFavorites(movieId) {
   });
 }
 
+function toggleFavorite(movieId) {
+  fetch(`/toggle-favorite/${movieId}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    }
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      updateFavoriteButton(data.is_favorite);
+      showToast('✅ ' + data.message, 'success');
+    } else {
+      showToast('❌ ' + data.message, 'error');
+    }
+  })
+  .catch(error => {
+    console.error('Error:', error);
+    showToast('❌ Có lỗi xảy ra khi chuyển đổi trạng thái yêu thích', 'error');
+  });
+}
+
+function updateFavoriteButton(isFavorite) {
+  const favoriteIcon = document.getElementById('favoriteIcon');
+  const favoriteText = document.getElementById('favoriteText');
+  const favoriteBtn = document.getElementById('favoriteBtn');
+  
+  if (isFavorite) {
+    favoriteIcon.textContent = '❤️';
+    favoriteText.textContent = 'Đã yêu thích';
+    favoriteBtn.classList.add('favorited');
+  } else {
+    favoriteIcon.textContent = '🤍';
+    favoriteText.textContent = 'Yêu thích';
+    favoriteBtn.classList.remove('favorited');
+  }
+}
+
+function checkFavoriteStatus(movieId) {
+  fetch(`/check-favorite/${movieId}`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    }
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      updateFavoriteButton(data.is_favorite);
+    }
+  })
+  .catch(error => {
+    console.error('Error checking favorite status:', error);
+  });
+}
+
+function toggleWatchlist(movieId) {
+  fetch(`/toggle-watchlist/${movieId}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    }
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      updateWatchlistButton(data.is_watchlist);
+      showToast('✅ ' + data.message, 'success');
+    } else {
+      showToast('❌ ' + data.message, 'error');
+    }
+  })
+  .catch(error => {
+    console.error('Error:', error);
+    showToast('❌ Có lỗi xảy ra khi chuyển đổi trạng thái xem sau', 'error');
+  });
+}
+
+function updateWatchlistButton(isWatchlist) {
+  const watchlistIcon = document.getElementById('watchlistIcon');
+  const watchlistText = document.getElementById('watchlistText');
+  const watchlistBtn = document.getElementById('watchlistBtn');
+  
+  if (isWatchlist) {
+    watchlistIcon.textContent = '✅';
+    watchlistText.textContent = 'Đã thêm';
+    watchlistBtn.classList.add('watchlisted');
+  } else {
+    watchlistIcon.textContent = '📋';
+    watchlistText.textContent = 'Xem sau';
+    watchlistBtn.classList.remove('watchlisted');
+  }
+}
+
+function checkWatchlistStatus(movieId) {
+  fetch(`/check-watchlist/${movieId}`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    }
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      updateWatchlistButton(data.is_watchlist);
+    }
+  })
+  .catch(error => {
+    console.error('Error checking watchlist status:', error);
+  });
+}
+
 // Scroll cards function
 function scrollCards(direction) {
   const cardsContainer = document.getElementById('relatedCards');
@@ -751,7 +1131,180 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initial update
     updateScrollButtons();
   }
+  
+  // Check favorite and watchlist status when page loads
+  const movieId = {{ movie.id }};
+  if (movieId) {
+    checkFavoriteStatus(movieId);
+    checkWatchlistStatus(movieId);
+    getRating(movieId);
+  }
+  
+  // Load ratings for all related movies
+  loadAllRatings();
+  
+  // Star rating event listeners
+  const stars = document.querySelectorAll('.star');
+  stars.forEach(star => {
+    star.addEventListener('click', function() {
+      const rating = parseInt(this.dataset.rating);
+      submitRating(movieId, rating);
+    });
+    
+    star.addEventListener('mouseenter', function() {
+      const rating = parseInt(this.dataset.rating);
+      updateStarRating(rating);
+    });
+  });
+  
+  // Star rating container events
+  const starRating = document.getElementById('star-rating');
+  starRating.addEventListener('mouseleave', function() {
+    const currentRating = document.querySelector('.star.active') ? 
+      parseInt(document.querySelector('.star.active').dataset.rating) : 0;
+    updateStarRating(currentRating);
+  });
+  
+  // Delete rating button
+  const deleteBtn = document.getElementById('delete-rating-btn');
+  deleteBtn.addEventListener('click', function() {
+    deleteRating(movieId);
+  });
+   
 });
+
+// Rating functions
+function submitRating(movieId, rating) {
+  fetch(`/submit-rating/${movieId}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ rating: rating })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      showToast(data.message, 'success');
+      updateRatingDisplay(data.user_rating, data.avg_rating, data.total_ratings);
+      updateStarRating(data.user_rating);
+    } else {
+      showToast(data.message, 'error');
+    }
+  })
+  .catch(error => {
+    console.error('Error:', error);
+    showToast('Có lỗi xảy ra khi đánh giá', 'error');
+  });
+}
+
+function deleteRating(movieId) {
+  fetch(`/delete-rating/${movieId}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    }
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      showToast(data.message, 'success');
+      updateRatingDisplay(0, data.avg_rating, data.total_ratings);
+      updateStarRating(0);
+    } else {
+      showToast(data.message, 'error');
+    }
+  })
+  .catch(error => {
+    console.error('Error:', error);
+    showToast('Có lỗi xảy ra khi xóa đánh giá', 'error');
+  });
+}
+
+function getRating(movieId) {
+  fetch(`/get-rating/${movieId}`)
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      updateRatingDisplay(data.user_rating, data.avg_rating, data.total_ratings);
+      updateStarRating(data.user_rating);
+    }
+  })
+  .catch(error => {
+    console.error('Error getting rating:', error);
+  });
+}
+
+function updateRatingDisplay(userRating, avgRating, totalRatings) {
+  const avgRatingDisplay = document.getElementById('avg-rating-display');
+  const ratingCount = document.getElementById('rating-count');
+  const userRatingText = document.getElementById('user-rating-text');
+  const deleteBtn = document.getElementById('delete-rating-btn');
+  
+  avgRatingDisplay.textContent = `⭐ ${avgRating}`;
+  ratingCount.textContent = `(${totalRatings} đánh giá)`;
+  
+  if (userRating > 0) {
+    userRatingText.textContent = `Bạn đã đánh giá: ${userRating} sao`;
+    deleteBtn.style.display = 'inline-block';
+  } else {
+    userRatingText.textContent = 'Chưa đánh giá';
+    deleteBtn.style.display = 'none';
+  }
+}
+
+function updateStarRating(rating) {
+  const stars = document.querySelectorAll('.star');
+  stars.forEach((star, index) => {
+    if (index < rating) {
+      star.classList.add('active');
+    } else {
+      star.classList.remove('active');
+    }
+  });
+}
+
+
+// Rating functions for similar movies
+function loadAllRatings() {
+  console.log('loadAllRatings called');
+  const ratingElements = document.querySelectorAll('.movie-rating[data-movie-id]');
+  console.log('Found rating elements:', ratingElements.length);
+  ratingElements.forEach(element => {
+    const movieId = element.dataset.movieId;
+    console.log('Processing movie ID:', movieId);
+    loadMovieRating(movieId, element);
+  });
+}
+
+function loadMovieRating(movieId, element) {
+  console.log('Loading rating for movie:', movieId, 'element:', element);
+  fetch(`/get-rating/${movieId}`)
+  .then(response => response.json())
+  .then(data => {
+    console.log('Rating data received:', data);
+    if (data.success) {
+      const ratingStars = element.querySelector('.rating-stars');
+      const ratingCount = element.querySelector('.rating-count');
+      
+      console.log('Found elements:', ratingStars, ratingCount);
+      
+      if (ratingStars && ratingCount) {
+        ratingStars.textContent = `⭐ ${data.avg_rating}`;
+        ratingCount.textContent = `(${data.total_ratings})`;
+        console.log('Updated rating display for movie', movieId);
+      } else {
+        console.error('Could not find rating elements for movie', movieId);
+      }
+    } else {
+      console.log('API returned success: false for movie', movieId);
+    }
+  })
+  .catch(error => {
+    console.error('Error loading rating for movie', movieId, ':', error);
+  });
+}
+
 </script>
 {% endblock %}
 

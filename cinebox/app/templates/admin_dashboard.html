@@ -73,6 +73,11 @@
   <div class="admin-actions">
     <h3>🔧 Quản lý hệ thống</h3>
     <div class="action-grid">
+      <button id="retrainBtn" class="action-card" onclick="retrainCF()" style="cursor:pointer;border:none;background:var(--panel)">
+        <div class="action-icon">🤖</div>
+        <div class="action-title">Retrain CF ngay</div>
+        <div class="action-desc">Huấn luyện lại mô hình gợi ý</div>
+      </button>
       <a href="{{ url_for('main.admin_movies') }}" class="action-card">
         <div class="action-icon">🎬</div>
         <div class="action-title">Quản lý phim</div>
@@ -313,4 +318,48 @@
   }
 }
 </style>
+<script>
+
+// Retrain CF model
+function retrainCF() {
+  const btn = document.getElementById('retrainBtn');
+  const originalTitle = btn.querySelector('.action-title').textContent;
+  btn.disabled = true;
+  btn.querySelector('.action-title').textContent = 'Đang retrain...';
+  showRetrainStatus('Đang huấn luyện lại mô hình...', 'info');
+  fetch('/api/retrain_cf_model', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        showRetrainStatus(data.message || 'Retrain thành công', 'success');
+      } else {
+        showRetrainStatus(data.message || 'Retrain thất bại', 'error');
+      }
+    })
+    .catch(() => showRetrainStatus('Lỗi gọi retrain', 'error'))
+    .finally(() => {
+      btn.disabled = false;
+      btn.querySelector('.action-title').textContent = originalTitle;
+    });
+}
+
+function showRetrainStatus(message, type) {
+  let el = document.getElementById('retrainStatus');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'retrainStatus';
+    el.style.marginTop = '10px';
+    el.style.textAlign = 'center';
+    const grid = document.querySelector('.admin-actions .action-grid');
+    if (grid && grid.parentNode) {
+      grid.parentNode.insertBefore(el, grid.nextSibling);
+    } else {
+      document.body.appendChild(el);
+    }
+  }
+  const colors = { success: '#4CAF50', error: '#f44336', info: '#9aa3b2' };
+  el.style.color = colors[type] || '#9aa3b2';
+  el.textContent = message;
+}
+</script>
 {% endblock %}

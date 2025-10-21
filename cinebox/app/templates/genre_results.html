@@ -73,7 +73,10 @@
         <div class="card-meta">
           <span class="upload-time">Movie {{ m.id }}</span>
         </div>
-          <div class="stars">★★★★★</div>
+          <div class="movie-rating" data-movie-id="{{ m.id }}">
+            <span class="rating-stars">⭐ 0.0</span>
+            <span class="rating-count">(0)</span>
+          </div>
         </div>
       </a>
       {% endfor %}
@@ -192,8 +195,12 @@
 }
 
 .pagination-info {
-  color: var(--text-secondary);
+  color: #fff !important;
   font-size: 0.9em;
+}
+
+.pagination-info span {
+  color: #fff !important;
 }
 
 .pagination-controls {
@@ -233,7 +240,7 @@
   padding: 8px 12px;
   border-radius: 6px;
   text-decoration: none;
-  color: var(--text);
+  color: #fff !important;
   background: var(--panel);
   border: 1px solid rgba(255, 255, 255, 0.1);
   transition: all 0.2s ease;
@@ -249,12 +256,12 @@
 
 .page-number.current {
   background: var(--primary);
-  color: white;
+  color: #fff !important;
   font-weight: bold;
 }
 
 .page-ellipsis {
-  color: var(--text-secondary);
+  color: #fff !important;
   padding: 8px 4px;
 }
 
@@ -293,6 +300,24 @@
     padding: 15px;
   }
 }
+
+.movie-rating {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  font-size: 0.9rem;
+}
+
+.rating-stars {
+  color: #ffc107;
+  font-weight: bold;
+}
+
+.rating-count {
+  color: #ccc;
+  font-size: 0.8rem;
+}
 </style>
 
 <script>
@@ -302,7 +327,38 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Attach pagination listeners
     attachPaginationListeners();
+    
+    // Load ratings for all movies
+    // loadAllRatings(); // disabled for consistent server-rendered ratings
 });
+
+// Rating functions
+function loadAllRatings() {
+  const ratingElements = document.querySelectorAll('.movie-rating[data-movie-id]');
+  ratingElements.forEach(element => {
+    const movieId = element.dataset.movieId;
+    loadMovieRating(movieId, element);
+  });
+}
+
+function loadMovieRating(movieId, element) {
+  fetch(`/get-rating/${movieId}`)
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      const ratingStars = element.querySelector('.rating-stars');
+      const ratingCount = element.querySelector('.rating-count');
+      const normalizedAvg = (data.avgRating ?? data.avg_rating ?? 0);
+      const normalizedCount = (data.ratingCount ?? data.total_ratings ?? 0);
+      
+      ratingStars.textContent = `⭐ ${normalizedAvg}`;
+      ratingCount.textContent = `(${normalizedCount})`;
+    }
+  })
+  .catch(error => {
+    console.error('Error loading rating for movie', movieId, ':', error);
+  });
+}
 
 function attachGenreFilterListeners() {
     const genreLinks = document.querySelectorAll('.genre-btn');

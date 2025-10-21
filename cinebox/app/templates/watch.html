@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}{% if request.args.get('type') == 'trailer' %}Trailer: {% endif %}{{ movie.title }} · CineBox{% endblock %}
 {% block content %}
+<!-- eslint-disable -->
 <section class="watch">
   <!-- Back to Detail Button -->
   <div class="back-to-detail">
@@ -15,6 +16,12 @@
     {% if request.args.get('type') == 'trailer' %}
       <span class="trailer-badge">🎬 TRAILER</span>
     {% endif %}
+  </div>
+  
+  <!-- View Count -->
+  <div class="view-count">
+    <span class="view-icon">👁️</span>
+    <span class="view-text">{{ "{:,}".format(movie.viewCount) }} lượt xem</span>
   </div>
   
   <!-- Video Player -->
@@ -68,6 +75,47 @@
   </div>
   {% endif %}
 
+  <!-- Rating Section -->
+  <div class="rating-section">
+    <h3>Đánh giá phim</h3>
+    <div class="rating-container">
+      <div class="rating-info">
+        <div class="current-rating">
+          <span id="avg-rating-display">⭐ 0.0</span>
+          <span id="rating-count">(0 đánh giá)</span>
+        </div>
+        <div class="user-rating-info">
+          <span id="user-rating-text">Chưa đánh giá</span>
+        </div>
+      </div>
+      <div class="star-rating" id="star-rating" data-movie-id="{{ movie.id }}" data-user-id="{{ session.get('user_id', 0) }}" data-movie-id-fallback="{{ movie.id }}">
+        <span class="star" data-rating="1">★</span>
+        <span class="star" data-rating="2">★</span>
+        <span class="star" data-rating="3">★</span>
+        <span class="star" data-rating="4">★</span>
+        <span class="star" data-rating="5">★</span>
+      </div>
+      <div class="rating-actions">
+        <button id="delete-rating-btn" class="btn-delete-rating" style="display: none;">Xóa đánh giá</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Comments Section -->
+  <div class="comments-section">
+    <h3>💬 Bình luận</h3>
+    <div class="comment-form">
+      <textarea id="comment-input" placeholder="Viết bình luận của bạn..." maxlength="1000"></textarea>
+      <div class="comment-actions">
+        <span id="char-count">0/1000</span>
+        <button id="submit-comment-btn" class="btn-submit-comment">Gửi bình luận</button>
+      </div>
+    </div>
+    <div id="comments-container" class="comments-container">
+      <!-- Comments will be loaded here -->
+    </div>
+  </div>
+
   <!-- Phim liên quan (Related Movies) -->
   {% if related_movies %}
   <div class="related-section">
@@ -76,17 +124,29 @@
     <button class="scroll-btn scroll-left" onclick="scrollCards('left')">‹</button>
     <div class="cards" id="relatedCards">
       {% for m in related_movies %}
-      <a class="card" href="{{ url_for('main.watch', movie_id=m.movieId) }}">
-        <div class="poster" style="background-image:url('{{ m.posterUrl }}')"></div>
-        <div class="card-title">{{ m.title }}{% if m.releaseYear %} ({{ m.releaseYear }}){% endif %}</div>
-        {% if m.similarity %}
-        <div class="similarity-score">
-          <span class="similarity-label">Độ tương đồng:</span>
-          <span class="similarity-value">{{ "%.1f"|format(m.similarity * 100) }}%</span>
-        </div>
-        {% endif %}
-        <div class="stars">★★★★★</div>
-      </a>
+      <div class="card">
+        <a href="{{ url_for('main.watch', movie_id=m.movieId) }}" class="card-link">
+          <div class="poster" style="background-image:url('{{ m.posterUrl }}')"></div>
+          <div class="card-content">
+            <div class="card-title">{{ m.title }}</div>
+            <div class="card-meta">
+              {% if m.releaseYear %}<span class="year">{{ m.releaseYear }}</span>{% endif %}
+              {% if m.country %}<span class="country">{{ m.country }}</span>{% endif %}
+            </div>
+            {% if m.genres %}<div class="card-genres">{{ m.genres }}</div>{% endif %}
+            {% if m.similarity %}
+            <div class="similarity-score">
+              <span class="similarity-label">Độ tương đồng:</span>
+              <span class="similarity-value">{{ "%.1f"|format(m.similarity * 100) }}%</span>
+            </div>
+            {% endif %}
+            <div class="movie-rating" data-movie-id="{{ m.id }}">
+              <span class="rating-stars">⭐ 0.0</span>
+              <!-- <span class="rating-count">(0)</span> -->
+            </div>
+          </div>
+        </a>
+      </div>
       {% endfor %}
     </div>
     <button class="scroll-btn scroll-right" onclick="scrollCards('right')">›</button>
@@ -126,6 +186,39 @@
   text-transform: uppercase;
   letter-spacing: 1px;
   box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3);
+}
+
+.view-count {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 20px 0;
+  padding: 12px 20px;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(147, 51, 234, 0.1));
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 25px;
+  backdrop-filter: blur(10px);
+  width: fit-content;
+  transition: all 0.3s ease;
+}
+
+.view-count:hover {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(147, 51, 234, 0.2));
+  border-color: rgba(59, 130, 246, 0.5);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.2);
+}
+
+.view-icon {
+  font-size: 1.2rem;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+}
+
+.view-text {
+  color: #e2e8f0;
+  font-size: 1rem;
+  font-weight: 600;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
 .video-container {
@@ -534,9 +627,494 @@
     height: 200px;
   }
 }
+
+.movie-rating {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  font-size: 0.9rem;
+}
+
+.rating-stars {
+  color: #ffc107;
+  font-weight: bold;
+}
+
+.rating-count {
+  color: #ccc;
+  font-size: 0.8rem;
+}
+
+/* Rating Section Styles for Watch Page */
+.rating-section {
+  margin: 30px 0;
+  padding: 25px;
+  border-top: 2px solid rgba(255, 193, 7, 0.3);
+  background: linear-gradient(135deg, rgba(255, 193, 7, 0.05), rgba(255, 152, 0, 0.05));
+  border-radius: 15px;
+  position: relative;
+  overflow: hidden;
+}
+
+.rating-section::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #ffc107, #ff9800, #ff5722, #e91e63);
+  animation: shimmer 3s ease-in-out infinite;
+}
+
+.rating-section h3 {
+  color: #fff;
+  margin-bottom: 20px;
+  font-size: 1.4em;
+  font-weight: 700;
+  text-align: left;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  position: relative;
+}
+
+.rating-section h3::after {
+  content: '⭐';
+  margin-left: 10px;
+  font-size: 1.2em;
+}
+
+.rating-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.rating-info {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.current-rating {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 1.1rem;
+}
+
+#avg-rating-display {
+  color: #ffc107;
+  font-weight: bold;
+  font-size: 1.2rem;
+}
+
+#rating-count {
+  color: #ccc;
+  font-size: 1rem;
+}
+
+.user-rating-info {
+  margin-top: 5px;
+}
+
+#user-rating-text {
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.star-rating {
+  display: flex;
+  gap: 8px;
+  font-size: 2.5rem;
+  cursor: pointer;
+  margin: 10px 0;
+}
+
+.star {
+  color: #666;
+  transition: all 0.3s ease;
+  user-select: none;
+  position: relative;
+}
+
+.star:hover,
+.star.active {
+  color: #ffc107;
+  transform: scale(1.1);
+  text-shadow: 0 0 10px rgba(255, 193, 7, 0.5);
+}
+
+.star:hover ~ .star {
+  color: #666;
+}
+
+.rating-actions {
+  display: flex;
+  gap: 15px;
+  align-items: center;
+}
+
+.btn-delete-rating {
+  background: rgba(244, 67, 54, 0.8);
+  border: none;
+  color: white;
+  padding: 10px 20px;
+  border-radius: 25px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  backdrop-filter: blur(10px);
+}
+
+.btn-delete-rating:hover {
+  background: rgba(244, 67, 54, 1);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(244, 67, 54, 0.4);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .rating-section {
+    margin: 20px 0;
+    padding: 20px;
+  }
+  
+  .star-rating {
+    font-size: 2rem;
+  }
+  
+  .rating-container {
+    align-items: center;
+  }
+  
+  .rating-info {
+    text-align: center;
+  }
+}
+
+/* Comments Section Styles */
+.comments-section {
+  margin: 40px 0;
+  padding: 30px 0;
+  border-top: 2px solid rgba(59, 130, 246, 0.3);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.05), rgba(147, 51, 234, 0.05));
+  border-radius: 15px;
+  position: relative;
+  overflow: hidden;
+}
+
+.comments-section::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899, #f59e0b);
+  animation: shimmer 3s ease-in-out infinite;
+}
+
+.comments-section h3 {
+  color: #fff;
+  margin-bottom: 25px;
+  font-size: 1.5em;
+  font-weight: 700;
+  text-align: left;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  position: relative;
+}
+
+.comment-form {
+  margin-bottom: 30px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 20px;
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+#comment-input {
+  width: 100%;
+  min-height: 100px;
+  padding: 15px;
+  border: 2px solid rgba(59, 130, 246, 0.3);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.3);
+  color: #fff;
+  font-size: 1rem;
+  font-family: inherit;
+  resize: vertical;
+  transition: all 0.3s ease;
+}
+
+#comment-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+#comment-input::placeholder {
+  color: #9ca3af;
+}
+
+.comment-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+}
+
+#char-count {
+  color: #9ca3af;
+  font-size: 0.9rem;
+}
+
+.btn-submit-comment {
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  border: none;
+  color: white;
+  padding: 12px 24px;
+  border-radius: 25px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+}
+
+.btn-submit-comment:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4);
+}
+
+.btn-submit-comment:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.comments-container {
+  max-height: 600px;
+  overflow-y: auto;
+  padding-right: 10px;
+}
+
+.comment-item {
+  background: rgba(255, 255, 255, 0.05);
+  margin-bottom: 15px;
+  padding: 20px;
+  border-radius: 12px;
+  border-left: 4px solid #3b82f6;
+  backdrop-filter: blur(10px);
+  transition: all 0.3s ease;
+}
+
+.comment-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  transform: translateX(5px);
+}
+
+.comment-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.comment-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-weight: bold;
+  margin-right: 12px;
+  font-size: 1.1rem;
+}
+
+.comment-user {
+  color: #fff;
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.comment-time {
+  color: #9ca3af;
+  font-size: 0.85rem;
+  margin-left: auto;
+}
+
+.comment-content {
+  color: #e5e7eb;
+  line-height: 1.6;
+  margin-bottom: 10px;
+  word-wrap: break-word;
+}
+
+.comment-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.btn-reply, .btn-edit, .btn-delete {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #9ca3af;
+  padding: 6px 12px;
+  border-radius: 15px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.btn-reply:hover {
+  border-color: #3b82f6;
+  color: #3b82f6;
+}
+
+.btn-edit:hover {
+  border-color: #f59e0b;
+  color: #f59e0b;
+}
+
+.btn-delete:hover {
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
+.reply-form {
+  margin-top: 15px;
+  padding: 15px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  display: none;
+}
+
+.reply-form textarea {
+  width: 100%;
+  min-height: 60px;
+  padding: 10px;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.3);
+  color: #fff;
+  font-size: 0.9rem;
+  resize: vertical;
+}
+
+.reply-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+  justify-content: flex-end;
+}
+
+.edit-form {
+  margin-top: 15px;
+  padding: 15px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+}
+
+.edit-form textarea {
+  width: 100%;
+  min-height: 60px;
+  padding: 10px;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.3);
+  color: #fff;
+  font-size: 0.9rem;
+  resize: vertical;
+}
+
+.edit-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+  justify-content: flex-end;
+}
+
+.edit-actions button, .reply-actions button {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #9ca3af;
+  padding: 6px 12px;
+  border-radius: 15px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.edit-actions button:hover, .reply-actions button:hover {
+  border-color: #3b82f6;
+  color: #3b82f6;
+}
+
+.replies {
+  margin-left: 20px;
+  margin-top: 15px;
+  border-left: 2px solid rgba(59, 130, 246, 0.3);
+  padding-left: 15px;
+}
+
+.no-comments {
+  text-align: center;
+  color: #9ca3af;
+  font-style: italic;
+  padding: 40px 20px;
+}
+
+/* Fix text color and remove underlines for related movies cards */
+.card-link {
+  text-decoration: none !important;
+  color: inherit !important;
+}
+
+.card-link:hover {
+  text-decoration: none !important;
+  color: inherit !important;
+}
+
+.card-title {
+  color: #fff !important;
+}
+
+.card-meta {
+  color: #fff !important;
+}
+
+.card-genres {
+  color: #fff !important;
+}
+
+.movie-rating {
+  color: #fff !important;
+}
+
+.similarity-score {
+  color: #fff !important;
+}
+
+.similarity-label {
+  color: #fff !important;
+}
+
+.similarity-value {
+  color: #fff !important;
+}
 </style>
 
 <script>
+/* eslint-disable */
 // Scroll cards function
 function scrollCards(direction) {
   const cardsContainer = document.getElementById('relatedCards');
@@ -591,8 +1169,493 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initial update
     updateScrollButtons();
   }
-});
+  
+  // Load ratings for all movies
+  loadAllRatings();
+  
+  // Load rating for current movie
+  loadCurrentMovieRating();
+  
+  // Star rating event listeners
+  const stars = document.querySelectorAll('.star');
+  stars.forEach(star => {
+    star.addEventListener('click', function() {
+      const rating = parseInt(this.dataset.rating);
+      const starRatingElement = document.getElementById('star-rating');
+      let movieId = starRatingElement.dataset.movieId;
+      
+      // Fallback: try to get movie ID from URL or other sources
+      if (!movieId) {
+        const urlParams = new URLSearchParams(window.location.search);
+        movieId = urlParams.get('movie_id') || starRatingElement.dataset.movieIdFallback;
+      }
+      
+      console.log('Rating clicked:', rating, 'Movie ID:', movieId);
+      console.log('Star rating element:', starRatingElement);
+      console.log('Dataset:', starRatingElement.dataset);
+      
+      if (!movieId) {
+        console.error('Movie ID not found in dataset or URL');
+        showToast('Lỗi: Không tìm thấy ID phim', 'error');
+        return;
+      }
+      
+      submitRating(movieId, rating);
+    });
+    
+    star.addEventListener('mouseenter', function() {
+      const rating = parseInt(this.dataset.rating);
+      updateStarRating(rating);
+    });
+  });
+  
+  // Star rating container events
+  const starRating = document.getElementById('star-rating');
+  starRating.addEventListener('mouseleave', function() {
+    const currentRating = document.querySelector('.star.active') ? 
+      parseInt(document.querySelector('.star.active').dataset.rating) : 0;
+    updateStarRating(currentRating);
+  });
+  
+  // Delete rating button
+  const deleteBtn = document.getElementById('delete-rating-btn');
+  deleteBtn.addEventListener('click', function() {
+    const movieId = document.getElementById('star-rating').dataset.movieId;
+    deleteRating(movieId);
+  });
+  
+  // Load comments when page loads
+  loadComments(document.getElementById('star-rating').dataset.movieId);
+  
+  // Comment form event listeners
+  const commentInput = document.getElementById('comment-input');
+  const charCount = document.getElementById('char-count');
+  const submitCommentBtn = document.getElementById('submit-comment-btn');
+  
+  commentInput.addEventListener('input', function() {
+    const length = this.value.length;
+    charCount.textContent = `${length}/1000`;
+    
+    if (length > 0 && length <= 1000) {
+      submitCommentBtn.disabled = false;
+    } else {
+      submitCommentBtn.disabled = true;
+    }
+  });
+  
+  submitCommentBtn.addEventListener('click', function() {
+    const content = commentInput.value.trim();
+    if (content && content.length <= 1000) {
+      submitComment(document.getElementById('star-rating').dataset.movieId, content);
+    }
+  });
+  
+  commentInput.addEventListener('keypress', function(e) {
+    if (e.key === 'Enter' && e.ctrlKey) {
+      const content = this.value.trim();
+      if (content && content.length <= 1000) {
+        submitComment(document.getElementById('star-rating').dataset.movieId, content);
+      }
+    }
+  });
+}); // End of DOMContentLoaded
+
+// Rating functions for current movie
+function loadCurrentMovieRating() {
+  const starRatingElement = document.getElementById('star-rating');
+  let movieId = starRatingElement.dataset.movieId;
+  
+  // Fallback: try to get movie ID from URL or other sources
+  if (!movieId) {
+    const urlParams = new URLSearchParams(window.location.search);
+    movieId = urlParams.get('movie_id') || starRatingElement.dataset.movieIdFallback;
+  }
+  
+  console.log('Loading rating for movie:', movieId);
+  console.log('Star rating element:', starRatingElement);
+  console.log('Dataset:', starRatingElement.dataset);
+  
+  if (!movieId) {
+    console.error('Movie ID not found in dataset or URL');
+    return;
+  }
+  
+  fetch(`/get-rating/${movieId}`)
+  .then(response => {
+    console.log('Get rating response status:', response.status);
+    return response.json();
+  })
+  .then(data => {
+    console.log('Get rating response data:', data);
+    if (data.success) {
+      updateRatingDisplay(data.user_rating, data.avg_rating, data.total_ratings);
+      updateStarRating(data.user_rating);
+    }
+  })
+  .catch(error => {
+    console.error('Error loading rating for current movie:', error);
+  });
+}
+
+function submitRating(movieId, rating) {
+  console.log('Submitting rating:', movieId, rating);
+  fetch(`/submit-rating/${movieId}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ rating: rating })
+  })
+  .then(response => {
+    console.log('Response status:', response.status);
+    return response.json();
+  })
+  .then(data => {
+    console.log('Response data:', data);
+    if (data.success) {
+      showToast(data.message, 'success');
+      updateRatingDisplay(data.user_rating, data.avg_rating, data.total_ratings);
+      updateStarRating(data.user_rating);
+    } else {
+      showToast(data.message, 'error');
+    }
+  })
+  .catch(error => {
+    console.error('Error:', error);
+    showToast('Có lỗi xảy ra khi đánh giá', 'error');
+  });
+}
+
+function deleteRating(movieId) {
+  fetch(`/delete-rating/${movieId}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    }
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      showToast(data.message, 'success');
+      updateRatingDisplay(0, data.avg_rating, data.total_ratings);
+      updateStarRating(0);
+    } else {
+      showToast(data.message, 'error');
+    }
+  })
+  .catch(error => {
+    console.error('Error:', error);
+    showToast('Có lỗi xảy ra khi xóa đánh giá', 'error');
+  });
+}
+
+function updateRatingDisplay(userRating, avgRating, totalRatings) {
+  const avgRatingDisplay = document.getElementById('avg-rating-display');
+  const ratingCount = document.getElementById('rating-count');
+  const userRatingText = document.getElementById('user-rating-text');
+  const deleteBtn = document.getElementById('delete-rating-btn');
+  
+  avgRatingDisplay.textContent = `⭐ ${avgRating}`;
+  ratingCount.textContent = `(${totalRatings} đánh giá)`;
+  
+  if (userRating > 0) {
+    userRatingText.textContent = `Bạn đã đánh giá: ${userRating} sao`;
+    deleteBtn.style.display = 'inline-block';
+  } else {
+    userRatingText.textContent = 'Chưa đánh giá';
+    deleteBtn.style.display = 'none';
+  }
+}
+
+function updateStarRating(rating) {
+  const stars = document.querySelectorAll('.star');
+  stars.forEach((star, index) => {
+    if (index < rating) {
+      star.classList.add('active');
+    } else {
+      star.classList.remove('active');
+    }
+  });
+}
+
+function showToast(message, type = 'success') {
+  // Create toast if it doesn't exist
+  let toast = document.getElementById('toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'toast';
+    toast.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #2d3748;
+      color: white;
+      padding: 16px 24px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      z-index: 1000;
+      transform: translateX(400px);
+      transition: transform 0.3s ease-in-out;
+      max-width: 300px;
+      border-left: 4px solid #48bb78;
+    `;
+    document.body.appendChild(toast);
+  }
+  
+  // Update toast content and style
+  toast.innerHTML = `<div class="toast-content">${message}</div>`;
+  toast.className = `toast ${type}`;
+  if (type === 'error') {
+    toast.style.borderLeftColor = '#f56565';
+  } else {
+    toast.style.borderLeftColor = '#48bb78';
+  }
+  
+  // Show toast
+  toast.style.transform = 'translateX(0)';
+  
+  // Auto hide after 3 seconds
+  setTimeout(() => {
+    toast.style.transform = 'translateX(400px)';
+  }, 3000);
+}
+
+// Rating functions for related movies
+function loadAllRatings() {
+  const ratingElements = document.querySelectorAll('.movie-rating[data-movie-id]');
+  ratingElements.forEach(element => {
+    const movieId = element.dataset.movieId;
+    loadMovieRating(movieId, element);
+  });
+}
+
+function loadMovieRating(movieId, element) {
+  fetch(`/get-rating/${movieId}`)
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      const ratingStars = element.querySelector('.rating-stars');
+      const ratingCount = element.querySelector('.rating-count');
+      
+      ratingStars.textContent = `⭐ ${data.avg_rating}`;
+      ratingCount.textContent = `(${data.total_ratings})`;
+    }
+  })
+  .catch(error => {
+    console.error('Error loading rating for movie', movieId, ':', error);
+  });
+}
+
+// Comment functions
+function loadComments(movieId) {
+  fetch(`/get-comments/${movieId}`)
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      displayComments(data.comments);
+    } else {
+      console.error('Error loading comments:', data.message);
+    }
+  })
+  .catch(error => {
+    console.error('Error loading comments:', error);
+  });
+}
+
+function displayComments(comments) {
+  const container = document.getElementById('comments-container');
+  
+  if (comments.length === 0) {
+    container.innerHTML = '<div class="no-comments">Chưa có bình luận nào. Hãy là người đầu tiên bình luận!</div>';
+    return;
+  }
+  
+  container.innerHTML = comments.map(comment => renderComment(comment)).join('');
+  
+  // Attach event listeners to comment actions
+  attachCommentEventListeners();
+}
+
+function renderComment(comment) {
+  const createdAt = new Date(comment.createdAt).toLocaleString('vi-VN');
+  const userInitial = comment.user_email ? comment.user_email.charAt(0).toUpperCase() : 'U';
+  const currentUserId = parseInt(document.getElementById('star-rating').dataset.userId || '0');
+  
+  return `
+    <div class="comment-item" data-comment-id="${comment.id}">
+      <div class="comment-header">
+        <div class="comment-avatar">${userInitial}</div>
+        <div class="comment-user">${comment.user_email}</div>
+        <div class="comment-time">${createdAt}</div>
+      </div>
+      <div class="comment-content">${escapeHtml(comment.content)}</div>
+      <div class="comment-actions">
+        <button class="btn-reply" onclick="toggleReplyForm(${comment.id})">Trả lời</button>
+        ${comment.userId === currentUserId ? `
+          <button class="btn-edit" onclick="editComment(${comment.id})">Sửa</button>
+          <button class="btn-delete" onclick="deleteComment(${comment.id})">Xóa</button>
+        ` : ''}
+      </div>
+      <div class="reply-form" id="reply-form-${comment.id}" style="display: none;">
+        <textarea placeholder="Viết trả lời..." maxlength="1000"></textarea>
+        <div class="reply-actions">
+          <button onclick="cancelReply(${comment.id})">Hủy</button>
+          <button onclick="submitReply(${comment.id})">Gửi trả lời</button>
+        </div>
+      </div>
+      <div class="replies">
+        ${comment.replies ? comment.replies.map(reply => renderComment(reply)).join('') : ''}
+      </div>
+    </div>
+  `;
+}
+
+function submitComment(movieId, content, parentCommentId = null) {
+  fetch(`/submit-comment/${movieId}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ 
+      content: content,
+      parent_comment_id: parentCommentId
+    })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      showToast(data.message, 'success');
+      document.getElementById('comment-input').value = '';
+      document.getElementById('char-count').textContent = '0/1000';
+      document.getElementById('submit-comment-btn').disabled = true;
+      loadComments(movieId);
+    } else {
+      showToast(data.message, 'error');
+    }
+  })
+  .catch(error => {
+    console.error('Error:', error);
+    showToast('Có lỗi xảy ra khi gửi bình luận', 'error');
+  });
+}
+
+function toggleReplyForm(commentId) {
+  const replyForm = document.getElementById(`reply-form-${commentId}`);
+  if (replyForm.style.display === 'none') {
+    replyForm.style.display = 'block';
+    replyForm.querySelector('textarea').focus();
+  } else {
+    replyForm.style.display = 'none';
+  }
+}
+
+function submitReply(commentId) {
+  const replyForm = document.getElementById(`reply-form-${commentId}`);
+  const content = replyForm.querySelector('textarea').value.trim();
+  
+  if (content && content.length <= 1000) {
+    const movieId = document.getElementById('star-rating').dataset.movieId;
+    submitComment(movieId, content, commentId);
+    replyForm.style.display = 'none';
+    replyForm.querySelector('textarea').value = '';
+  }
+}
+
+function cancelReply(commentId) {
+  const replyForm = document.getElementById(`reply-form-${commentId}`);
+  replyForm.style.display = 'none';
+  replyForm.querySelector('textarea').value = '';
+}
+
+function editComment(commentId) {
+  const commentItem = document.querySelector(`[data-comment-id="${commentId}"]`);
+  const contentDiv = commentItem.querySelector('.comment-content');
+  const currentContent = contentDiv.textContent;
+  
+  const editForm = document.createElement('div');
+  editForm.className = 'edit-form';
+  editForm.innerHTML = `
+    <textarea maxlength="1000">${currentContent}</textarea>
+    <div class="edit-actions">
+      <button onclick="cancelEdit(${commentId})">Hủy</button>
+      <button onclick="saveEdit(${commentId})">Lưu</button>
+    </div>
+  `;
+  
+  contentDiv.style.display = 'none';
+  contentDiv.parentNode.insertBefore(editForm, contentDiv.nextSibling);
+}
+
+function saveEdit(commentId) {
+  const commentItem = document.querySelector(`[data-comment-id="${commentId}"]`);
+  const editForm = commentItem.querySelector('.edit-form');
+  const content = editForm.querySelector('textarea').value.trim();
+  
+  if (content && content.length <= 1000) {
+    fetch(`/update-comment/${commentId}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ content: content })
+    })
+    .then(response => response.json())
+    .then(data => {
+      if (data.success) {
+        showToast(data.message, 'success');
+        loadComments(document.getElementById('star-rating').dataset.movieId);
+      } else {
+        showToast(data.message, 'error');
+      }
+    })
+    .catch(error => {
+      console.error('Error:', error);
+      showToast('Có lỗi xảy ra khi cập nhật bình luận', 'error');
+    });
+  }
+}
+
+function cancelEdit(commentId) {
+  const commentItem = document.querySelector(`[data-comment-id="${commentId}"]`);
+  const editForm = commentItem.querySelector('.edit-form');
+  const contentDiv = commentItem.querySelector('.comment-content');
+  
+  editForm.remove();
+  contentDiv.style.display = 'block';
+}
+
+function deleteComment(commentId) {
+  if (confirm('Bạn có chắc chắn muốn xóa bình luận này?')) {
+    fetch(`/delete-comment/${commentId}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      }
+    })
+    .then(response => response.json())
+    .then(data => {
+      if (data.success) {
+        showToast(data.message, 'success');
+        loadComments(document.getElementById('star-rating').dataset.movieId);
+      } else {
+        showToast(data.message, 'error');
+      }
+    })
+    .catch(error => {
+      console.error('Error:', error);
+      showToast('Có lỗi xảy ra khi xóa bình luận', 'error');
+    });
+  }
+}
+
+function attachCommentEventListeners() {
+  // Event listeners are attached via onclick attributes in the HTML
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
 </script>
 {% endblock %}
-
-

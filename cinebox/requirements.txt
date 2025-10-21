@@ -3,4 +3,11 @@ Jinja2==3.1.4
 Flask-SQLAlchemy==3.1.1
 SQLAlchemy==2.0.35
 pyodbc==5.1.0
+pandas>=1.5.0
+numpy>=1.21.0
+tqdm>=4.64.0
+scikit-learn>=1.0.0
+scipy>=1.7.0
+implicit>=0.7.0
+schedule>=1.2.0
 

@@ -144,9 +144,14 @@ CREATE TABLE cine.Comment (
   userId    BIGINT NOT NULL CONSTRAINT FK_Comment_User REFERENCES cine.[User](userId) ON DELETE CASCADE,
   movieId   BIGINT NOT NULL CONSTRAINT FK_Comment_Movie REFERENCES cine.Movie(movieId) ON DELETE CASCADE,
   content   NVARCHAR(1000) NOT NULL,
-  createdAt DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME()
+  createdAt DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME(),
+  updatedAt DATETIME2(0) NULL,
+  isDeleted BIT NOT NULL DEFAULT 0,
+  parentCommentId BIGINT NULL CONSTRAINT FK_Comment_Parent REFERENCES cine.Comment(commentId) ON DELETE CASCADE
 );
 CREATE INDEX IX_Comment_movie ON cine.Comment(movieId, createdAt DESC);
+CREATE INDEX IX_Comment_userId ON cine.Comment(userId);
+CREATE INDEX IX_Comment_parent ON cine.Comment(parentCommentId);
 GO
 
 -- MOVIE SIMILARITY (Content-based Filtering)

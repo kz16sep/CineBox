@@ -54,16 +54,23 @@
       <div class="search-results">
         <div class="movies-grid">
           {% for movie in movies %}
-          <a class="card" href="{{ url_for('main.detail', movie_id=movie.id) }}">
-            <div class="poster" style="background-image:url('{{ movie.poster }}')"></div>
-            <div class="card-content">
-              <div class="card-title">{{ movie.title }}</div>
-              <div class="card-meta">
-                <span class="upload-time">Phim {{ movie.id }}</span>
+          <div class="card">
+            <a href="{{ url_for('main.detail', movie_id=movie.id) }}" class="card-link">
+              <div class="poster" style="background-image:url('{{ movie.poster }}')"></div>
+              <div class="card-content">
+                <div class="card-title">{{ movie.title }}</div>
+                <div class="card-meta">
+                  {% if movie.year %}<span class="year">{{ movie.year }}</span>{% endif %}
+                  {% if movie.country %}<span class="country">{{ movie.country }}</span>{% endif %}
+                </div>
+                {% if movie.genres %}<div class="card-genres">{{ movie.genres|join(', ') }}</div>{% endif %}
+                <div class="movie-rating">
+                  <span class="rating-stars">⭐ {{ "%.1f"|format(movie.avgRating) }}</span>
+                  <!-- <span class="rating-count">({{ movie.ratingCount }})</span> -->
+                </div>
               </div>
-              <div class="stars">★★★★★</div>
-            </div>
-          </a>
+            </a>
+          </div>
           {% endfor %}
         </div>
         
@@ -396,6 +403,136 @@
     margin-right: 10px;
   }
 }
+
+.movie-rating {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  font-size: 0.9rem;
+}
+
+.rating-stars {
+  color: #ffc107;
+  font-weight: bold;
+}
+
+.rating-count {
+  color: #ccc;
+  font-size: 0.8rem;
+}
+
+.card-genres {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+/* Pagination centering */
+.pagination {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+  margin-top: 30px;
+}
+
+.pagination-info {
+  text-align: center;
+  color: #fff !important;
+  font-size: 0.9rem;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.btn-pagination {
+  background: #333 !important;
+  color: #fff !important;
+  padding: 8px 16px;
+  border-radius: 6px;
+  text-decoration: none !important;
+  font-size: 0.9rem;
+  transition: all 0.2s ease;
+  border: none;
+  cursor: pointer;
+}
+
+.btn-pagination:hover {
+  background: #555 !important;
+  color: #fff !important;
+  text-decoration: none !important;
+}
+
+.page-numbers {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.page-number {
+  padding: 8px 12px;
+  border-radius: 6px;
+  text-decoration: none !important;
+  color: #fff !important;
+  background: #333 !important;
+  border: none;
+  transition: all 0.2s ease;
+  min-width: 40px;
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+.page-number:hover {
+  background: #555 !important;
+  color: #fff !important;
+  text-decoration: none !important;
+}
+
+.page-number.current {
+  background: #e50914 !important;
+  color: #fff !important;
+  font-weight: bold;
+}
+
+.page-ellipsis {
+  color: #fff !important;
+  padding: 8px 4px;
+  font-size: 0.9rem;
+}
+
+/* Fix text color and remove underlines for search cards */
+.card-link {
+  text-decoration: none !important;
+  color: inherit !important;
+}
+
+.card-link:hover {
+  text-decoration: none !important;
+  color: inherit !important;
+}
+
+.card-title {
+  color: #fff !important;
+}
+
+.card-meta {
+  color: #fff !important;
+}
+
+.card-genres {
+  color: #fff !important;
+}
+
+.movie-rating {
+  color: #fff !important;
+}
 </style>
 
 <script>
@@ -476,6 +613,48 @@ document.addEventListener('DOMContentLoaded', function() {
         suggestionsContainer.style.display = 'none';
         searchInput.form.submit();
     };
+    
+    // Handle form submission
+    const searchForm = document.querySelector('.search-form');
+    if (searchForm) {
+        searchForm.addEventListener('submit', function(e) {
+            const query = searchInput.value.trim();
+            if (query.length < 2) {
+                e.preventDefault();
+                return false;
+            }
+        });
+    }
+    
+    // loadAllRatings(); // disabled for consistent server-rendered ratings
 });
+
+// Rating functions
+function loadAllRatings() {
+  const ratingElements = document.querySelectorAll('.movie-rating[data-movie-id]');
+  ratingElements.forEach(element => {
+    const movieId = element.dataset.movieId;
+    loadMovieRating(movieId, element);
+  });
+}
+
+function loadMovieRating(movieId, element) {
+  fetch(`/get-rating/${movieId}`)
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      const ratingStars = element.querySelector('.rating-stars');
+      const ratingCount = element.querySelector('.rating-count');
+      const normalizedAvg = (data.avgRating ?? data.avg_rating ?? 0);
+      const normalizedCount = (data.ratingCount ?? data.total_ratings ?? 0);
+      
+      ratingStars.textContent = `⭐ ${normalizedAvg}`;
+      ratingCount.textContent = `(${normalizedCount})`;
+    }
+  })
+  .catch(error => {
+    console.error('Error loading rating for movie', movieId, ':', error);
+  });
+}
 </script>
 {% endblock %}
