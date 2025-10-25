@@ -1227,6 +1227,9 @@ document.addEventListener('DOMContentLoaded', function() {
   // Load comments when page loads
   loadComments(document.getElementById('star-rating').dataset.movieId);
   
+  // Video progress tracking
+  initializeVideoProgressTracking();
+  
   // Comment form event listeners
   const commentInput = document.getElementById('comment-input');
   const charCount = document.getElementById('char-count');
@@ -1657,5 +1660,83 @@ function escapeHtml(text) {
   div.textContent = text;
   return div.innerHTML;
 }
+
+// Video progress tracking functions
+function initializeVideoProgressTracking() {
+  const video = document.querySelector('.player');
+  if (!video) return;
+  
+  const movieId = document.getElementById('star-rating').dataset.movieId;
+  if (!movieId) return;
+  
+  let progressUpdateInterval;
+  let lastProgressUpdate = 0;
+  
+  // Track video progress every 10 seconds
+  video.addEventListener('timeupdate', function() {
+    const currentTime = video.currentTime;
+    const duration = video.duration;
+    
+    // Only update if video has loaded and we have meaningful progress
+    if (duration && currentTime > 0) {
+      const progressPercent = (currentTime / duration) * 100;
+      
+      // Update progress every 10 seconds or if significant progress made
+      if (currentTime - lastProgressUpdate >= 10 || progressPercent >= 90) {
+        updateWatchProgress(movieId, Math.floor(currentTime), progressPercent >= 90);
+        lastProgressUpdate = currentTime;
+      }
+    }
+  });
+  
+  // Mark as finished when video ends
+  video.addEventListener('ended', function() {
+    const duration = video.duration;
+    if (duration) {
+      updateWatchProgress(movieId, Math.floor(duration), true);
+      showToast('🎉 Bạn đã xem xong phim!', 'success');
+    }
+  });
+  
+  // Track when user starts playing
+  video.addEventListener('play', function() {
+    const currentTime = video.currentTime;
+    if (currentTime > 0) {
+      updateWatchProgress(movieId, Math.floor(currentTime), false);
+    }
+  });
+}
+
+function updateWatchProgress(movieId, progressSec, isFinished = false) {
+  fetch('/api/update_watch_progress', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      movie_id: parseInt(movieId),
+      progress_sec: progressSec,
+      is_finished: isFinished
+    })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      console.log('Watch progress updated:', data.message);
+      if (isFinished) {
+        console.log('Movie marked as completed');
+        showToast('🎉 Phim đã được đánh dấu hoàn thành!', 'success');
+      }
+    } else {
+      console.error('Error updating watch progress:', data.message);
+      showToast('Lỗi cập nhật tiến độ xem: ' + data.message, 'error');
+    }
+  })
+  .catch(error => {
+    console.error('Error updating watch progress:', error);
+    showToast('Lỗi cập nhật tiến độ xem', 'error');
+  });
+}
+
 </script>
 {% endblock %}

@@ -36,23 +36,27 @@ def create_app():
         # roles
         conn.execute(text("""
             IF NOT EXISTS (SELECT 1 FROM cine.Role WHERE roleName = N'Admin')
-                INSERT INTO cine.Role(roleName, description) VALUES (N'Admin', N'Quản trị');
+                INSERT INTO cine.Role(roleId, roleName, description) VALUES (1, N'Admin', N'Quản trị');
             IF NOT EXISTS (SELECT 1 FROM cine.Role WHERE roleName = N'User')
-                INSERT INTO cine.Role(roleName, description) VALUES (N'User', N'Người dùng');
+                INSERT INTO cine.Role(roleId, roleName, description) VALUES (2, N'User', N'Người dùng');
         """))
         # admin user and account (password: admin123)
         conn.execute(text("""
             IF NOT EXISTS (SELECT 1 FROM cine.[User] WHERE email = N'admin@cinebox.local')
             BEGIN
                 DECLARE @rid INT = (SELECT roleId FROM cine.Role WHERE roleName=N'Admin');
-                INSERT INTO cine.[User](email, roleId) VALUES (N'admin@cinebox.local', @rid);
+                INSERT INTO cine.[User](userId, email, roleId) VALUES (1, N'admin@cinebox.local', @rid);
                 DECLARE @uid BIGINT = SCOPE_IDENTITY();
-                INSERT INTO cine.Account(username, passwordHash, userId)
-                VALUES (N'admin', HASHBYTES('SHA2_256', CONVERT(VARBINARY(512), N'admin123')), @uid);
+                INSERT INTO cine.Account(accountId, username, passwordHash, userId)
+                VALUES (1, N'admin', HASHBYTES('SHA2_256', CONVERT(VARBINARY(512), N'admin123')), @uid);
             END
         """))
 
-    from .routes import main_bp
+    from .routes import main_bp, init_recommenders
     app.register_blueprint(main_bp)
+    
+    # Initialize recommenders after app context is available
+    with app.app_context():
+        init_recommenders()
 
     return app

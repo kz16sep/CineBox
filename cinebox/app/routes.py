@@ -10,10 +10,11 @@ from werkzeug.utils import secure_filename
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from content_based_recommender import ContentBasedRecommender
 from collaborative_recommender import CollaborativeRecommender
-
+from enhanced_cf_recommender import EnhancedCFRecommender
 # Global recommender instances
 content_recommender = None
 collaborative_recommender = None
+enhanced_cf_recommender = None
 
 # --- CF retrain dirty-flag helpers ---
 def set_cf_dirty(db_engine=None):
@@ -36,43 +37,6 @@ def set_cf_dirty(db_engine=None):
     except Exception as e:
         print(f"Error setting cf_dirty: {e}")
 
-def get_cf_state(db_engine=None):
-    try:
-        if db_engine is None:
-            db_engine = current_app.db_engine
-        with db_engine.connect() as conn:
-            rows = conn.execute(text("""
-                IF OBJECT_ID('cine.AppState','U') IS NULL
-                BEGIN
-                  CREATE TABLE cine.AppState ( [key] NVARCHAR(50) PRIMARY KEY, [value] NVARCHAR(255) NULL )
-                END;
-                SELECT [key],[value] FROM cine.AppState WHERE [key] IN ('cf_dirty','cf_last_retrain');
-            """)).mappings().all()
-        return { r['key']: r['value'] for r in rows }
-    except Exception as e:
-        print(f"Error reading cf state: {e}")
-        return {}
-
-def clear_cf_dirty_and_set_last(now_iso, db_engine=None):
-    try:
-        if db_engine is None:
-            db_engine = current_app.db_engine
-        with db_engine.connect() as conn:
-            conn.execute(text("""
-                MERGE cine.AppState AS t
-                USING (SELECT 'cf_dirty' AS [key]) AS s
-                ON t.[key] = s.[key]
-                WHEN MATCHED THEN UPDATE SET [value] = 'false'
-                WHEN NOT MATCHED THEN INSERT ([key],[value]) VALUES ('cf_dirty','false');
-                MERGE cine.AppState AS t2
-                USING (SELECT 'cf_last_retrain' AS [key]) AS s2
-                ON t2.[key] = s2.[key]
-                WHEN MATCHED THEN UPDATE SET [value] = :v
-                WHEN NOT MATCHED THEN INSERT ([key],[value]) VALUES ('cf_last_retrain', :v);
-            """), {"v": now_iso})
-            conn.commit()
-    except Exception as e:
-        print(f"Error clearing cf_dirty: {e}")
 
 def fetch_rating_stats_for_movies(movie_ids, db_engine=None):
     """Fetch avgRating and ratingCount for a list of movie IDs uniformly.
@@ -108,70 +72,80 @@ def fetch_rating_stats_for_movies(movie_ids, db_engine=None):
         return {}
 
 def calculate_user_based_score(user_id, movie_id, db_engine=None):
-    """Tính điểm gợi ý dựa trên rating và favorite của user"""
+    """Tính điểm gợi ý dựa trên tất cả tương tác của user với phim"""
     try:
         if db_engine is None:
             db_engine = current_app.db_engine
             
         with db_engine.connect() as conn:
-            # Lấy rating của user cho phim này
-            user_rating = conn.execute(text("""
-                SELECT value FROM cine.Rating 
-                WHERE userId = :user_id AND movieId = :movie_id
-            """), {"user_id": user_id, "movie_id": movie_id}).scalar()
+            # Lấy tất cả thông tin tương tác của user với phim này
+            interaction_result = conn.execute(text("""
+                SELECT 
+                    r.value as user_rating,
+                    CASE WHEN f.userId IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
+                    CASE WHEN w.userId IS NOT NULL THEN 1 ELSE 0 END as is_watchlist,
+                    CASE WHEN vh.userId IS NOT NULL THEN 1 ELSE 0 END as has_viewed,
+                    CASE WHEN c.userId IS NOT NULL THEN 1 ELSE 0 END as has_commented,
+                    COUNT(DISTINCT r2.userId) as total_ratings,
+                    AVG(CAST(r2.value AS FLOAT)) as avg_rating
+                FROM cine.Movie m
+                LEFT JOIN cine.Rating r ON m.movieId = r.movieId AND r.userId = :user_id
+                LEFT JOIN cine.Favorite f ON m.movieId = f.movieId AND f.userId = :user_id
+                LEFT JOIN cine.Watchlist w ON m.movieId = w.movieId AND w.userId = :user_id
+                LEFT JOIN cine.ViewHistory vh ON m.movieId = vh.movieId AND vh.userId = :user_id
+                LEFT JOIN cine.Comment c ON m.movieId = c.movieId AND c.userId = :user_id
+                LEFT JOIN cine.Rating r2 ON m.movieId = r2.movieId
+                WHERE m.movieId = :movie_id
+                GROUP BY m.movieId, r.value, f.userId, w.userId, vh.userId, c.userId
+            """), {"user_id": user_id, "movie_id": movie_id}).fetchone()
             
-            # Lấy favorite của user cho phim này
-            is_favorite = conn.execute(text("""
-                SELECT COUNT(*) FROM cine.Favorite 
-                WHERE userId = :user_id AND movieId = :movie_id
-            """), {"user_id": user_id, "movie_id": movie_id}).scalar() > 0
+            if not interaction_result:
+                return 0.5  # Fallback score
             
-            # Lấy watchlist của user cho phim này
-            is_watchlist = conn.execute(text("""
-                SELECT COUNT(*) FROM cine.Watchlist 
-                WHERE userId = :user_id AND movieId = :movie_id
-            """), {"user_id": user_id, "movie_id": movie_id}).scalar() > 0
+            user_rating = interaction_result[0] or 0
+            is_favorite = interaction_result[1]
+            is_watchlist = interaction_result[2]
+            has_viewed = interaction_result[3]
+            has_commented = interaction_result[4]
+            total_ratings = interaction_result[5] or 0
+            avg_rating = interaction_result[6] or 0
             
-            # Lấy rating trung bình của phim
-            avg_rating = conn.execute(text("""
-                SELECT AVG(CAST(value AS FLOAT)) FROM cine.Rating 
-                WHERE movieId = :movie_id
-            """), {"movie_id": movie_id}).scalar() or 0
-            
-            # Lấy số lượng rating của phim
-            rating_count = conn.execute(text("""
-                SELECT COUNT(*) FROM cine.Rating 
-                WHERE movieId = :movie_id
-            """), {"movie_id": movie_id}).scalar() or 0
-            
-            # Tính điểm dựa trên các yếu tố
+            # Tính điểm dựa trên tất cả các yếu tố
             score = 0.0
             
             # 1. Rating của user (trọng số cao nhất)
-            if user_rating:
-                score += user_rating * 0.4  # 0-2.0 điểm
+            if user_rating > 0:
+                score += (user_rating / 5.0) * 0.4  # 0-0.4 điểm
             
             # 2. Favorite (trọng số cao)
             if is_favorite:
                 score += 0.3  # +0.3 điểm
             
-            # 3. Watchlist (trọng số trung bình)
+            # 3. Watchlist (trọng số cao)
             if is_watchlist:
+                score += 0.25  # +0.25 điểm
+            
+            # 4. View History (trọng số trung bình)
+            if has_viewed:
                 score += 0.2  # +0.2 điểm
             
-            # 4. Rating trung bình của phim (trọng số thấp)
+            # 5. Comments (trọng số trung bình)
+            if has_commented:
+                score += 0.15  # +0.15 điểm
+            
+            # 6. Rating trung bình của phim (trọng số thấp)
             if avg_rating > 0:
                 score += (avg_rating / 5.0) * 0.1  # 0-0.1 điểm
             
-            # 5. Độ phổ biến (số lượng rating)
-            if rating_count > 0:
-                popularity_bonus = min(rating_count / 100.0, 0.1)  # Tối đa 0.1 điểm
+            # 7. Độ phổ biến (số lượng rating)
+            if total_ratings > 0:
+                popularity_bonus = min(total_ratings / 100.0, 0.1)  # Tối đa 0.1 điểm
                 score += popularity_bonus
             
-            # Đảm bảo điểm trong khoảng 0-3.0
-            score = max(0.0, min(score, 3.0))
+            # Đảm bảo điểm trong khoảng 0-2.0
+            score = max(0.0, min(score, 2.0))
             
-            return round(score, 2)
+            return round(score, 3)
             
     except Exception as e:
         print(f"Error calculating user based score: {e}")
@@ -183,6 +157,38 @@ def create_rating_based_recommendations(user_id, movies, db_engine=None):
         recommendations = []
         for movie in movies:
             score = calculate_user_based_score(user_id, movie["id"], db_engine)
+            
+            # Lấy thêm thông tin về view, watchlist, favorites, comments
+            try:
+                with db_engine.connect() as conn:
+                    # Lấy thông tin về view history, watchlist, favorites, comments
+                    stats_result = conn.execute(text("""
+                        SELECT 
+                            COUNT(DISTINCT vh.userId) as viewHistoryCount,
+                            COUNT(DISTINCT w.userId) as watchlistCount,
+                            COUNT(DISTINCT f.userId) as favoriteCount,
+                            COUNT(DISTINCT c.userId) as commentCount
+                        FROM cine.Movie m
+                        LEFT JOIN cine.ViewHistory vh ON m.movieId = vh.movieId
+                        LEFT JOIN cine.Watchlist w ON m.movieId = w.movieId
+                        LEFT JOIN cine.Favorite f ON m.movieId = f.movieId
+                        LEFT JOIN cine.Comment c ON m.movieId = c.movieId
+                        WHERE m.movieId = :movie_id
+                        GROUP BY m.movieId
+                    """), {"movie_id": movie["id"]}).fetchone()
+                    
+                    if stats_result:
+                        viewHistoryCount = stats_result[0] or 0
+                        watchlistCount = stats_result[1] or 0
+                        favoriteCount = stats_result[2] or 0
+                        commentCount = stats_result[3] or 0
+                    else:
+                        viewHistoryCount = watchlistCount = favoriteCount = commentCount = 0
+                        
+            except Exception as e:
+                print(f"Error getting stats for movie {movie['id']}: {e}")
+                viewHistoryCount = watchlistCount = favoriteCount = commentCount = 0
+            
             recommendations.append({
                 "id": movie["id"],
                 "title": movie["title"],
@@ -192,11 +198,17 @@ def create_rating_based_recommendations(user_id, movies, db_engine=None):
                 "score": score,
                 "genres": movie.get("genres", ""),
                 "avgRating": movie.get("avgRating", 0),
-                "ratingCount": movie.get("ratingCount", 0)
+                "ratingCount": movie.get("ratingCount", 0),
+                "viewHistoryCount": viewHistoryCount,
+                "watchlistCount": watchlistCount,
+                "favoriteCount": favoriteCount,
+                "commentCount": commentCount,
+                "algo": "rating_based",
+                "reason": "User rating based recommendation"
             })
         
-        # Sắp xếp theo điểm giảm dần
-        recommendations.sort(key=lambda x: x["score"], reverse=True)
+        # Sắp xếp theo điểm giảm dần, sau đó theo rating giảm dần
+        recommendations.sort(key=lambda x: (x["score"], x["avgRating"], x["ratingCount"]), reverse=True)
         return recommendations
         
     except Exception as e:
@@ -205,13 +217,27 @@ def create_rating_based_recommendations(user_id, movies, db_engine=None):
 
 def init_recommenders():
     """Initialize recommender instances"""
-    global content_recommender, collaborative_recommender
+    global content_recommender, collaborative_recommender, enhanced_cf_recommender
     try:
         content_recommender = ContentBasedRecommender(current_app.db_engine)
         collaborative_recommender = CollaborativeRecommender(current_app.db_engine)
-        print("✅ Recommenders initialized successfully")
+        enhanced_cf_recommender = EnhancedCFRecommender(current_app.db_engine)
+        
+        # Load CF models
+        print("Loading Collaborative Filtering models...")
+        if collaborative_recommender.load_model():
+            print("Collaborative CF model loaded successfully")
+        else:
+            print("Collaborative CF model not found or failed to load")
+            
+        if enhanced_cf_recommender.is_model_loaded():
+            print("Enhanced CF model loaded successfully")
+        else:
+            print("Enhanced CF model not found or failed to load")
+        
+        print("Recommenders initialized successfully")
     except Exception as e:
-        print(f"❌ Error initializing recommenders: {e}")
+        print(f"Error initializing recommenders: {e}")
 
 
 main_bp = Blueprint("main", __name__)
@@ -251,8 +277,455 @@ def get_poster_or_dummy(poster_url, title):
         safe_title = title[:20].replace(' ', '+').replace('&', 'and')
         return f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={safe_title}"
 
+def get_cold_start_recommendations(user_id, conn):
+    """
+    Tạo cold start recommendations cho user mới
+    Sử dụng các chiến lược:
+    1. Phim phổ biến nhất (trending)
+    2. Phim mới nhất
+    3. Phim có rating cao nhất
+    4. Phim theo thể loại phổ biến
+    """
+    try:
+        # Lấy thông tin user để personalization
+        user_info = conn.execute(text("""
+            SELECT firstName, lastName, favoriteActors, favoriteDirectors, age, gender
+            FROM cine.[User] WHERE userId = :user_id
+        """), {"user_id": user_id}).mappings().first()
+        
+        recommendations = []
+        
+        # 1. Phim trending (được xem nhiều nhất)
+        trending_movies = conn.execute(text("""
+            SELECT TOP 4
+                m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
+                m.viewCount, AVG(CAST(r.value AS FLOAT)) AS avgRating,
+                COUNT(r.movieId) AS ratingCount,
+                STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+            FROM cine.Movie m
+            LEFT JOIN cine.Rating r ON m.movieId = r.movieId
+            LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+            LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
+            WHERE m.viewCount > 0
+            GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, m.country, m.viewCount
+            ORDER BY m.viewCount DESC, avgRating DESC
+        """)).mappings().all()
+        
+        for movie in trending_movies:
+            recommendations.append({
+                "id": movie["movieId"],
+                "title": movie["title"],
+                "poster": get_poster_or_dummy(movie.get("posterUrl"), movie["title"]),
+                "releaseYear": movie["releaseYear"],
+                "country": movie["country"],
+                "score": 0.9,  # High score for trending
+                "rank": len(recommendations) + 1,
+                "avgRating": round(float(movie["avgRating"]), 2) if movie["avgRating"] else 0.0,
+                "ratingCount": movie["ratingCount"],
+                "genres": movie["genres"] or "",
+                "source": "trending"
+            })
+        
+        # 2. Phim mới nhất
+        latest_movies = conn.execute(text("""
+            SELECT TOP 4
+                m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
+                AVG(CAST(r.value AS FLOAT)) AS avgRating,
+                COUNT(r.movieId) AS ratingCount,
+                STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+            FROM cine.Movie m
+            LEFT JOIN cine.Rating r ON m.movieId = r.movieId
+            LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+            LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
+            WHERE m.releaseYear >= YEAR(GETDATE()) - 2
+            GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, m.country
+            ORDER BY m.releaseYear DESC, avgRating DESC
+        """)).mappings().all()
+        
+        for movie in latest_movies:
+            if movie["movieId"] not in [r["id"] for r in recommendations]:
+                recommendations.append({
+                    "id": movie["movieId"],
+                    "title": movie["title"],
+                    "poster": get_poster_or_dummy(movie.get("posterUrl"), movie["title"]),
+                    "releaseYear": movie["releaseYear"],
+                    "country": movie["country"],
+                    "score": 0.8,  # High score for latest
+                    "rank": len(recommendations) + 1,
+                    "avgRating": round(float(movie["avgRating"]), 2) if movie["avgRating"] else 0.0,
+                    "ratingCount": movie["ratingCount"],
+                    "genres": movie["genres"] or "",
+                    "source": "latest"
+                })
+        
+        # 3. Phim có rating cao nhất
+        high_rated_movies = conn.execute(text("""
+            SELECT TOP 4
+                m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
+                AVG(CAST(r.value AS FLOAT)) AS avgRating,
+                COUNT(r.movieId) AS ratingCount,
+                STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+            FROM cine.Movie m
+            INNER JOIN cine.Rating r ON m.movieId = r.movieId
+            LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+            LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
+            GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, m.country
+            HAVING COUNT(r.movieId) >= 10  -- Ít nhất 10 ratings
+            ORDER BY avgRating DESC, ratingCount DESC
+        """)).mappings().all()
+        
+        for movie in high_rated_movies:
+            if movie["movieId"] not in [r["id"] for r in recommendations]:
+                recommendations.append({
+                    "id": movie["movieId"],
+                    "title": movie["title"],
+                    "poster": get_poster_or_dummy(movie.get("posterUrl"), movie["title"]),
+                    "releaseYear": movie["releaseYear"],
+                    "country": movie["country"],
+                    "score": 0.85,  # High score for high rated
+                    "rank": len(recommendations) + 1,
+                    "avgRating": round(float(movie["avgRating"]), 2) if movie["avgRating"] else 0.0,
+                    "ratingCount": movie["ratingCount"],
+                    "genres": movie["genres"] or "",
+                    "source": "high_rated"
+                })
+        
+        # Lưu cold start recommendations vào database
+        if recommendations:
+            # Xóa recommendations cũ
+            conn.execute(text("""
+                DELETE FROM cine.ColdStartRecommendations WHERE userId = :user_id
+            """), {"user_id": user_id})
+            
+            # Lưu recommendations mới
+            for rec in recommendations:
+                conn.execute(text("""
+                    INSERT INTO cine.ColdStartRecommendations 
+                    (userId, movieId, score, rank, source, generatedAt, expiresAt, reason)
+                    VALUES (:user_id, :movie_id, :score, :rank, :source, GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()), :reason)
+                """), {
+                    "user_id": user_id,
+                    "movie_id": rec["id"],
+                    "score": rec["score"],
+                    "rank": rec["rank"],
+                    "source": rec["source"],
+                    "reason": f"Cold start recommendation based on {rec['source']}"
+                })
+            
+            conn.commit()
+            print(f"Generated {len(recommendations)} cold start recommendations for user {user_id}")
+        
+        return recommendations[:12]  # Trả về tối đa 12 recommendations
+        
+    except Exception as e:
+        print(f"Error generating cold start recommendations: {e}")
+        return []
+
+@main_bp.route("/history")
+@login_required
+def view_history():
+    """Trang lịch sử xem của user"""
+    user_id = session.get("user_id")
+    page = request.args.get('page', 1, type=int)
+    per_page = 20
+    
+    try:
+        with current_app.db_engine.connect() as conn:
+            # Lấy tổng số lượng
+            total_count = conn.execute(text("""
+                SELECT COUNT(*) FROM cine.ViewHistory WHERE userId = :user_id
+            """), {"user_id": user_id}).scalar()
+            
+            # Lấy lịch sử xem với phân trang
+            offset = (page - 1) * per_page
+            history_query = text("""
+                SELECT TOP (:per_page) 
+                    vh.historyId, vh.startedAt, vh.finishedAt, vh.progressSec,
+                    m.movieId, m.title, m.posterUrl, m.releaseYear, m.overview,
+                    STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+                FROM cine.ViewHistory vh
+                INNER JOIN cine.Movie m ON vh.movieId = m.movieId
+                LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
+                WHERE vh.userId = :user_id
+                GROUP BY vh.historyId, vh.startedAt, vh.finishedAt, vh.progressSec,
+                         m.movieId, m.title, m.posterUrl, m.releaseYear, m.overview
+                ORDER BY vh.startedAt DESC
+                OFFSET :offset ROWS
+            """)
+            
+            history_rows = conn.execute(history_query, {
+                "user_id": user_id,
+                "per_page": per_page,
+                "offset": offset
+            }).mappings().all()
+            
+            # Format dữ liệu
+            view_history = []
+            for row in history_rows:
+                history_item = {
+                    "historyId": row["historyId"],
+                    "movieId": row["movieId"],
+                    "title": row["title"],
+                    "posterUrl": get_poster_or_dummy(row.get("posterUrl"), row["title"]),
+                    "releaseYear": row["releaseYear"],
+                    "overview": row["overview"],
+                    "genres": row["genres"] or "",
+                    "startedAt": row["startedAt"],
+                    "finishedAt": row["finishedAt"],
+                    "progressSec": row["progressSec"],
+                    "isCompleted": row["finishedAt"] is not None
+                }
+                view_history.append(history_item)
+            
+            # Tính toán pagination
+            total_pages = (total_count + per_page - 1) // per_page
+            pagination = {
+                "current_page": page,
+                "total_pages": total_pages,
+                "total_count": total_count,
+                "has_prev": page > 1,
+                "has_next": page < total_pages,
+                "prev_page": page - 1 if page > 1 else None,
+                "next_page": page + 1 if page < total_pages else None
+            }
+            
+            return render_template("history.html", 
+                                 view_history=view_history,
+                                 pagination=pagination)
+            
+    except Exception as e:
+        print(f"Error getting view history: {e}")
+        return render_template("history.html", 
+                             view_history=[],
+                             pagination={"current_page": 1, "total_pages": 0, "total_count": 0},
+                             error="Có lỗi xảy ra khi tải lịch sử xem")
+
+@main_bp.route("/api/view_history")
+@login_required
+def get_view_history():
+    """API endpoint để lấy lịch sử xem"""
+    try:
+        user_id = session.get("user_id")
+        limit = request.args.get('limit', 20, type=int)
+        
+        with current_app.db_engine.connect() as conn:
+            history_query = text("""
+                SELECT TOP (:limit)
+                    vh.historyId, vh.startedAt, vh.finishedAt, vh.progressSec,
+                    m.movieId, m.title, m.posterUrl, m.releaseYear,
+                    STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+                FROM cine.ViewHistory vh
+                INNER JOIN cine.Movie m ON vh.movieId = m.movieId
+                LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
+                WHERE vh.userId = :user_id
+                GROUP BY vh.historyId, vh.startedAt, vh.finishedAt, vh.progressSec,
+                         m.movieId, m.title, m.posterUrl, m.releaseYear
+                ORDER BY vh.startedAt DESC
+            """)
+            
+            history_rows = conn.execute(history_query, {
+                "user_id": user_id,
+                "limit": limit
+            }).mappings().all()
+            
+            # Format dữ liệu
+            view_history = []
+            for row in history_rows:
+                history_item = {
+                    "historyId": row["historyId"],
+                    "movieId": row["movieId"],
+                    "title": row["title"],
+                    "posterUrl": get_poster_or_dummy(row.get("posterUrl"), row["title"]),
+                    "releaseYear": row["releaseYear"],
+                    "genres": row["genres"] or "",
+                    "startedAt": row["startedAt"].isoformat() if row["startedAt"] else None,
+                    "finishedAt": row["finishedAt"].isoformat() if row["finishedAt"] else None,
+                    "progressSec": row["progressSec"],
+                    "isCompleted": row["finishedAt"] is not None
+                }
+                view_history.append(history_item)
+            
+            return jsonify({
+                "success": True,
+                "view_history": view_history
+            })
+            
+    except Exception as e:
+        print(f"Error getting view history API: {e}")
+        return jsonify({
+            "success": False,
+            "message": f"Có lỗi xảy ra: {str(e)}"
+        })
+
+
+@main_bp.route("/api/delete_history_item/<int:history_id>", methods=["DELETE"])
+@login_required
+def delete_history_item(history_id):
+    """Xóa một mục lịch sử xem cụ thể"""
+    try:
+        user_id = session.get("user_id")
+        
+        with current_app.db_engine.begin() as conn:
+            # Kiểm tra xem history item có thuộc về user này không
+            history_exists = conn.execute(text("""
+                SELECT 1 FROM cine.ViewHistory 
+                WHERE historyId = :history_id AND userId = :user_id
+            """), {"history_id": history_id, "user_id": user_id}).scalar()
+            
+            if not history_exists:
+                return jsonify({"success": False, "message": "Không tìm thấy lịch sử xem này"})
+            
+            # Xóa history item
+            conn.execute(text("""
+                DELETE FROM cine.ViewHistory 
+                WHERE historyId = :history_id AND userId = :user_id
+            """), {"history_id": history_id, "user_id": user_id})
+            
+            return jsonify({"success": True, "message": "Đã xóa mục lịch sử xem thành công"})
+            
+    except Exception as e:
+        print(f"Error deleting history item: {e}")
+        return jsonify({"success": False, "message": "Có lỗi xảy ra khi xóa lịch sử xem"})
+
+
+@main_bp.route("/api/clear_all_history", methods=["DELETE"])
+@login_required
+def clear_all_history():
+    """Xóa toàn bộ lịch sử xem của user"""
+    try:
+        user_id = session.get("user_id")
+        
+        with current_app.db_engine.begin() as conn:
+            # Đếm số lượng history items sẽ bị xóa
+            count = conn.execute(text("""
+                SELECT COUNT(*) FROM cine.ViewHistory WHERE userId = :user_id
+            """), {"user_id": user_id}).scalar()
+            
+            if count == 0:
+                return jsonify({"success": False, "message": "Không có lịch sử xem nào để xóa"})
+            
+            # Xóa toàn bộ lịch sử xem
+            conn.execute(text("""
+                DELETE FROM cine.ViewHistory WHERE userId = :user_id
+            """), {"user_id": user_id})
+            
+            return jsonify({
+                "success": True, 
+                "message": f"Đã xóa {count} mục lịch sử xem thành công"
+            })
+            
+    except Exception as e:
+        print(f"Error clearing all history: {e}")
+        return jsonify({"success": False, "message": "Có lỗi xảy ra khi xóa lịch sử xem"})
+
+
+@main_bp.route("/api/update_watch_progress", methods=["POST"])
+@login_required
+def update_watch_progress():
+    """Cập nhật tiến độ xem phim"""
+    try:
+        user_id = session.get("user_id")
+        data = request.get_json()
+        
+        movie_id = data.get('movie_id')
+        progress_sec = data.get('progress_sec', 0)
+        is_finished = data.get('is_finished', False)
+        
+        
+        if not movie_id:
+            return jsonify({"success": False, "message": "Thiếu thông tin movie_id"})
+        
+        with current_app.db_engine.begin() as conn:
+            # Kiểm tra xem có history record nào cho movie này không
+            history_record = conn.execute(text("""
+                SELECT TOP 1 historyId FROM cine.ViewHistory 
+                WHERE userId = :user_id AND movieId = :movie_id
+                ORDER BY startedAt DESC
+            """), {"user_id": user_id, "movie_id": movie_id}).scalar()
+            
+            if history_record:
+                # Cập nhật record hiện tại
+                if is_finished:
+                    conn.execute(text("""
+                        UPDATE cine.ViewHistory 
+                        SET progressSec = :progress_sec, finishedAt = GETDATE()
+                        WHERE historyId = :history_id
+                    """), {"history_id": history_record, "progress_sec": progress_sec})
+                else:
+                    conn.execute(text("""
+                        UPDATE cine.ViewHistory 
+                        SET progressSec = :progress_sec
+                        WHERE historyId = :history_id
+                    """), {"history_id": history_record, "progress_sec": progress_sec})
+            else:
+                # Tạo record mới
+                # Tạo historyId tự động bằng cách lấy max + 1
+                max_id = conn.execute(text("""
+                    SELECT ISNULL(MAX(historyId), 0) + 1 FROM cine.ViewHistory
+                """)).scalar()
+                
+                if is_finished:
+                    # Nếu hoàn thành, set cả startedAt và finishedAt
+                    conn.execute(text("""
+                        INSERT INTO cine.ViewHistory (historyId, userId, movieId, startedAt, progressSec, finishedAt, deviceType, ipAddress, userAgent)
+                        VALUES (:history_id, :user_id, :movie_id, GETDATE(), :progress_sec, GETDATE(), :device_type, :ip_address, :user_agent)
+                    """), {
+                        "history_id": max_id,
+                        "user_id": user_id,
+                        "movie_id": movie_id,
+                        "progress_sec": progress_sec,
+                        "device_type": request.headers.get('User-Agent', 'Unknown')[:50],
+                        "ip_address": request.remote_addr,
+                        "user_agent": request.headers.get('User-Agent', '')[:500]
+                    })
+                else:
+                    # Nếu chưa hoàn thành, chỉ set startedAt
+                    conn.execute(text("""
+                        INSERT INTO cine.ViewHistory (historyId, userId, movieId, startedAt, progressSec, deviceType, ipAddress, userAgent)
+                        VALUES (:history_id, :user_id, :movie_id, GETDATE(), :progress_sec, :device_type, :ip_address, :user_agent)
+                    """), {
+                        "history_id": max_id,
+                        "user_id": user_id,
+                        "movie_id": movie_id,
+                        "progress_sec": progress_sec,
+                        "device_type": request.headers.get('User-Agent', 'Unknown')[:50],
+                        "ip_address": request.remote_addr,
+                        "user_agent": request.headers.get('User-Agent', '')[:500]
+                    })
+            
+            message = "Đã cập nhật tiến độ xem"
+            if is_finished:
+                message = "🎉 Đã đánh dấu phim hoàn thành!"
+            
+            return jsonify({"success": True, "message": message})
+            
+    except Exception as e:
+        print(f"Error updating watch progress: {e}")
+        return jsonify({"success": False, "message": "Có lỗi xảy ra khi cập nhật tiến độ xem"})
+
+
 @main_bp.route("/")
 def home():
+    # Kiểm tra nếu user đã đăng nhập nhưng chưa hoàn thành onboarding
+    user_id = session.get("user_id")
+    if user_id:
+        try:
+            with current_app.db_engine.connect() as conn:
+                # Kiểm tra xem user đã hoàn thành onboarding chưa
+                # Sử dụng COALESCE để xử lý trường hợp cột chưa tồn tại
+                has_completed = conn.execute(text("""
+                    SELECT COALESCE(hasCompletedOnboarding, 0) FROM cine.[User] WHERE userId = :user_id
+                """), {"user_id": user_id}).scalar()
+                
+                if not has_completed:
+                    return redirect(url_for('main.onboarding'))
+        except Exception as e:
+            print(f"Error checking onboarding status: {e}")
+            # Nếu có lỗi, giả sử user chưa hoàn thành onboarding
+            return redirect(url_for('main.onboarding'))
+    
     # Lấy danh sách phim từ DB bằng engine (odbc_connect); nếu chưa đăng nhập, chuyển tới form đăng nhập
     if not session.get("user_id"):
         return redirect(url_for("main.login"))
@@ -395,114 +868,150 @@ def home():
         carousel_movies = []
     
     # Personal recommendations (gợi ý cá nhân)
-    # Personal recommendations (gợi ý cá nhân) - Collaborative Filtering
+    # Personal recommendations (gợi ý cá nhân) - Collaborative Filtering + Cold Start
     user_id = session.get("user_id")
     personal_recommendations = []
     trending_movies = []
     
     if user_id:
         try:
-            # Lấy gợi ý cá nhân từ PersonalRecommendation
+            # Kiểm tra xem user có đủ dữ liệu để tạo recommendations không
             with current_app.db_engine.connect() as conn:
-                personal_rows = conn.execute(text("""
-                    SELECT TOP 12 m.movieId, m.title, m.posterUrl, pr.score
-                    FROM cine.PersonalRecommendation pr
-                    JOIN cine.Movie m ON m.movieId = pr.movieId
-                    WHERE pr.userId = :user_id AND pr.expiresAt > GETDATE()
-                    ORDER BY pr.rank
-                """), {"user_id": user_id}).mappings().all()
+                # Đếm số lượng ratings và view history của user
+                rating_count = conn.execute(text("""
+                    SELECT COUNT(*) FROM cine.Rating WHERE userId = :user_id
+                """), {"user_id": user_id}).scalar()
+                
+                view_count = conn.execute(text("""
+                    SELECT COUNT(*) FROM cine.ViewHistory WHERE userId = :user_id
+                """), {"user_id": user_id}).scalar()
+                
+                total_interactions = rating_count + view_count
+                
+                # Nếu user có ít hơn 5 interactions, sử dụng cold start
+                if total_interactions < 5:
+                    print(f"User {user_id} has only {total_interactions} interactions, using cold start")
+                    personal_recommendations = get_cold_start_recommendations(user_id, conn)
+                else:
+                    # Lấy gợi ý cá nhân từ PersonalRecommendation
+                    personal_rows = conn.execute(text("""
+                        SELECT TOP 12 m.movieId, m.title, m.posterUrl, pr.score
+                        FROM cine.PersonalRecommendation pr
+                        JOIN cine.Movie m ON m.movieId = pr.movieId
+                        WHERE pr.userId = :user_id AND pr.expiresAt > GETDATE()
+                        ORDER BY pr.rank
+                    """), {"user_id": user_id}).mappings().all()
+            
             # Initialize recommenders if not already done
             global content_recommender, collaborative_recommender
             if collaborative_recommender is None:
                 init_recommenders()
             
-            # Sử dụng Collaborative Recommender để lấy gợi ý cá nhân
-            print(f"Debug - collaborative_recommender: {collaborative_recommender}")
-            print(f"Debug - is_model_loaded: {collaborative_recommender.is_model_loaded() if collaborative_recommender else 'None'}")
+            # Sử dụng Enhanced CF Recommender trước, fallback về Collaborative CF
             
-            if collaborative_recommender and collaborative_recommender.is_model_loaded():
-                print(f"Debug - Getting recommendations for user {user_id}")
+            # Thử Enhanced CF model trước
+            if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded():
+                personal_recommendations_raw = enhanced_cf_recommender.get_user_recommendations(user_id, limit=12)
+            elif collaborative_recommender and collaborative_recommender.is_model_loaded():
                 personal_recommendations_raw = collaborative_recommender.get_user_recommendations(user_id, limit=12)
-                print(f"Debug - Raw recommendations: {len(personal_recommendations_raw) if personal_recommendations_raw else 0}")
-                
-                if personal_recommendations_raw:
-                    # Lưu recommendations vào bảng PersonalRecommendation
-                    with current_app.db_engine.connect() as conn:
-                        # Xóa recommendations cũ của user này
-                        conn.execute(text("""
-                            DELETE FROM cine.PersonalRecommendation 
-                            WHERE userId = :user_id
-                        """), {"user_id": user_id})
-                        
-                        # Lưu recommendations mới từ CF model
-                        for rank, rec in enumerate(personal_recommendations_raw, 1):
-                            conn.execute(text("""
-                                INSERT INTO cine.PersonalRecommendation 
-                                (userId, movieId, score, rank, algo, generatedAt, expiresAt)
-                                VALUES (:user_id, :movie_id, :score, :rank, 'collaborative', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
-                            """), {
-                                "user_id": user_id,
-                                "movie_id": rec["movieId"],
-                                "score": rec.get("recommendation_score", 0),
-                                "rank": rank
-                            })
-                        
-                        conn.commit()
-                        print(f"Debug - Saved {len(personal_recommendations_raw)} recommendations to PersonalRecommendation table")
-                    
-                    personal_recommendations = [
-                        {
-                            "id": rec["movieId"],
-                            "title": rec["title"],
-                            "poster": rec.get("posterUrl") if rec.get("posterUrl") and rec.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={rec['title'][:20].replace(' ', '+')}",
-                            "year": rec.get("releaseYear"),
-                            "country": rec.get("country"),
-                            "score": rec.get("recommendation_score", 0),
-                            "genres": rec.get("genres", ""),
-                            "avgRating": rec.get("avgRating", 0),
-                            "ratingCount": rec.get("ratingCount", 0)
-                        }
-                        for rec in personal_recommendations_raw
-                    ]
-                    print(f"Debug - Created {len(personal_recommendations)} recommendations from CF model")
-                else:
-                    print(f"Debug - No recommendations from CF model, user not in model or no data")
-                    # Tạo recommendations dựa trên rating thực tế của user
-                    personal_recommendations = create_rating_based_recommendations(user_id, latest_movies[:12], current_app.db_engine)
-                
-                print(f"Found {len(personal_recommendations)} personal recommendations for user {user_id}")
             else:
-                # Fallback: Lấy gợi ý từ database nếu model chưa load
-                print(f"Debug - Model not loaded, trying database fallback for user {user_id}")
-                with current_app.db_engine.connect() as conn:
-                    personal_rows = conn.execute(text("""
-                        SELECT TOP 12 
-                            m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
-                            pr.score, pr.rank, pr.generatedAt,
-                            AVG(CAST(r.value AS FLOAT)) as avgRating,
-                            COUNT(r.movieId) as ratingCount,
-                            STRING_AGG(TOP 5 g.name, ', ') as genres
-                        FROM cine.PersonalRecommendation pr
-                        JOIN cine.Movie m ON m.movieId = pr.movieId
-                        LEFT JOIN cine.Rating r ON m.movieId = r.movieId
-                        LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
-                        LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
-                        WHERE pr.userId = :user_id AND pr.expiresAt > GETUTCDATE() AND pr.algo = 'collaborative'
-                        GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
-                                 pr.score, pr.rank, pr.generatedAt
-                        ORDER BY pr.rank
-                    """), {"user_id": user_id}).mappings().all()
+                personal_recommendations_raw = []
+            
+            if personal_recommendations_raw:
                 
-                print(f"Debug - Database query result: {len(personal_rows)} rows")
-                for row in personal_rows[:3]:  # Print first 3 rows for debugging
-                    print(f"Debug - Row: {dict(row)}")
+                # Sắp xếp recommendations theo score, sau đó theo avgRating
+                personal_recommendations_raw.sort(key=lambda x: (x.get("recommendation_score", 0), x.get("avgRating", 0), x.get("ratingCount", 0)), reverse=True)
+                
+                # Lưu recommendations vào bảng PersonalRecommendation
+                with current_app.db_engine.connect() as conn:
+                    # Xóa recommendations cũ của user này
+                    conn.execute(text("""
+                        DELETE FROM cine.PersonalRecommendation 
+                        WHERE userId = :user_id
+                    """), {"user_id": user_id})
+                    
+                    # Lưu recommendations mới từ CF model
+                    for rank, rec in enumerate(personal_recommendations_raw, 1):
+                        # Generate recId
+                        rec_id_result = conn.execute(text("""
+                            SELECT ISNULL(MAX(recId), 0) + 1 FROM cine.PersonalRecommendation
+                        """)).fetchone()
+                        rec_id = rec_id_result[0] if rec_id_result else 1
+                        
+                        conn.execute(text("""
+                            INSERT INTO cine.PersonalRecommendation 
+                            (recId, userId, movieId, score, rank, algo, generatedAt, expiresAt)
+                            VALUES (:rec_id, :user_id, :movie_id, :score, :rank, 'collaborative', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
+                        """), {
+                            "rec_id": rec_id,
+                            "user_id": user_id,
+                            "movie_id": rec["movieId"],
+                            "score": rec.get("recommendation_score", 0),
+                            "rank": rank
+                        })
+                    
+                    conn.commit()
+                
+                personal_recommendations = []
+                for rec in personal_recommendations_raw:
+                    rec_dict = {
+                        "id": rec["movieId"],
+                        "title": rec["title"],
+                        "poster": rec.get("posterUrl") if rec.get("posterUrl") and rec.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={rec['title'][:20].replace(' ', '+')}",
+                        "year": rec.get("releaseYear"),
+                        "country": rec.get("country"),
+                        "score": rec.get("recommendation_score", 0),
+                        "genres": rec.get("genres", ""),
+                        "avgRating": rec.get("avgRating", 0),
+                        "ratingCount": rec.get("ratingCount", 0),
+                        "watchlistCount": rec.get("watchlistCount", 0),
+                        "viewHistoryCount": rec.get("viewHistoryCount", 0),
+                        "favoriteCount": rec.get("favoriteCount", 0),
+                        "commentCount": rec.get("commentCount", 0),
+                        "algo": "enhanced_cf" if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded() else "collaborative_cf",
+                        "reason": rec.get("reason", "Model prediction")
+                    }
+                    
+                    personal_recommendations.append(rec_dict)
+            else:
+                # Tạo recommendations dựa trên rating thực tế của user
+                personal_recommendations = create_rating_based_recommendations(user_id, latest_movies[:12], current_app.db_engine)
+                
+        except Exception as e:
+            # Fallback: Lấy gợi ý từ database nếu model chưa load
+            print(f"Error getting personal recommendations: {e}")
+            with current_app.db_engine.connect() as conn:
+                personal_rows = conn.execute(text("""
+                    SELECT TOP 12 
+                        m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
+                        pr.score, pr.rank, pr.generatedAt, pr.algo,
+                        AVG(CAST(r.value AS FLOAT)) as avgRating,
+                        COUNT(r.movieId) as ratingCount,
+                        COUNT(DISTINCT w.userId) as watchlistCount,
+                        COUNT(DISTINCT vh.userId) as viewHistoryCount,
+                        COUNT(DISTINCT f.userId) as favoriteCount,
+                        COUNT(DISTINCT c.userId) as commentCount,
+                        STRING_AGG(TOP 5 g.name, ', ') as genres
+                    FROM cine.PersonalRecommendation pr
+                    JOIN cine.Movie m ON m.movieId = pr.movieId
+                    LEFT JOIN cine.Rating r ON m.movieId = r.movieId
+                    LEFT JOIN cine.Watchlist w ON m.movieId = w.movieId
+                    LEFT JOIN cine.ViewHistory vh ON m.movieId = vh.movieId
+                    LEFT JOIN cine.Favorite f ON m.movieId = f.movieId
+                    LEFT JOIN cine.Comment c ON m.movieId = c.movieId
+                    LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                    LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
+                    WHERE pr.userId = :user_id AND pr.expiresAt > GETUTCDATE() AND pr.algo = 'collaborative'
+                    GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
+                             pr.score, pr.rank, pr.generatedAt, pr.algo
+                    ORDER BY pr.rank
+                """), {"user_id": user_id}).mappings().all()
+                
                 
                 personal_recommendations = [
                     {
                         "id": row["movieId"],
                         "title": row["title"],
-                        "poster": row.get("posterUrl") if row.get("posterUrl") and row.get("posterUrl") != "1" else "/static/img/dune2.jpg",
-                        "score": row["score"]
                         "poster": row.get("posterUrl") if row.get("posterUrl") and row.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={row['title'][:20].replace(' ', '+')}",
                         "releaseYear": row["releaseYear"],
                         "country": row["country"],
@@ -510,13 +1019,18 @@ def home():
                         "rank": row["rank"],
                         "avgRating": round(float(row["avgRating"]), 2) if row["avgRating"] else 0.0,
                         "ratingCount": row["ratingCount"],
+                        "watchlistCount": row["watchlistCount"],
+                        "viewHistoryCount": row["viewHistoryCount"],
+                        "favoriteCount": row["favoriteCount"],
+                        "commentCount": row["commentCount"],
                         "genres": row["genres"] or "",
-                        "generatedAt": row["generatedAt"].isoformat() if row["generatedAt"] else None
+                        "algo": row["algo"] or "database",
+                        "generatedAt": row["generatedAt"],
+                        "reason": "Database recommendation"
                     }
                     for row in personal_rows
                 ]
                 
-                print(f"Debug - Final personal_recommendations: {len(personal_recommendations)}")
                 
                 # Lấy trending movies sử dụng collaborative recommender
                 if collaborative_recommender and collaborative_recommender.is_model_loaded():
@@ -572,41 +1086,68 @@ def home():
             personal_recommendations = []
             trending_movies = []
     
-    # Fallback nếu không có gợi ý cá nhân
-    # Fallback nếu không có gợi ý cá nhân - sử dụng model CF
+    # Fallback nếu không có gợi ý cá nhân - sử dụng CF model
     if not personal_recommendations:
-        personal_recommendations = latest_movies
-        print(f"Debug - No personal recommendations, trying CF model fallback for user {user_id}")
-        if collaborative_recommender and collaborative_recommender.is_model_loaded():
-            # Thử lấy recommendations từ CF model với limit cao hơn
+        
+        # Thử enhanced CF model trước
+        if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded():
+            personal_recommendations_raw = enhanced_cf_recommender.get_user_recommendations(user_id, limit=50)
+        elif collaborative_recommender and collaborative_recommender.is_model_loaded():
             personal_recommendations_raw = collaborative_recommender.get_user_recommendations(user_id, limit=50)
-            if personal_recommendations_raw:
-                # Lưu recommendations vào bảng PersonalRecommendation
-                with current_app.db_engine.connect() as conn:
-                    # Xóa recommendations cũ của user này
-                    conn.execute(text("""
-                        DELETE FROM cine.PersonalRecommendation 
-                        WHERE userId = :user_id
-                    """), {"user_id": user_id})
+        else:
+            personal_recommendations_raw = []
+        
+        if personal_recommendations_raw:
+            print(f"Debug - Got {len(personal_recommendations_raw)} CF recommendations for user {user_id}")
+            
+            # Debug first few recommendations
+            for i, rec in enumerate(personal_recommendations_raw[:3]):
+                print(f"Debug - CF Recommendation {i+1}:")
+                print(f"  Title: {rec.get('title', 'N/A')}")
+                print(f"  Score: {rec.get('recommendation_score', 0)}")
+                print(f"  Ratings: {rec.get('ratingCount', 0)}")
+                print(f"  Views: {rec.get('viewHistoryCount', 0)}")
+                print(f"  Watchlist: {rec.get('watchlistCount', 0)}")
+                print(f"  Favorites: {rec.get('favoriteCount', 0)}")
+                print(f"  Comments: {rec.get('commentCount', 0)}")
+            
+            # Sắp xếp recommendations theo score, sau đó theo avgRating
+            personal_recommendations_raw.sort(key=lambda x: (x.get("recommendation_score", 0), x.get("avgRating", 0), x.get("ratingCount", 0)), reverse=True)
+            
+            # Lưu recommendations vào bảng PersonalRecommendation
+            with current_app.db_engine.connect() as conn:
+                # Xóa recommendations cũ của user này
+                conn.execute(text("""
+                    DELETE FROM cine.PersonalRecommendation 
+                    WHERE userId = :user_id
+                """), {"user_id": user_id})
+                
+                # Lưu recommendations mới từ CF model
+                for rank, rec in enumerate(personal_recommendations_raw[:12], 1):
+                    # Generate recId
+                    rec_id_result = conn.execute(text("""
+                        SELECT ISNULL(MAX(recId), 0) + 1 FROM cine.PersonalRecommendation
+                    """)).fetchone()
+                    rec_id = rec_id_result[0] if rec_id_result else 1
                     
-                    # Lưu recommendations mới từ CF model
-                    for rank, rec in enumerate(personal_recommendations_raw[:12], 1):
-                        conn.execute(text("""
-                            INSERT INTO cine.PersonalRecommendation 
-                            (userId, movieId, score, rank, algo, generatedAt, expiresAt)
-                            VALUES (:user_id, :movie_id, :score, :rank, 'collaborative', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
-                        """), {
-                            "user_id": user_id,
-                            "movie_id": rec["movieId"],
-                            "score": rec.get("recommendation_score", 0),
-                            "rank": rank
-                        })
+                    conn.execute(text("""
+                        INSERT INTO cine.PersonalRecommendation 
+                        (recId, userId, movieId, score, rank, algo, generatedAt, expiresAt)
+                        VALUES (:rec_id, :user_id, :movie_id, :score, :rank, 'collaborative', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
+                    """), {
+                        "rec_id": rec_id,
+                        "user_id": user_id,
+                        "movie_id": rec["movieId"],
+                        "score": rec.get("recommendation_score", 0),
+                        "rank": rank
+                    })
                     
                     conn.commit()
                     print(f"Debug - Saved {len(personal_recommendations_raw[:12])} recommendations to PersonalRecommendation table")
                 
-                personal_recommendations = [
-                    {
+                personal_recommendations = []
+                for rec in personal_recommendations_raw[:12]:
+                    rec_dict = {
                         "id": rec["movieId"],
                         "title": rec["title"],
                         "poster": rec.get("posterUrl") if rec.get("posterUrl") and rec.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={rec['title'][:20].replace(' ', '+')}",
@@ -615,19 +1156,44 @@ def home():
                         "score": rec.get("recommendation_score", 0),
                         "genres": rec.get("genres", ""),
                         "avgRating": rec.get("avgRating", 0),
-                        "ratingCount": rec.get("ratingCount", 0)
+                        "ratingCount": rec.get("ratingCount", 0),
+                        "watchlistCount": rec.get("watchlistCount", 0),
+                        "viewHistoryCount": rec.get("viewHistoryCount", 0),
+                        "favoriteCount": rec.get("favoriteCount", 0),
+                        "commentCount": rec.get("commentCount", 0),
+                        "algo": "enhanced_cf" if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded() else "collaborative_cf",
+                        "reason": rec.get("reason", "Model prediction")
                     }
-                    for rec in personal_recommendations_raw[:12]
-                ]
+                    
+                    # Debug logging for first few recommendations
+                    if len(personal_recommendations) < 3:
+                        print(f"Debug - Fallback recommendation {len(personal_recommendations)+1}:")
+                        print(f"  Title: {rec_dict['title']}")
+                        print(f"  Score: {rec_dict['score']}")
+                        print(f"  Ratings: {rec_dict['ratingCount']}")
+                        print(f"  Views: {rec_dict['viewHistoryCount']}")
+                        print(f"  Watchlist: {rec_dict['watchlistCount']}")
+                        print(f"  Favorites: {rec_dict['favoriteCount']}")
+                        print(f"  Comments: {rec_dict['commentCount']}")
+                    
+                    personal_recommendations.append(rec_dict)
                 print(f"Debug - Created {len(personal_recommendations)} recommendations from CF model fallback")
-            else:
-                print(f"Debug - No recommendations from CF model fallback, using latest movies")
-                personal_recommendations = latest_movies[:12]
         else:
-            print(f"Debug - CF model not loaded, using latest movies")
+            print(f"Debug - No recommendations from CF model fallback, using latest movies")
             personal_recommendations = latest_movies[:12]
     if not trending_movies:
         trending_movies = latest_movies
+    
+    # Debug logging cuối cùng trước khi gửi đến template
+    print(f"Debug - Final personal_recommendations before template:")
+    print(f"  Total recommendations: {len(personal_recommendations)}")
+    for i, rec in enumerate(personal_recommendations[:3]):
+        print(f"  {i+1}. {rec.get('title', 'N/A')} (Score: {rec.get('score', 0):.3f})")
+        print(f"     - Ratings: {rec.get('ratingCount', 0)}")
+        print(f"     - Views: {rec.get('viewHistoryCount', 0)}")
+        print(f"     - Watchlist: {rec.get('watchlistCount', 0)}")
+        print(f"     - Favorites: {rec.get('favoriteCount', 0)}")
+        print(f"     - Comments: {rec.get('commentCount', 0)}")
     
     # 3. Tất cả phim (có phân trang) - thay thế latest_movies cũ
     all_movies = []
@@ -762,13 +1328,6 @@ def home():
                 # Lấy tất cả phim với phân trang
                 # Lấy tất cả phim với phân trang kèm avgRating, ratingCount, genres
                 all_rows = conn.execute(text("""
-                    SELECT movieId, title, posterUrl, backdropUrl, overview, releaseYear
-                    FROM (
-                        SELECT movieId, title, posterUrl, backdropUrl, overview, releaseYear,
-                               ROW_NUMBER() OVER (ORDER BY movieId DESC) as rn
-                        FROM cine.Movie
-                    ) t
-                    WHERE rn > :offset AND rn <= :offset + :per_page
                     WITH paged AS (
                         SELECT m.movieId,
                                ROW_NUMBER() OVER (ORDER BY m.movieId DESC) AS rn
@@ -802,7 +1361,6 @@ def home():
                     "poster": r.get("posterUrl") if r.get("posterUrl") and r.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={r['title'][:20].replace(' ', '+')}",
                     "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
                     "description": (r.get("overview") or "")[:160],
-                    "year": r.get("releaseYear")
                     "year": r.get("releaseYear"),
                     "avgRating": 0,
                     "ratingCount": 0,
@@ -916,15 +1474,62 @@ def home():
         ]
     
     print(f"Debug - Final pagination: {pagination}")
-    print(f"Debug - Final all_movies length: {len(all_movies) if all_movies else 0}")
+    # Lấy lịch sử xem cho trang chủ (chỉ 10 phim gần nhất)
+    view_history = []
+    if user_id:
+        try:
+            with current_app.db_engine.connect() as conn:
+                history_rows = conn.execute(text("""
+                    SELECT TOP 10 
+                        vh.historyId, vh.movieId, vh.startedAt, vh.finishedAt, vh.progressSec,
+                        m.title, m.posterUrl, m.releaseYear,
+                        STUFF((
+                            SELECT ', ' + g2.name
+                            FROM cine.MovieGenre mg2
+                            JOIN cine.Genre g2 ON mg2.genreId = g2.genreId
+                            WHERE mg2.movieId = m.movieId
+                            GROUP BY g2.name
+                            ORDER BY g2.name
+                            FOR XML PATH('')
+                        ),1,2,'') AS genres,
+                        CASE WHEN vh.finishedAt IS NOT NULL THEN 1 ELSE 0 END AS isCompleted
+                    FROM cine.ViewHistory vh
+                    JOIN cine.Movie m ON vh.movieId = m.movieId
+                    WHERE vh.userId = :user_id
+                    ORDER BY vh.startedAt DESC
+                """), {"user_id": user_id}).mappings().all()
+                
+                print(f"Debug - Found {len(history_rows)} history records for user {user_id}")
+                for row in history_rows:
+                    print(f"Debug - History item: {row['title']}, completed: {bool(row['isCompleted'])}, finishedAt: {row['finishedAt']}")
+                
+                view_history = []
+                for row in history_rows:
+                    view_history.append({
+                        "historyId": row["historyId"],
+                        "movieId": row["movieId"],
+                        "title": row["title"],
+                        "posterUrl": row["posterUrl"],
+                        "releaseYear": row["releaseYear"],
+                        "genres": row["genres"],
+                        "startedAt": row["startedAt"],
+                        "finishedAt": row["finishedAt"],
+                        "progressSec": row["progressSec"],
+                        "isCompleted": bool(row["isCompleted"])
+                    })
+                
+                print(f"Debug - Processed {len(view_history)} history items")
+        except Exception as e:
+            print(f"Error loading view history: {e}")
+            view_history = []
     
     return render_template("home.html", 
                          latest_movies=latest_movies,  # Phim mới nhất (12 phim, không phân trang)
                          carousel_movies=carousel_movies,  # Carousel phim mới nhất (6 phim)
-                         recommended=personal_recommendations,  # Phim đề xuất
                          recommended=personal_recommendations,  # Phim đề xuất cá nhân (Collaborative Filtering)
                          trending_movies=trending_movies,  # Phim trending (được đánh giá nhiều nhất)
                          all_movies=all_movies,  # Tất cả phim (có phân trang)
+                         view_history=view_history,  # Lịch sử xem (10 phim gần nhất)
                          pagination=pagination,
                          genre_filter=genre_filter,
                          search_query=search_query,
@@ -989,20 +1594,37 @@ def register():
         name = request.form.get("name", "").strip()
         email = request.form.get("email", "").strip()
         password = request.form.get("password", "")
+        print(f"Debug: Form data - name: '{name}', email: '{email}', password: '{password[:3]}...'")
         if not name or not email or not password:
+            print("Debug: Missing required fields")
             return render_template("register.html", error="Vui lòng nhập đầy đủ thông tin.")
         try:
+            print(f"Debug: Starting registration for email: {email}")
             with current_app.db_engine.begin() as conn:
                 # create user with User role
-                role_id = conn.execute(text("SELECT roleId FROM cine.Role WHERE roleName=N'User'")) .scalar()
+                role_id = conn.execute(text("SELECT roleId FROM cine.Role WHERE roleName=N'User'")).scalar()
+                print(f"Debug: Found role_id: {role_id}")
                 if role_id is None:
-                    conn.execute(text("INSERT INTO cine.Role(roleName, description) VALUES (N'User', N'Người dùng')"))
-                    role_id = conn.execute(text("SELECT roleId FROM cine.Role WHERE roleName=N'User'")) .scalar()
-                conn.execute(text("INSERT INTO cine.[User](email, avatarUrl, roleId) VALUES (:email, NULL, :roleId)"), {"email": email, "roleId": role_id})
-                user_id = conn.execute(text("SELECT userId FROM cine.[User] WHERE email=:email"), {"email": email}).scalar()
-                conn.execute(text("INSERT INTO cine.Account(username, passwordHash, userId) VALUES (:u, HASHBYTES('SHA2_256', CONVERT(VARBINARY(512), :p)), :uid)"), {"u": email, "p": password, "uid": user_id})
+                    # Get next available roleId
+                    max_role_id = conn.execute(text("SELECT ISNULL(MAX(roleId), 0) FROM cine.Role")).scalar()
+                    role_id = max_role_id + 1
+                    conn.execute(text("INSERT INTO cine.Role(roleId, roleName, description) VALUES (:roleId, N'User', N'Người dùng')"), {"roleId": role_id})
+                    print(f"Debug: Created new role with id: {role_id}")
+                # Insert user with manual ID
+                print(f"Debug: Inserting user with email: {email}, roleId: {role_id}")
+                max_user_id = conn.execute(text("SELECT ISNULL(MAX(userId), 0) FROM cine.[User]")).scalar()
+                user_id = max_user_id + 1
+                conn.execute(text("INSERT INTO cine.[User](userId, email, avatarUrl, roleId) VALUES (:userId, :email, NULL, :roleId)"), {"userId": user_id, "email": email, "roleId": role_id})
+                print(f"Debug: Created user with id: {user_id}")
+                # Insert account with manual ID
+                print(f"Debug: Inserting account for user_id: {user_id}")
+                max_account_id = conn.execute(text("SELECT ISNULL(MAX(accountId), 0) FROM cine.[Account]")).scalar()
+                account_id = max_account_id + 1
+                conn.execute(text("INSERT INTO cine.[Account](accountId, username, passwordHash, userId) VALUES (:accountId, :u, HASHBYTES('SHA2_256', CONVERT(VARBINARY(512), :p)), :uid)"), {"accountId": account_id, "u": email, "p": password, "uid": user_id})
+                print(f"Debug: Registration completed successfully")
             return render_template("register.html", success="Đăng ký thành công! Bạn có thể đăng nhập ngay.")
         except Exception as ex:
+            print(f"Debug: Registration error: {str(ex)}")
             return render_template("register.html", error=f"Không thể đăng ký: {str(ex)}")
     return render_template("register.html")
 
@@ -1075,23 +1697,17 @@ def detail(movie_id: int):
         related_movies_raw = recommender.get_related_movies(movie_id, limit=12)
         
         # Format data cho template
-        related = [
         related_movies = [
             {
                 "movieId": movie["movieId"],
                 "id": movie["movieId"],
                 "title": movie["title"],
-                "posterUrl": movie["posterUrl"],
-                "similarity": movie.get("similarity", 0.0),
-                "overview": movie.get("overview", ""),
-                "releaseYear": movie.get("releaseYear")
                 "posterUrl": get_poster_or_dummy(movie.get("posterUrl"), movie["title"]),
                 "releaseYear": movie.get("releaseYear"),
                 "country": movie.get("country"),
                 "similarity": movie.get("similarity", 0),
                 "genres": movie.get("genres", "")
             }
-            for movie in related_movies
             for movie in related_movies_raw
         ]
     except Exception as e:
@@ -1139,7 +1755,7 @@ def watch(movie_id: int):
             "SELECT movieId, title, posterUrl, backdropUrl, releaseYear, overview, trailerUrl, viewCount FROM cine.Movie WHERE movieId=:id"
         ), {"id": movie_id}).mappings().first()
         
-        # Tăng view count khi xem phim (không tăng khi xem trailer và không tăng khi refresh)
+        # Tăng view count và lưu lịch sử xem
         if not is_trailer:
             # Kiểm tra xem user đã xem phim này trong session chưa
             viewed_movies = session.get('viewed_movies', [])
@@ -1147,6 +1763,31 @@ def watch(movie_id: int):
                 conn.execute(text(
                     "UPDATE cine.Movie SET viewCount = viewCount + 1 WHERE movieId = :id"
                 ), {"id": movie_id})
+                
+                # Lưu lịch sử xem vào database nếu user đã đăng nhập
+                user_id = session.get("user_id")
+                if user_id:
+                    try:
+                        # Lưu vào ViewHistory
+                        conn.execute(text("""
+                            INSERT INTO cine.ViewHistory (userId, movieId, startedAt, deviceType, ipAddress, userAgent)
+                            VALUES (:user_id, :movie_id, GETDATE(), :device_type, :ip_address, :user_agent)
+                        """), {
+                            "user_id": user_id,
+                            "movie_id": movie_id,
+                            "device_type": request.headers.get('User-Agent', 'Unknown')[:50],
+                            "ip_address": request.remote_addr,
+                            "user_agent": request.headers.get('User-Agent', '')[:500]
+                        })
+                        
+                        # Cập nhật lastLoginAt trong User table
+                        conn.execute(text("""
+                            UPDATE cine.[User] SET lastLoginAt = GETDATE() WHERE userId = :user_id
+                        """), {"user_id": user_id})
+                        
+                    except Exception as e:
+                        print(f"Error saving view history: {e}")
+                
                 conn.commit()
                 # Đánh dấu đã xem phim này trong session
                 viewed_movies.append(movie_id)
@@ -1349,7 +1990,7 @@ def account():
                 # Query với tìm kiếm
                 watchlist_total = conn.execute(text("""
                     SELECT COUNT(*) 
-                    FROM [cine].[WatchList] wl
+                    FROM [cine].[Watchlist] wl
                     JOIN [cine].[Movie] m ON wl.movieId = m.movieId
                     WHERE wl.userId = :user_id AND m.title LIKE :search
                 """), {"user_id": user_id, "search": f"%{watchlist_search}%"}).scalar()
@@ -1357,7 +1998,7 @@ def account():
                 watchlist_offset = (watchlist_page - 1) * per_page
                 watchlist = conn.execute(text("""
                     SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, wl.addedAt
-                    FROM [cine].[WatchList] wl
+                    FROM [cine].[Watchlist] wl
                     JOIN [cine].[Movie] m ON wl.movieId = m.movieId
                     WHERE wl.userId = :user_id AND m.title LIKE :search
                     ORDER BY 
@@ -1380,13 +2021,13 @@ def account():
             else:
                 # Query không tìm kiếm
                 watchlist_total = conn.execute(text("""
-                    SELECT COUNT(*) FROM [cine].[WatchList] WHERE userId = :user_id
+                    SELECT COUNT(*) FROM [cine].[Watchlist] WHERE userId = :user_id
                 """), {"user_id": user_id}).scalar()
                 
                 watchlist_offset = (watchlist_page - 1) * per_page
                 watchlist = conn.execute(text("""
                 SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, wl.addedAt
-                FROM [cine].[WatchList] wl
+                FROM [cine].[Watchlist] wl
                 JOIN [cine].[Movie] m ON wl.movieId = m.movieId
                 WHERE wl.userId = :user_id
                 ORDER BY wl.addedAt DESC
@@ -1919,15 +2560,24 @@ def add_watchlist(movie_id):
         with current_app.db_engine.begin() as conn:
             # Kiểm tra xem phim đã có trong watchlist chưa
             existing = conn.execute(text("""
-                SELECT 1 FROM [cine].[WatchList] 
+                SELECT 1 FROM [cine].[Watchlist] 
                 WHERE userId = :user_id AND movieId = :movie_id
             """), {"user_id": user_id, "movie_id": movie_id}).scalar()
             
             if not existing:
+                # Tạo watchlistId tự động
+                max_id = conn.execute(text("""
+                    SELECT ISNULL(MAX(watchlistId), 0) + 1 FROM cine.Watchlist
+                """)).scalar()
+                
                 conn.execute(text("""
-                    INSERT INTO [cine].[WatchList] (userId, movieId, addedAt)
-                    VALUES (:user_id, :movie_id, GETDATE())
-                """), {"user_id": user_id, "movie_id": movie_id})
+                    INSERT INTO [cine].[Watchlist] (watchlistId, userId, movieId, addedAt, priority, isWatched)
+                    VALUES (:watchlist_id, :user_id, :movie_id, GETDATE(), 1, 0)
+                """), {
+                    "watchlist_id": max_id,
+                    "user_id": user_id, 
+                    "movie_id": movie_id
+                })
                 
                 return jsonify({"success": True, "message": "Đã thêm vào danh sách xem sau"})
             else:
@@ -1949,7 +2599,7 @@ def remove_watchlist(movie_id):
     try:
         with current_app.db_engine.begin() as conn:
             conn.execute(text("""
-                DELETE FROM [cine].[WatchList] 
+                DELETE FROM [cine].[Watchlist] 
                 WHERE userId = :user_id AND movieId = :movie_id
             """), {"user_id": user_id, "movie_id": movie_id})
             
@@ -1970,8 +2620,29 @@ def check_watchlist(movie_id):
     
     try:
         with current_app.db_engine.connect() as conn:
+            # Tạo bảng Watchlist nếu chưa tồn tại
+            try:
+                conn.execute(text("""
+                    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Watchlist' AND schema_id = SCHEMA_ID('cine'))
+                    BEGIN
+                        CREATE TABLE [cine].[Watchlist] (
+                            [watchlistId] bigint IDENTITY(1,1) NOT NULL,
+                            [userId] bigint NOT NULL,
+                            [movieId] bigint NOT NULL,
+                            [addedAt] datetime2 NOT NULL DEFAULT (sysutcdatetime()),
+                            [priority] int NOT NULL DEFAULT ((1)),
+                            [notes] nvarchar(500) NULL,
+                            [isWatched] bit NOT NULL DEFAULT ((0)),
+                            [watchedAt] datetime2 NULL
+                        );
+                    END
+                """))
+                print("Debug - Watchlist table created or already exists")
+            except Exception as e:
+                print(f"Debug - Error creating Watchlist table: {e}")
+            
             result = conn.execute(text("""
-                SELECT 1 FROM [cine].[WatchList] 
+                SELECT 1 FROM [cine].[Watchlist] 
                 WHERE userId = :user_id AND movieId = :movie_id
             """), {"user_id": user_id, "movie_id": movie_id}).scalar()
             
@@ -1993,16 +2664,37 @@ def toggle_watchlist(movie_id):
     
     try:
         with current_app.db_engine.begin() as conn:
+            # Tạo bảng Watchlist nếu chưa tồn tại
+            try:
+                conn.execute(text("""
+                    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Watchlist' AND schema_id = SCHEMA_ID('cine'))
+                    BEGIN
+                        CREATE TABLE [cine].[Watchlist] (
+                            [watchlistId] bigint IDENTITY(1,1) NOT NULL,
+                            [userId] bigint NOT NULL,
+                            [movieId] bigint NOT NULL,
+                            [addedAt] datetime2 NOT NULL DEFAULT (sysutcdatetime()),
+                            [priority] int NOT NULL DEFAULT ((1)),
+                            [notes] nvarchar(500) NULL,
+                            [isWatched] bit NOT NULL DEFAULT ((0)),
+                            [watchedAt] datetime2 NULL
+                        );
+                    END
+                """))
+                print("Debug - Watchlist table created or already exists")
+            except Exception as e:
+                print(f"Debug - Error creating Watchlist table: {e}")
+            
             # Kiểm tra xem phim đã có trong watchlist chưa
             existing = conn.execute(text("""
-                SELECT 1 FROM [cine].[WatchList] 
+                SELECT 1 FROM [cine].[Watchlist] 
                 WHERE userId = :user_id AND movieId = :movie_id
             """), {"user_id": user_id, "movie_id": movie_id}).scalar()
             
             if existing:
                 # Xóa khỏi watchlist
                 conn.execute(text("""
-                    DELETE FROM [cine].[WatchList] 
+                    DELETE FROM [cine].[Watchlist] 
                     WHERE userId = :user_id AND movieId = :movie_id
                 """), {"user_id": user_id, "movie_id": movie_id})
                 
@@ -2012,11 +2704,19 @@ def toggle_watchlist(movie_id):
                     "message": "Đã xóa khỏi danh sách xem sau"
                 })
             else:
-                # Thêm vào watchlist
+                # Thêm vào watchlist - tạo watchlistId tự động
+                max_id = conn.execute(text("""
+                    SELECT ISNULL(MAX(watchlistId), 0) + 1 FROM cine.Watchlist
+                """)).scalar()
+                
                 conn.execute(text("""
-                    INSERT INTO [cine].[WatchList] (userId, movieId, addedAt)
-                    VALUES (:user_id, :movie_id, GETDATE())
-                """), {"user_id": user_id, "movie_id": movie_id})
+                    INSERT INTO [cine].[Watchlist] (watchlistId, userId, movieId, addedAt, priority, isWatched)
+                    VALUES (:watchlist_id, :user_id, :movie_id, GETDATE(), 1, 0)
+                """), {
+                    "watchlist_id": max_id,
+                    "user_id": user_id, 
+                    "movie_id": movie_id
+                })
                 
                 return jsonify({
                     "success": True, 
@@ -2032,7 +2732,9 @@ def toggle_watchlist(movie_id):
                 
     except Exception as e:
         print(f"Error toggling watchlist: {e}")
-        return jsonify({"success": False, "message": "Có lỗi xảy ra"})
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "message": f"Có lỗi xảy ra: {str(e)}"})
 
 
 @main_bp.route("/add-favorite/<int:movie_id>", methods=["POST"])
@@ -2052,10 +2754,19 @@ def add_favorite(movie_id):
             """), {"user_id": user_id, "movie_id": movie_id}).scalar()
             
             if not existing:
+                # Tạo favoriteId tự động
+                max_id = conn.execute(text("""
+                    SELECT ISNULL(MAX(favoriteId), 0) + 1 FROM cine.Favorite
+                """)).scalar()
+                
                 conn.execute(text("""
-                    INSERT INTO [cine].[Favorite] (userId, movieId, addedAt)
-                    VALUES (:user_id, :movie_id, GETDATE())
-                """), {"user_id": user_id, "movie_id": movie_id})
+                    INSERT INTO [cine].[Favorite] (favoriteId, userId, movieId, addedAt)
+                    VALUES (:favorite_id, :user_id, :movie_id, GETDATE())
+                """), {
+                    "favorite_id": max_id,
+                    "user_id": user_id, 
+                    "movie_id": movie_id
+                })
                 
                 return jsonify({"success": True, "message": "Đã thêm vào danh sách yêu thích"})
             else:
@@ -2111,7 +2822,7 @@ def api_search_watchlist():
                 # Query với tìm kiếm
                 watchlist_total = conn.execute(text("""
                     SELECT COUNT(*) 
-                    FROM [cine].[WatchList] wl
+                    FROM [cine].[Watchlist] wl
                     JOIN [cine].[Movie] m ON wl.movieId = m.movieId
                     WHERE wl.userId = :user_id AND m.title LIKE :search
                 """), {"user_id": user_id, "search": f"%{search_query}%"}).scalar()
@@ -2119,7 +2830,7 @@ def api_search_watchlist():
                 watchlist_offset = (page - 1) * per_page
                 watchlist = conn.execute(text("""
                     SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, wl.addedAt
-                    FROM [cine].[WatchList] wl
+                    FROM [cine].[Watchlist] wl
                     JOIN [cine].[Movie] m ON wl.movieId = m.movieId
                     WHERE wl.userId = :user_id AND m.title LIKE :search
                     ORDER BY 
@@ -2142,13 +2853,13 @@ def api_search_watchlist():
             else:
                 # Query không tìm kiếm
                 watchlist_total = conn.execute(text("""
-                    SELECT COUNT(*) FROM [cine].[WatchList] WHERE userId = :user_id
+                    SELECT COUNT(*) FROM [cine].[Watchlist] WHERE userId = :user_id
                 """), {"user_id": user_id}).scalar()
                 
                 watchlist_offset = (page - 1) * per_page
                 watchlist = conn.execute(text("""
                     SELECT m.movieId, m.title, m.posterUrl, m.releaseYear, wl.addedAt
-                    FROM [cine].[WatchList] wl
+                    FROM [cine].[Watchlist] wl
                     JOIN [cine].[Movie] m ON wl.movieId = m.movieId
                     WHERE wl.userId = :user_id
                     ORDER BY wl.addedAt DESC
@@ -2246,11 +2957,19 @@ def toggle_favorite(movie_id):
                     "message": "Đã xóa khỏi danh sách yêu thích"
                 })
             else:
-                # Thêm vào favorites
+                # Thêm vào favorites - tạo favoriteId tự động
+                max_id = conn.execute(text("""
+                    SELECT ISNULL(MAX(favoriteId), 0) + 1 FROM cine.Favorite
+                """)).scalar()
+                
                 conn.execute(text("""
-                    INSERT INTO [cine].[Favorite] (userId, movieId, addedAt)
-                    VALUES (:user_id, :movie_id, GETDATE())
-                """), {"user_id": user_id, "movie_id": movie_id})
+                    INSERT INTO [cine].[Favorite] (favoriteId, userId, movieId, addedAt)
+                    VALUES (:favorite_id, :user_id, :movie_id, GETDATE())
+                """), {
+                    "favorite_id": max_id,
+                    "user_id": user_id, 
+                    "movie_id": movie_id
+                })
                 
                 return jsonify({
                     "success": True, 
@@ -2266,7 +2985,9 @@ def toggle_favorite(movie_id):
                 
     except Exception as e:
         print(f"Error toggling favorite: {e}")
-        return jsonify({"success": False, "message": "Có lỗi xảy ra"})
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "message": f"Có lỗi xảy ra: {str(e)}"})
 
 
 @main_bp.route("/api/search-favorites", methods=["GET"])
@@ -3397,15 +4118,6 @@ def delete_rating(movie_id):
         return jsonify({"success": False, "message": "Có lỗi xảy ra khi xóa đánh giá"})
 
 
-@main_bp.route("/test-comment", methods=["GET"])
-def test_comment():
-    """Test comment route"""
-    return jsonify({"success": True, "message": "Comment route hoạt động!"})
-
-@main_bp.route("/test-comment-page")
-def test_comment_page():
-    """Test comment page"""
-    return render_template("test_comment.html")
 
 @main_bp.route("/submit-comment/<int:movie_id>", methods=["POST"])
 def submit_comment(movie_id):
@@ -3426,18 +4138,23 @@ def submit_comment(movie_id):
     
     try:
         with current_app.db_engine.begin() as conn:
-            # Thêm comment mới và lấy ID
-            result = conn.execute(text("""
-                INSERT INTO [cine].[Comment] (userId, movieId, content)
-                OUTPUT INSERTED.commentId
-                VALUES (:user_id, :movie_id, :content)
+            # Tạo commentId tự động
+            max_id = conn.execute(text("""
+                SELECT ISNULL(MAX(commentId), 0) + 1 FROM cine.Comment
+            """)).scalar()
+            
+            # Thêm comment mới
+            conn.execute(text("""
+                INSERT INTO [cine].[Comment] (commentId, userId, movieId, content, createdAt)
+                VALUES (:comment_id, :user_id, :movie_id, :content, GETDATE())
             """), {
+                "comment_id": max_id,
                 "user_id": user_id, 
                 "movie_id": movie_id, 
                 "content": content
             })
             
-            comment_id = result.scalar()
+            comment_id = max_id
             
             if not comment_id:
                 return jsonify({"success": False, "message": "Không thể tạo comment"})
@@ -3482,7 +4199,7 @@ def get_comments(movie_id):
     """Lấy danh sách comment của phim"""
     try:
         with current_app.db_engine.connect() as conn:
-            # Lấy tất cả comment của phim (chỉ comment chưa bị xóa)
+            # Lấy tất cả comment của phim
             comments = conn.execute(text("""
                 SELECT 
                     c.commentId,
@@ -3493,7 +4210,7 @@ def get_comments(movie_id):
                     u.userId
                 FROM [cine].[Comment] c
                 JOIN [cine].[User] u ON c.userId = u.userId
-                WHERE c.movieId = :movie_id AND c.isDeleted = 0
+                WHERE c.movieId = :movie_id
                 ORDER BY c.createdAt ASC
             """), {"movie_id": movie_id}).mappings().all()
             
@@ -3544,7 +4261,7 @@ def update_comment(comment_id):
             # Kiểm tra quyền sở hữu comment
             comment_owner = conn.execute(text("""
                 SELECT userId FROM [cine].[Comment] 
-                WHERE commentId = :comment_id AND isDeleted = 0
+                WHERE commentId = :comment_id
             """), {"comment_id": comment_id}).scalar()
             
             if not comment_owner:
@@ -3556,7 +4273,7 @@ def update_comment(comment_id):
             # Cập nhật comment
             conn.execute(text("""
                 UPDATE [cine].[Comment] 
-                SET content = :content, updatedAt = GETDATE()
+                SET content = :content
                 WHERE commentId = :comment_id
             """), {"content": content, "comment_id": comment_id})
             
@@ -3583,7 +4300,7 @@ def delete_comment(comment_id):
             # Kiểm tra quyền sở hữu comment
             comment_owner = conn.execute(text("""
                 SELECT userId FROM [cine].[Comment] 
-                WHERE commentId = :comment_id AND isDeleted = 0
+                WHERE commentId = :comment_id
             """), {"comment_id": comment_id}).scalar()
             
             if not comment_owner:
@@ -3592,10 +4309,9 @@ def delete_comment(comment_id):
             if comment_owner != user_id:
                 return jsonify({"success": False, "message": "Bạn không có quyền xóa comment này"})
             
-            # Soft delete comment
+            # Delete comment
             conn.execute(text("""
-                UPDATE [cine].[Comment] 
-                SET isDeleted = 1, updatedAt = GETDATE()
+                DELETE FROM [cine].[Comment] 
                 WHERE commentId = :comment_id
             """), {"comment_id": comment_id})
             
@@ -3630,6 +4346,173 @@ def retrain_model():
         return jsonify({
             "success": False,
             "message": f"Retrain failed: {str(e)}"
+        })
+
+@main_bp.route("/api/train_enhanced_cf", methods=["POST"])
+@admin_required
+def train_enhanced_cf():
+    """Train enhanced CF model với tất cả dữ liệu"""
+    try:
+        global enhanced_cf_recommender
+        
+        if enhanced_cf_recommender is None:
+            init_recommenders()
+        
+        # Train enhanced CF model
+        success = enhanced_cf_recommender.train_model()
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": "Enhanced CF model trained successfully",
+                "model_info": enhanced_cf_recommender.get_model_info()
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "message": "Failed to train enhanced CF model"
+            })
+            
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"Error training enhanced CF model: {str(e)}"
+        })
+
+@main_bp.route("/api/train_cf_model", methods=["POST"])
+@admin_required
+def train_cf_model():
+    """Train CF model using the fast training script"""
+    try:
+        import subprocess
+        import sys
+        import os
+        
+        # Path to the training script
+        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'model_collaborative', 'train_collaborative_fast.py')
+        
+        if not os.path.exists(script_path):
+            return jsonify({"success": False, "message": "Training script not found"})
+        
+        # Run the training script
+        result = subprocess.run([sys.executable, script_path], 
+                              capture_output=True, text=True, cwd=os.path.dirname(script_path))
+        
+        if result.returncode == 0:
+            # Reload models after training
+            init_recommenders()
+            return jsonify({
+                "success": True, 
+                "message": "CF model trained successfully",
+                "output": result.stdout
+            })
+        else:
+            return jsonify({
+                "success": False, 
+                "message": "Training failed",
+                "error": result.stderr
+            })
+            
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Error training CF model: {str(e)}"})
+
+@main_bp.route("/api/model_status_public", methods=["GET"])
+def model_status_public():
+    """Get model status for public access"""
+    try:
+        global collaborative_recommender, enhanced_cf_recommender
+        
+        # Debug logging
+        current_app.logger.info(f"collaborative_recommender: {collaborative_recommender}")
+        current_app.logger.info(f"enhanced_cf_recommender: {enhanced_cf_recommender}")
+        
+        # Initialize if not already done
+        if collaborative_recommender is None or enhanced_cf_recommender is None:
+            current_app.logger.info("Recommenders not initialized, initializing now...")
+            init_recommenders()
+        
+        # Try Enhanced CF model first
+        if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded():
+            model_info = enhanced_cf_recommender.get_model_info()
+            model_info['model_type'] = 'Enhanced CF'
+            current_app.logger.info(f"Enhanced CF model info: {model_info}")
+            return jsonify({
+                "success": True,
+                "modelInfo": model_info
+            })
+        
+        # Try Collaborative CF model
+        if collaborative_recommender and collaborative_recommender.is_model_loaded():
+            model_info = collaborative_recommender.get_model_info()
+            model_info['model_type'] = 'CF'
+            current_app.logger.info(f"Collaborative CF model info: {model_info}")
+            return jsonify({
+                "success": True,
+                "modelInfo": model_info
+            })
+        
+        # No model loaded
+        current_app.logger.warning("No model loaded")
+        return jsonify({
+            "success": False,
+            "message": "No model loaded"
+        })
+            
+    except Exception as e:
+        current_app.logger.error(f"Error in model_status_public: {str(e)}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Error getting model status: {str(e)}"
+        })
+
+
+# Load model 
+@main_bp.route("/api/switch_model/<model_type>", methods=["POST"])
+@admin_required
+@login_required
+def switch_model(model_type):
+    """Switch between CF and Enhanced CF models"""
+    try:
+        global collaborative_recommender, enhanced_cf_recommender
+        
+        if model_type == "cf":
+            if collaborative_recommender and collaborative_recommender.is_model_loaded():
+                # Set priority to use CF model
+                return jsonify({
+                    "success": True,
+                    "message": "Đã chuyển sang CF model",
+                    "model_type": "CF"
+                })
+            else:
+                return jsonify({
+                    "success": False,
+                    "message": "CF model chưa được load"
+                })
+                
+        elif model_type == "enhanced":
+            if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded():
+                # Set priority to use Enhanced CF model
+                return jsonify({
+                    "success": True,
+                    "message": "Đã chuyển sang Enhanced CF model",
+                    "model_type": "Enhanced CF"
+                })
+            else:
+                return jsonify({
+                    "success": False,
+                    "message": "Enhanced CF model chưa được load"
+                })
+        else:
+            return jsonify({
+                "success": False,
+                "message": "Model type không hợp lệ. Chọn 'cf' hoặc 'enhanced'"
+            })
+            
+    except Exception as e:
+        current_app.logger.error(f"Error switching model: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Lỗi khi chuyển model: {str(e)}"
         })
 
 @main_bp.route("/api/model_status", methods=["GET"])
@@ -3814,8 +4697,10 @@ def get_similar_movies(movie_id):
         if collaborative_recommender is None:
             init_recommenders()
         
-        # Sử dụng CollaborativeRecommender
-        if collaborative_recommender and collaborative_recommender.is_model_loaded():
+        # Sử dụng Enhanced CF trước, fallback về Collaborative CF
+        if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded():
+            similar_movies = enhanced_cf_recommender.get_similar_movies(movie_id, limit)
+        elif collaborative_recommender and collaborative_recommender.is_model_loaded():
             similar_movies = collaborative_recommender.get_similar_movies(movie_id, limit)
         else:
             # Fallback: sử dụng content-based recommender
@@ -3844,8 +4729,10 @@ def get_trending_movies():
         if collaborative_recommender is None:
             init_recommenders()
         
-        # Lấy trending movies
-        if collaborative_recommender and collaborative_recommender.is_model_loaded():
+        # Lấy trending movies - Enhanced CF trước
+        if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded():
+            trending_movies = enhanced_cf_recommender.get_trending_movies(limit)
+        elif collaborative_recommender and collaborative_recommender.is_model_loaded():
             trending_movies = collaborative_recommender.get_trending_movies(limit)
         else:
             # Fallback: lấy từ database
@@ -4121,11 +5008,18 @@ def get_personalized_recommendations():
                         
                         # Lưu recommendations mới
                         for rank, rec in enumerate(cf_recommendations, 1):
+                            # Generate recId
+                            rec_id_result = conn.execute(text("""
+                                SELECT ISNULL(MAX(recId), 0) + 1 FROM cine.PersonalRecommendation
+                            """)).fetchone()
+                            rec_id = rec_id_result[0] if rec_id_result else 1
+                            
                             conn.execute(text("""
                                 INSERT INTO cine.PersonalRecommendation 
-                                (userId, movieId, score, rank, algo, generatedAt, expiresAt)
-                                VALUES (:user_id, :movie_id, :score, :rank, 'collaborative', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
+                                (recId, userId, movieId, score, rank, algo, generatedAt, expiresAt)
+                                VALUES (:rec_id, :user_id, :movie_id, :score, :rank, 'collaborative', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
                             """), {
+                                "rec_id": rec_id,
                                 "user_id": user_id,
                                 "movie_id": rec["movieId"],
                                 "score": rec.get("recommendation_score", 0),
@@ -4181,6 +5075,502 @@ def get_personalized_recommendations():
     except Exception as e:
         current_app.logger.error(f"Error getting personalized recommendations: {e}")
         return jsonify({"success": False, "message": str(e)})
+
+@main_bp.route("/api/cold_start_recommendations")
+@login_required
+def get_cold_start_recommendations_api():
+    """API endpoint để lấy cold start recommendations"""
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"success": False, "message": "Chưa đăng nhập"})
+        
+        limit = request.args.get('limit', 12, type=int)
+        force_refresh = request.args.get('refresh', 'false').lower() == 'true'
+        
+        with current_app.db_engine.connect() as conn:
+            # Kiểm tra xem user có đủ dữ liệu không
+            rating_count = conn.execute(text("""
+                SELECT COUNT(*) FROM cine.Rating WHERE userId = :user_id
+            """), {"user_id": user_id}).scalar()
+            
+            view_count = conn.execute(text("""
+                SELECT COUNT(*) FROM cine.ViewHistory WHERE userId = :user_id
+            """), {"user_id": user_id}).scalar()
+            
+            total_interactions = rating_count + view_count
+            
+            if total_interactions >= 5:
+                return jsonify({
+                    "success": False,
+                    "message": "User đã có đủ dữ liệu, không cần cold start",
+                    "interactions": total_interactions
+                })
+            
+            # Lấy cold start recommendations từ database
+            if not force_refresh:
+                existing_recs = conn.execute(text("""
+                    SELECT TOP (:limit)
+                        csr.movieId, csr.score, csr.rank, csr.source, csr.reason,
+                        m.title, m.posterUrl, m.releaseYear, m.country,
+                        AVG(CAST(r.value AS FLOAT)) AS avgRating,
+                        COUNT(r.movieId) AS ratingCount,
+                        STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+                    FROM cine.ColdStartRecommendations csr
+                    INNER JOIN cine.Movie m ON csr.movieId = m.movieId
+                    LEFT JOIN cine.Rating r ON m.movieId = r.movieId
+                    LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                    LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
+                    WHERE csr.userId = :user_id AND csr.expiresAt > GETUTCDATE()
+                    GROUP BY csr.movieId, csr.score, csr.rank, csr.source, csr.reason,
+                             m.title, m.posterUrl, m.releaseYear, m.country
+                    ORDER BY csr.rank
+                """), {"user_id": user_id, "limit": limit}).mappings().all()
+                
+                if existing_recs:
+                    recommendations = []
+                    for row in existing_recs:
+                        recommendations.append({
+                            "movieId": row["movieId"],
+                            "title": row["title"],
+                            "posterUrl": get_poster_or_dummy(row.get("posterUrl"), row["title"]),
+                            "releaseYear": row["releaseYear"],
+                            "country": row["country"],
+                            "score": row["score"],
+                            "rank": row["rank"],
+                            "avgRating": round(float(row["avgRating"]), 2) if row["avgRating"] else 0.0,
+                            "ratingCount": row["ratingCount"],
+                            "genres": row["genres"] or "",
+                            "source": row["source"],
+                            "reason": row["reason"]
+                        })
+                    
+                    return jsonify({
+                        "success": True,
+                        "recommendations": recommendations,
+                        "source": "cached"
+                    })
+            
+            # Tạo cold start recommendations mới
+            recommendations = get_cold_start_recommendations(user_id, conn)
+            
+            return jsonify({
+                "success": True,
+                "recommendations": recommendations,
+                "source": "generated",
+                "interactions": total_interactions
+            })
+            
+    except Exception as e:
+        print(f"Error getting cold start recommendations: {e}")
+        return jsonify({
+            "success": False,
+            "message": f"Có lỗi xảy ra: {str(e)}"
+        })
+
+@main_bp.route("/onboarding")
+@login_required
+def onboarding():
+    """Trang onboarding cho user mới"""
+    return render_template("onboarding.html")
+
+@main_bp.route("/api/genres")
+def get_genres():
+    """API endpoint để lấy danh sách thể loại phim"""
+    try:
+        with current_app.db_engine.connect() as conn:
+            genres = conn.execute(text("""
+                SELECT g.genreId, g.name, COUNT(mg.movieId) as movie_count
+                FROM cine.Genre g
+                LEFT JOIN cine.MovieGenre mg ON g.genreId = mg.genreId
+                GROUP BY g.genreId, g.name
+                HAVING COUNT(mg.movieId) > 0
+                ORDER BY movie_count DESC, g.name
+            """)).mappings().all()
+            
+            return jsonify({
+                "success": True,
+                "genres": [
+                    {
+                        "genreId": genre["genreId"],
+                        "name": genre["name"],
+                        "movie_count": genre["movie_count"]
+                    }
+                    for genre in genres
+                ]
+            })
+    except Exception as e:
+        print(f"Error getting genres: {e}")
+        return jsonify({"success": False, "message": "Có lỗi xảy ra khi lấy danh sách thể loại"})
+
+@main_bp.route("/api/actors")
+def get_actors():
+    """API endpoint để lấy danh sách diễn viên phổ biến"""
+    try:
+        with current_app.db_engine.connect() as conn:
+            actors = conn.execute(text("""
+                SELECT TOP 20 a.actorId, a.name, COUNT(ma.movieId) as movie_count
+                FROM cine.Actor a
+                LEFT JOIN cine.MovieActor ma ON a.actorId = ma.actorId
+                GROUP BY a.actorId, a.name
+                HAVING COUNT(ma.movieId) > 0
+                ORDER BY movie_count DESC, a.name
+            """)).mappings().all()
+            
+            return jsonify({
+                "success": True,
+                "actors": [
+                    {
+                        "actorId": actor["actorId"],
+                        "name": actor["name"],
+                        "movie_count": actor["movie_count"]
+                    }
+                    for actor in actors
+                ]
+            })
+    except Exception as e:
+        print(f"Error getting actors: {e}")
+        return jsonify({"success": False, "message": "Có lỗi xảy ra khi lấy danh sách diễn viên"})
+
+@main_bp.route("/api/directors")
+def get_directors():
+    """API endpoint để lấy danh sách đạo diễn phổ biến"""
+    try:
+        with current_app.db_engine.connect() as conn:
+            directors = conn.execute(text("""
+                SELECT TOP 20 d.directorId, d.name, COUNT(md.movieId) as movie_count
+                FROM cine.Director d
+                LEFT JOIN cine.MovieDirector md ON d.directorId = md.directorId
+                GROUP BY d.directorId, d.name
+                HAVING COUNT(md.movieId) > 0
+                ORDER BY movie_count DESC, d.name
+            """)).mappings().all()
+            
+            return jsonify({
+                "success": True,
+                "directors": [
+                    {
+                        "directorId": director["directorId"],
+                        "name": director["name"],
+                        "movie_count": director["movie_count"]
+                    }
+                    for director in directors
+                ]
+            })
+    except Exception as e:
+        print(f"Error getting directors: {e}")
+        return jsonify({"success": False, "message": "Có lỗi xảy ra khi lấy danh sách đạo diễn"})
+
+@main_bp.route("/api/test-comment-system", methods=["GET"])
+def test_comment_system():
+    """API test để kiểm tra comment"""
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"success": False, "message": "Chưa đăng nhập"})
+        
+        with current_app.db_engine.connect() as conn:
+            # Test Comment table structure
+            try:
+                comment_count = conn.execute(text("""
+                    SELECT COUNT(*) FROM [cine].[Comment] WHERE userId = :user_id
+                """), {"user_id": user_id}).scalar()
+                comment_status = f"✅ Comment table OK ({comment_count} comments)"
+            except Exception as e:
+                comment_status = f"❌ Comment error: {str(e)}"
+            
+            # Test Comment structure
+            try:
+                max_id = conn.execute(text("""
+                    SELECT ISNULL(MAX(commentId), 0) + 1 FROM cine.Comment
+                """)).scalar()
+                max_id_status = f"✅ Max commentId: {max_id}"
+            except Exception as e:
+                max_id_status = f"❌ Max ID error: {str(e)}"
+            
+            return jsonify({
+                "success": True,
+                "user_id": user_id,
+                "comment_table": comment_status,
+                "max_id": max_id_status
+            })
+            
+    except Exception as e:
+        return jsonify({
+            "success": False, 
+            "message": f"Test error: {str(e)}"
+        })
+
+@main_bp.route("/api/save_user_preferences", methods=["POST"])
+@login_required
+def save_user_preferences():
+    """API endpoint để lưu sở thích của user"""
+    try:
+        user_id = session.get("user_id")
+        data = request.get_json()
+        
+        print(f"Debug - Saving preferences for user {user_id}: {data}")
+        
+        genres = data.get('genres', [])
+        actors = data.get('actors', [])
+        directors = data.get('directors', [])
+        
+        if not genres:
+            return jsonify({"success": False, "message": "Vui lòng chọn ít nhất 1 thể loại phim"})
+        
+        with current_app.db_engine.begin() as conn:
+            # Tạo bảng UserPreference nếu chưa tồn tại
+            try:
+                conn.execute(text("""
+                    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'UserPreference' AND schema_id = SCHEMA_ID('cine'))
+                    BEGIN
+                        CREATE TABLE [cine].[UserPreference] (
+                            [prefId] bigint IDENTITY(1,1) NOT NULL,
+                            [userId] bigint NOT NULL,
+                            [preferenceType] nvarchar(20) NOT NULL,
+                            [preferenceId] bigint NOT NULL,
+                            [createdAt] datetime2 NOT NULL DEFAULT (sysutcdatetime())
+                        );
+                    END
+                """))
+                print("Debug - UserPreference table created or already exists")
+            except Exception as e:
+                print(f"Debug - Error creating UserPreference table: {e}")
+            
+            # Thêm cột hasCompletedOnboarding nếu chưa tồn tại
+            try:
+                conn.execute(text("""
+                    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('[cine].[User]') AND name = 'hasCompletedOnboarding')
+                    BEGIN
+                        ALTER TABLE [cine].[User] ADD [hasCompletedOnboarding] bit NOT NULL DEFAULT (0);
+                    END
+                """))
+                print("Debug - hasCompletedOnboarding column added or already exists")
+            except Exception as e:
+                print(f"Debug - Error adding hasCompletedOnboarding column: {e}")
+            
+            # Xóa preferences cũ
+            try:
+                conn.execute(text("""
+                    DELETE FROM cine.UserPreference WHERE userId = :user_id
+                """), {"user_id": user_id})
+                print("Debug - Deleted old preferences")
+            except Exception as e:
+                print(f"Debug - Error deleting old preferences: {e}")
+            
+            # Lưu genre preferences
+            for genre_id in genres:
+                try:
+                    conn.execute(text("""
+                        INSERT INTO cine.UserPreference (userId, preferenceType, preferenceId, createdAt)
+                        VALUES (:user_id, 'genre', :preference_id, GETDATE())
+                    """), {"user_id": user_id, "preference_id": genre_id})
+                    print(f"Debug - Saved genre preference: {genre_id}")
+                except Exception as e:
+                    print(f"Debug - Error saving genre preference {genre_id}: {e}")
+            
+            # Lưu actor preferences
+            for actor_id in actors:
+                try:
+                    conn.execute(text("""
+                        INSERT INTO cine.UserPreference (userId, preferenceType, preferenceId, createdAt)
+                        VALUES (:user_id, 'actor', :preference_id, GETDATE())
+                    """), {"user_id": user_id, "preference_id": actor_id})
+                    print(f"Debug - Saved actor preference: {actor_id}")
+                except Exception as e:
+                    print(f"Debug - Error saving actor preference {actor_id}: {e}")
+            
+            # Lưu director preferences
+            for director_id in directors:
+                try:
+                    conn.execute(text("""
+                        INSERT INTO cine.UserPreference (userId, preferenceType, preferenceId, createdAt)
+                        VALUES (:user_id, 'director', :preference_id, GETDATE())
+                    """), {"user_id": user_id, "preference_id": director_id})
+                    print(f"Debug - Saved director preference: {director_id}")
+                except Exception as e:
+                    print(f"Debug - Error saving director preference {director_id}: {e}")
+            
+            # Đánh dấu user đã hoàn thành onboarding
+            try:
+                conn.execute(text("""
+                    UPDATE cine.[User] 
+                    SET hasCompletedOnboarding = 1, lastLoginAt = GETDATE()
+                    WHERE userId = :user_id
+                """), {"user_id": user_id})
+                print("Debug - Updated user onboarding status")
+            except Exception as e:
+                print(f"Debug - Error updating user status: {e}")
+            
+            # Tạo cold start recommendations dựa trên preferences
+            try:
+                generate_preference_based_recommendations(user_id, conn)
+                print("Debug - Generated preference-based recommendations")
+            except Exception as e:
+                print(f"Debug - Error generating recommendations: {e}")
+            
+        return jsonify({
+            "success": True,
+            "message": "Đã lưu sở thích thành công",
+            "preferences": {
+                "genres": len(genres),
+                "actors": len(actors),
+                "directors": len(directors)
+            }
+        })
+        
+    except Exception as e:
+        print(f"Error saving user preferences: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "message": f"Có lỗi xảy ra khi lưu sở thích: {str(e)}"})
+
+def generate_preference_based_recommendations(user_id, conn):
+    """Tạo recommendations dựa trên preferences của user"""
+    try:
+        # Lấy preferences của user
+        preferences = conn.execute(text("""
+            SELECT preferenceType, preferenceId FROM cine.UserPreference 
+            WHERE userId = :user_id
+        """), {"user_id": user_id}).mappings().all()
+        
+        if not preferences:
+            return []
+        
+        recommendations = []
+        
+        # Lấy phim theo genre preferences
+        genre_ids = [p["preferenceId"] for p in preferences if p["preferenceType"] == "genre"]
+        if genre_ids:
+            # Tạo placeholders cho genre_ids
+            placeholders = ','.join([f':genre_{i}' for i in range(len(genre_ids))])
+            params = {f'genre_{i}': genre_id for i, genre_id in enumerate(genre_ids)}
+            
+            sql_query = f"""
+                SELECT TOP 6
+                    m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
+                    AVG(CAST(r.value AS FLOAT)) AS avgRating,
+                    COUNT(r.movieId) AS ratingCount,
+                    STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+                FROM cine.Movie m
+                INNER JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                LEFT JOIN cine.Rating r ON m.movieId = r.movieId
+                LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
+                WHERE mg.genreId IN ({placeholders})
+                GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, m.country
+                ORDER BY avgRating DESC, COUNT(r.movieId) DESC
+            """
+            genre_movies = conn.execute(text(sql_query), params).mappings().all()
+            
+            for movie in genre_movies:
+                recommendations.append({
+                    "id": movie["movieId"],
+                    "title": movie["title"],
+                    "poster": get_poster_or_dummy(movie.get("posterUrl"), movie["title"]),
+                    "releaseYear": movie["releaseYear"],
+                    "country": movie["country"],
+                    "score": 0.9,  # High score for preference-based
+                    "rank": len(recommendations) + 1,
+                    "avgRating": round(float(movie["avgRating"]), 2) if movie["avgRating"] else 0.0,
+                    "ratingCount": movie["ratingCount"],
+                    "genres": movie["genres"] or "",
+                    "source": "preference_genre"
+                })
+        
+        # Lưu recommendations vào database
+        if recommendations:
+            # Xóa recommendations cũ
+            conn.execute(text("""
+                DELETE FROM cine.ColdStartRecommendations WHERE userId = :user_id
+            """), {"user_id": user_id})
+            
+            # Lưu recommendations mới
+            for rec in recommendations:
+                conn.execute(text("""
+                    INSERT INTO cine.ColdStartRecommendations 
+                    (userId, movieId, score, rank, source, generatedAt, expiresAt, reason)
+                    VALUES (:user_id, :movie_id, :score, :rank, :source, GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()), :reason)
+                """), {
+                    "user_id": user_id,
+                    "movie_id": rec["id"],
+                    "score": rec["score"],
+                    "rank": rec["rank"],
+                    "source": rec["source"],
+                    "reason": f"Recommendation based on your genre preferences"
+                })
+            
+            print(f"Generated {len(recommendations)} preference-based recommendations for user {user_id}")
+        
+        return recommendations
+        
+    except Exception as e:
+        print(f"Error generating preference-based recommendations: {e}")
+        return []
+
+@main_bp.route("/api/user_interaction_status")
+@login_required
+def get_user_interaction_status():
+    """API endpoint để kiểm tra trạng thái tương tác của user"""
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"success": False, "message": "Chưa đăng nhập"})
+        
+        with current_app.db_engine.connect() as conn:
+            # Đếm các loại tương tác
+            rating_count = conn.execute(text("""
+                SELECT COUNT(*) FROM cine.Rating WHERE userId = :user_id
+            """), {"user_id": user_id}).scalar()
+            
+            view_count = conn.execute(text("""
+                SELECT COUNT(*) FROM cine.ViewHistory WHERE userId = :user_id
+            """), {"user_id": user_id}).scalar()
+            
+            favorite_count = conn.execute(text("""
+                SELECT COUNT(*) FROM cine.Favorite WHERE userId = :user_id
+            """), {"user_id": user_id}).scalar()
+            
+            watchlist_count = conn.execute(text("""
+                SELECT COUNT(*) FROM cine.Watchlist WHERE userId = :user_id
+            """), {"user_id": user_id}).scalar()
+            
+            total_interactions = rating_count + view_count + favorite_count + watchlist_count
+            
+            # Kiểm tra xem có cold start recommendations không
+            cold_start_count = conn.execute(text("""
+                SELECT COUNT(*) FROM cine.ColdStartRecommendations 
+                WHERE userId = :user_id AND expiresAt > GETUTCDATE()
+            """), {"user_id": user_id}).scalar()
+            
+            # Kiểm tra xem có personal recommendations không
+            personal_count = conn.execute(text("""
+                SELECT COUNT(*) FROM cine.PersonalRecommendation 
+                WHERE userId = :user_id AND expiresAt > GETUTCDATE()
+            """), {"user_id": user_id}).scalar()
+            
+            return jsonify({
+                "success": True,
+                "interactions": {
+                    "ratings": rating_count,
+                    "views": view_count,
+                    "favorites": favorite_count,
+                    "watchlist": watchlist_count,
+                    "total": total_interactions
+                },
+                "recommendations": {
+                    "cold_start": cold_start_count,
+                    "personal": personal_count
+                },
+                "needs_cold_start": total_interactions < 5,
+                "can_use_collaborative": total_interactions >= 5
+            })
+            
+    except Exception as e:
+        print(f"Error getting user interaction status: {e}")
+        return jsonify({
+            "success": False,
+            "message": f"Có lỗi xảy ra: {str(e)}"
+        })
 
 @main_bp.route("/api/retrain_cf_model", methods=["POST", "GET"])
 @admin_required
@@ -4283,11 +5673,19 @@ def create_sample_recommendations():
             # Tạo recommendations mẫu
             for rank, movie in enumerate(movies, 1):
                 score = round(0.5 + (rank * 0.1), 2)  # Score từ 0.6 đến 1.7
+                
+                # Generate recId
+                rec_id_result = conn.execute(text("""
+                    SELECT ISNULL(MAX(recId), 0) + 1 FROM cine.PersonalRecommendation
+                """)).fetchone()
+                rec_id = rec_id_result[0] if rec_id_result else 1
+                
                 conn.execute(text("""
                     INSERT INTO cine.PersonalRecommendation 
-                    (userId, movieId, score, rank, algo, generatedAt, expiresAt)
-                    VALUES (:user_id, :movie_id, :score, :rank, 'sample', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
+                    (recId, userId, movieId, score, rank, algo, generatedAt, expiresAt)
+                    VALUES (:rec_id, :user_id, :movie_id, :score, :rank, 'sample', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
                 """), {
+                    "rec_id": rec_id,
                     "user_id": user_id,
                     "movie_id": movie["movieId"],
                     "score": score,

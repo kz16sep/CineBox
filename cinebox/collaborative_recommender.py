@@ -27,6 +27,7 @@ class CollaborativeRecommender:
         if model_path is None:
             # Tự động tìm đường dẫn model
             possible_paths = [
+                'cinebox/model_collaborative/collaborative_model.pkl',
                 'model_collaborative/collaborative_model.pkl',
                 './model_collaborative/collaborative_model.pkl',
                 os.path.join(os.path.dirname(__file__), 'model_collaborative', 'collaborative_model.pkl')
@@ -37,7 +38,7 @@ class CollaborativeRecommender:
                     self.model_path = path
                     break
             else:
-                self.model_path = 'model_collaborative/collaborative_model.pkl'
+                self.model_path = 'cinebox/model_collaborative/collaborative_model.pkl'
         else:
             self.model_path = model_path
         self.user_factors = None
@@ -50,6 +51,16 @@ class CollaborativeRecommender:
         self.reverse_item_mapping = {}
         self.user_item_matrix = None
         self.model_loaded = False
+        
+        # Interaction weights for scoring
+        self.interaction_weights = {
+            'view_history': 0.35,    # Lịch sử xem phim - 35%
+            'rating': 0.25,          # Đánh giá phim - 25%
+            'favorite': 0.10,        # Danh sách yêu thích - 10%
+            'view_history_additional': 0.08,  # Lịch sử xem phim bổ sung - 8%
+            'comment': 0.07,         # Bình luận - 7%
+            'cold_start': 0.05       # Cold Start - 5%
+        }
         
         # Load model if exists
         self.load_model()
@@ -70,13 +81,13 @@ class CollaborativeRecommender:
             
             self.user_factors = model_data['user_factors']
             self.item_factors = model_data['item_factors']
-            self.user_similarity_matrix = model_data['user_similarity_matrix']
-            self.item_similarity_matrix = model_data['item_similarity_matrix']
+            self.user_similarity_matrix = model_data.get('user_similarity_matrix', None)
+            self.item_similarity_matrix = model_data.get('item_similarity_matrix', None)
             self.user_mapping = model_data['user_mapping']
             self.item_mapping = model_data['item_mapping']
             self.reverse_user_mapping = model_data['reverse_user_mapping']
             self.reverse_item_mapping = model_data['reverse_item_mapping']
-            self.user_item_matrix = model_data['user_item_matrix']
+            self.user_item_matrix = model_data.get('user_item_matrix', None)
             
             self.model_loaded = True
             logger.info("Collaborative filtering model loaded successfully")
@@ -195,17 +206,24 @@ class CollaborativeRecommender:
                 return []
             
             user_idx = self.user_mapping[user_id]
-            similarities = self.user_similarity_matrix[user_idx]
             
-            # Get similar users (excluding self)
-            similar_users = []
-            for other_user_idx, similarity in enumerate(similarities):
-                if other_user_idx != user_idx:
-                    other_user_id = self.reverse_user_mapping[other_user_idx]
-                    similar_users.append((other_user_id, float(similarity)))
-            
-            # Sort by similarity and get top N
-            similar_users.sort(key=lambda x: x[1], reverse=True)
+            # Check if similarity matrix exists
+            if self.user_similarity_matrix is not None:
+                similarities = self.user_similarity_matrix[user_idx]
+                
+                # Get similar users (excluding self)
+                similar_users = []
+                for other_user_idx, similarity in enumerate(similarities):
+                    if other_user_idx != user_idx:
+                        other_user_id = self.reverse_user_mapping[other_user_idx]
+                        similar_users.append((other_user_id, float(similarity)))
+                
+                # Sort by similarity and get top N
+                similar_users.sort(key=lambda x: x[1], reverse=True)
+            else:
+                # Fallback: use model predictions directly
+                logger.warning("User similarity matrix not available, using model predictions")
+                similar_users = []
             similar_users = similar_users[:limit]
             
             # Get user details from database
@@ -400,6 +418,10 @@ class CollaborativeRecommender:
                         m.viewCount, m.overview,
                         AVG(CAST(r.value AS FLOAT)) as avgRating,
                         COUNT(r.movieId) as ratingCount,
+                        COUNT(DISTINCT w.userId) as watchlistCount,
+                        COUNT(DISTINCT vh.userId) as viewHistoryCount,
+                        COUNT(DISTINCT f.userId) as favoriteCount,
+                        COUNT(DISTINCT c.userId) as commentCount,
                         STUFF((
                             SELECT TOP 5 ', ' + g2.name
                             FROM cine.MovieGenre mg2
@@ -410,6 +432,10 @@ class CollaborativeRecommender:
                         ), 1, 2, '') as genres
                     FROM cine.Movie m
                     LEFT JOIN cine.Rating r ON m.movieId = r.movieId
+                    LEFT JOIN cine.Watchlist w ON m.movieId = w.movieId
+                    LEFT JOIN cine.ViewHistory vh ON m.movieId = vh.movieId
+                    LEFT JOIN cine.Favorite f ON m.movieId = f.movieId
+                    LEFT JOIN cine.Comment c ON m.movieId = c.movieId
                     WHERE m.movieId IN ({placeholders})
                     GROUP BY m.movieId, m.title, m.releaseYear, m.country, m.posterUrl, m.viewCount, m.overview
                 """)
@@ -428,8 +454,20 @@ class CollaborativeRecommender:
                         'overview': row.overview,
                         'avgRating': round(float(row.avgRating), 2) if row.avgRating else 0.0,
                         'ratingCount': row.ratingCount,
+                        'watchlistCount': row.watchlistCount,
+                        'viewHistoryCount': row.viewHistoryCount,
+                        'favoriteCount': row.favoriteCount,
+                        'commentCount': row.commentCount,
                         'genres': row.genres or ''
                     }
+                    
+                    # Debug logging
+                    logger.info(f"Movie {row.movieId} ({row.title}): "
+                              f"Ratings={row.ratingCount}, "
+                              f"Watchlist={row.watchlistCount}, "
+                              f"Views={row.viewHistoryCount}, "
+                              f"Favorites={row.favoriteCount}, "
+                              f"Comments={row.commentCount}")
                 
                 return movies
                 
