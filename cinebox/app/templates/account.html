@@ -14,10 +14,16 @@
         <div class="account-section user-info-section">
             <div class="section-header">
                 <h2>👤 Thông tin cá nhân</h2>
-                <button class="btn btn-primary" onclick="togglePasswordForm()">
-                    <span class="btn-icon">🔒</span>
-                    Đổi mật khẩu
-                </button>
+                <div style="display: flex; gap: 10px;">
+                    <a href="{{ url_for('main.account_history') }}" class="btn btn-info">
+                        <span class="btn-icon">📺</span>
+                        Lịch sử xem
+                    </a>
+                    <button class="btn btn-primary" onclick="togglePasswordForm()">
+                        <span class="btn-icon">🔒</span>
+                        Đổi mật khẩu
+                    </button>
+                </div>
             </div>
             
             <div class="user-info-basic">

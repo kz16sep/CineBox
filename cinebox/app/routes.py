@@ -661,18 +661,12 @@ def update_watch_progress():
                     """), {"history_id": history_record, "progress_sec": progress_sec})
             else:
                 # Tạo record mới
-                # Tạo historyId tự động bằng cách lấy max + 1
-                max_id = conn.execute(text("""
-                    SELECT ISNULL(MAX(historyId), 0) + 1 FROM cine.ViewHistory
-                """)).scalar()
-                
                 if is_finished:
                     # Nếu hoàn thành, set cả startedAt và finishedAt
                     conn.execute(text("""
-                        INSERT INTO cine.ViewHistory (historyId, userId, movieId, startedAt, progressSec, finishedAt, deviceType, ipAddress, userAgent)
-                        VALUES (:history_id, :user_id, :movie_id, GETDATE(), :progress_sec, GETDATE(), :device_type, :ip_address, :user_agent)
+                        INSERT INTO cine.ViewHistory (userId, movieId, startedAt, progressSec, finishedAt, deviceType, ipAddress, userAgent)
+                        VALUES (:user_id, :movie_id, GETDATE(), :progress_sec, GETDATE(), :device_type, :ip_address, :user_agent)
                     """), {
-                        "history_id": max_id,
                         "user_id": user_id,
                         "movie_id": movie_id,
                         "progress_sec": progress_sec,
@@ -683,10 +677,9 @@ def update_watch_progress():
                 else:
                     # Nếu chưa hoàn thành, chỉ set startedAt
                     conn.execute(text("""
-                        INSERT INTO cine.ViewHistory (historyId, userId, movieId, startedAt, progressSec, deviceType, ipAddress, userAgent)
-                        VALUES (:history_id, :user_id, :movie_id, GETDATE(), :progress_sec, :device_type, :ip_address, :user_agent)
+                        INSERT INTO cine.ViewHistory (userId, movieId, startedAt, progressSec, deviceType, ipAddress, userAgent)
+                        VALUES (:user_id, :movie_id, GETDATE(), :progress_sec, :device_type, :ip_address, :user_agent)
                     """), {
-                        "history_id": max_id,
                         "user_id": user_id,
                         "movie_id": movie_id,
                         "progress_sec": progress_sec,
@@ -932,18 +925,11 @@ def home():
                     
                     # Lưu recommendations mới từ CF model
                     for rank, rec in enumerate(personal_recommendations_raw, 1):
-                        # Generate recId
-                        rec_id_result = conn.execute(text("""
-                            SELECT ISNULL(MAX(recId), 0) + 1 FROM cine.PersonalRecommendation
-                        """)).fetchone()
-                        rec_id = rec_id_result[0] if rec_id_result else 1
-                        
                         conn.execute(text("""
                             INSERT INTO cine.PersonalRecommendation 
-                            (recId, userId, movieId, score, rank, algo, generatedAt, expiresAt)
-                            VALUES (:rec_id, :user_id, :movie_id, :score, :rank, 'collaborative', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
+                            (userId, movieId, score, rank, algo, generatedAt, expiresAt)
+                            VALUES (:user_id, :movie_id, :score, :rank, 'collaborative', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
                         """), {
-                            "rec_id": rec_id,
                             "user_id": user_id,
                             "movie_id": rec["movieId"],
                             "score": rec.get("recommendation_score", 0),
@@ -991,7 +977,7 @@ def home():
                         COUNT(DISTINCT vh.userId) as viewHistoryCount,
                         COUNT(DISTINCT f.userId) as favoriteCount,
                         COUNT(DISTINCT c.userId) as commentCount,
-                        STRING_AGG(TOP 5 g.name, ', ') as genres
+                        STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
                     FROM cine.PersonalRecommendation pr
                     JOIN cine.Movie m ON m.movieId = pr.movieId
                     LEFT JOIN cine.Rating r ON m.movieId = r.movieId
@@ -1057,7 +1043,7 @@ def home():
                             m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
                             COUNT(r.movieId) as ratingCount,
                             AVG(CAST(r.value AS FLOAT)) as avgRating,
-                            STRING_AGG(TOP 5 g.name, ', ') as genres
+                            STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
                         FROM cine.Movie m
                         LEFT JOIN cine.Rating r ON m.movieId = r.movieId
                         LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
@@ -1124,26 +1110,19 @@ def home():
                 
                 # Lưu recommendations mới từ CF model
                 for rank, rec in enumerate(personal_recommendations_raw[:12], 1):
-                    # Generate recId
-                    rec_id_result = conn.execute(text("""
-                        SELECT ISNULL(MAX(recId), 0) + 1 FROM cine.PersonalRecommendation
-                    """)).fetchone()
-                    rec_id = rec_id_result[0] if rec_id_result else 1
-                    
                     conn.execute(text("""
                         INSERT INTO cine.PersonalRecommendation 
-                        (recId, userId, movieId, score, rank, algo, generatedAt, expiresAt)
-                        VALUES (:rec_id, :user_id, :movie_id, :score, :rank, 'collaborative', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
+                        (userId, movieId, score, rank, algo, generatedAt, expiresAt)
+                        VALUES (:user_id, :movie_id, :score, :rank, 'collaborative', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
                     """), {
-                        "rec_id": rec_id,
                         "user_id": user_id,
                         "movie_id": rec["movieId"],
                         "score": rec.get("recommendation_score", 0),
                         "rank": rank
                     })
-                    
-                    conn.commit()
-                    print(f"Debug - Saved {len(personal_recommendations_raw[:12])} recommendations to PersonalRecommendation table")
+                
+                conn.commit()
+                print(f"Debug - Saved {len(personal_recommendations_raw[:12])} recommendations to PersonalRecommendation table")
                 
                 personal_recommendations = []
                 for rec in personal_recommendations_raw[:12]:
@@ -2133,6 +2112,177 @@ def account():
                          favorites_search=favorites_search)
 
 
+@main_bp.route("/account/history")
+def account_history():
+    """Trang lịch sử xem của user"""
+    if not session.get("user_id"):
+        return redirect(url_for("main.login"))
+    
+    user_id = session.get("user_id")
+    
+    # Lấy tham số phân trang và tìm kiếm
+    page = request.args.get('page', 1, type=int)
+    search_query = request.args.get('q', '', type=str).strip()
+    per_page = 12
+    
+    try:
+        with current_app.db_engine.connect() as conn:
+            # Lấy thông tin user
+            user_info = conn.execute(text("""
+                SELECT u.userId, u.email, u.avatarUrl, u.phone, u.status, u.createdAt, u.lastLoginAt, r.roleName, a.username
+                FROM [cine].[User] u
+                JOIN [cine].[Role] r ON u.roleId = r.roleId
+                LEFT JOIN [cine].[Account] a ON a.userId = u.userId
+                WHERE u.userId = :user_id
+            """), {"user_id": user_id}).mappings().first()
+            
+            if not user_info:
+                return redirect(url_for("main.login"))
+            
+            # Lấy lịch sử xem với phân trang và tìm kiếm
+            if search_query:
+                # Query với tìm kiếm
+                history_total = conn.execute(text("""
+                    SELECT COUNT(*) 
+                    FROM [cine].[ViewHistory] vh
+                    JOIN [cine].[Movie] m ON vh.movieId = m.movieId
+                    WHERE vh.userId = :user_id AND m.title LIKE :search
+                """), {"user_id": user_id, "search": f"%{search_query}%"}).scalar()
+                
+                history_offset = (page - 1) * per_page
+                view_history = conn.execute(text("""
+                    SELECT vh.historyId, vh.movieId, vh.startedAt, vh.finishedAt, vh.progressSec,
+                           m.title, m.posterUrl, m.releaseYear,
+                           STUFF((
+                               SELECT ', ' + g2.name
+                               FROM cine.MovieGenre mg2
+                               JOIN cine.Genre g2 ON mg2.genreId = g2.genreId
+                               WHERE mg2.movieId = m.movieId
+                               GROUP BY g2.name
+                               ORDER BY g2.name
+                               FOR XML PATH('')
+                           ),1,2,'') AS genres,
+                           CASE WHEN vh.finishedAt IS NOT NULL THEN 1 ELSE 0 END AS isCompleted
+                    FROM [cine].[ViewHistory] vh
+                    JOIN [cine].[Movie] m ON vh.movieId = m.movieId
+                    WHERE vh.userId = :user_id AND m.title LIKE :search
+                    ORDER BY vh.startedAt DESC
+                    OFFSET :offset ROWS
+                    FETCH NEXT :per_page ROWS ONLY
+                """), {
+                    "user_id": user_id, 
+                    "search": f"%{search_query}%",
+                    "offset": history_offset, 
+                    "per_page": per_page
+                }).mappings().all()
+            else:
+                # Query không tìm kiếm
+                history_total = conn.execute(text("""
+                    SELECT COUNT(*) FROM [cine].[ViewHistory] WHERE userId = :user_id
+                """), {"user_id": user_id}).scalar()
+                
+                history_offset = (page - 1) * per_page
+                view_history = conn.execute(text("""
+                    SELECT vh.historyId, vh.movieId, vh.startedAt, vh.finishedAt, vh.progressSec,
+                           m.title, m.posterUrl, m.releaseYear,
+                           STUFF((
+                               SELECT ', ' + g2.name
+                               FROM cine.MovieGenre mg2
+                               JOIN cine.Genre g2 ON mg2.genreId = g2.genreId
+                               WHERE mg2.movieId = m.movieId
+                               GROUP BY g2.name
+                               ORDER BY g2.name
+                               FOR XML PATH('')
+                           ),1,2,'') AS genres,
+                           CASE WHEN vh.finishedAt IS NOT NULL THEN 1 ELSE 0 END AS isCompleted
+                    FROM [cine].[ViewHistory] vh
+                    JOIN [cine].[Movie] m ON vh.movieId = m.movieId
+                    WHERE vh.userId = :user_id
+                    ORDER BY vh.startedAt DESC
+                    OFFSET :offset ROWS
+                    FETCH NEXT :per_page ROWS ONLY
+                """), {"user_id": user_id, "offset": history_offset, "per_page": per_page}).mappings().all()
+            
+            # Format dữ liệu
+            history_list = []
+            for row in view_history:
+                history_list.append({
+                    "historyId": row["historyId"],
+                    "movieId": row["movieId"],
+                    "title": row["title"],
+                    "posterUrl": row["posterUrl"],
+                    "releaseYear": row["releaseYear"],
+                    "genres": row["genres"],
+                    "startedAt": row["startedAt"],
+                    "finishedAt": row["finishedAt"],
+                    "progressSec": row["progressSec"],
+                    "isCompleted": bool(row["isCompleted"])
+                })
+            
+            # Tạo pagination
+            history_pages = (history_total + per_page - 1) // per_page
+            pagination = {
+                "page": page,
+                "per_page": per_page,
+                "total": history_total,
+                "pages": history_pages,
+                "has_prev": page > 1,
+                "has_next": page < history_pages,
+                "prev_num": page - 1 if page > 1 else None,
+                "next_num": page + 1 if page < history_pages else None
+            }
+            
+    except Exception as e:
+        print(f"Error getting view history: {e}")
+        user_info = None
+        history_list = []
+        pagination = None
+        page = 1
+        search_query = ""
+    
+    return render_template("history.html", 
+                         user=user_info,
+                         view_history=history_list,
+                         pagination=pagination,
+                         page=page,
+                         search_query=search_query)
+
+
+@main_bp.route("/remove-history/<int:history_id>", methods=["POST"])
+def remove_history(history_id):
+    """Xóa phim khỏi lịch sử xem"""
+    if not session.get("user_id"):
+        return jsonify({"success": False, "message": "Chưa đăng nhập"})
+    
+    user_id = session.get("user_id")
+    
+    try:
+        with current_app.db_engine.begin() as conn:
+            # Kiểm tra quyền sở hữu
+            owner = conn.execute(text("""
+                SELECT userId FROM [cine].[ViewHistory] 
+                WHERE historyId = :history_id
+            """), {"history_id": history_id}).scalar()
+            
+            if not owner:
+                return jsonify({"success": False, "message": "Không tìm thấy bản ghi"})
+            
+            if owner != user_id:
+                return jsonify({"success": False, "message": "Bạn không có quyền xóa bản ghi này"})
+            
+            # Xóa lịch sử
+            conn.execute(text("""
+                DELETE FROM [cine].[ViewHistory] 
+                WHERE historyId = :history_id
+            """), {"history_id": history_id})
+            
+            return jsonify({"success": True, "message": "Đã xóa khỏi lịch sử xem"})
+            
+    except Exception as e:
+        print(f"Error removing from history: {e}")
+        return jsonify({"success": False, "message": "Có lỗi xảy ra"})
+
+
 @main_bp.route("/update-profile", methods=["POST"])
 def update_profile():
     """Cập nhật thông tin profile"""
@@ -2565,16 +2715,10 @@ def add_watchlist(movie_id):
             """), {"user_id": user_id, "movie_id": movie_id}).scalar()
             
             if not existing:
-                # Tạo watchlistId tự động
-                max_id = conn.execute(text("""
-                    SELECT ISNULL(MAX(watchlistId), 0) + 1 FROM cine.Watchlist
-                """)).scalar()
-                
                 conn.execute(text("""
-                    INSERT INTO [cine].[Watchlist] (watchlistId, userId, movieId, addedAt, priority, isWatched)
-                    VALUES (:watchlist_id, :user_id, :movie_id, GETDATE(), 1, 0)
+                    INSERT INTO [cine].[Watchlist] (userId, movieId, addedAt, priority, isWatched)
+                    VALUES (:user_id, :movie_id, GETDATE(), 1, 0)
                 """), {
-                    "watchlist_id": max_id,
                     "user_id": user_id, 
                     "movie_id": movie_id
                 })
@@ -2704,16 +2848,10 @@ def toggle_watchlist(movie_id):
                     "message": "Đã xóa khỏi danh sách xem sau"
                 })
             else:
-                # Thêm vào watchlist - tạo watchlistId tự động
-                max_id = conn.execute(text("""
-                    SELECT ISNULL(MAX(watchlistId), 0) + 1 FROM cine.Watchlist
-                """)).scalar()
-                
                 conn.execute(text("""
-                    INSERT INTO [cine].[Watchlist] (watchlistId, userId, movieId, addedAt, priority, isWatched)
-                    VALUES (:watchlist_id, :user_id, :movie_id, GETDATE(), 1, 0)
+                    INSERT INTO [cine].[Watchlist] (userId, movieId, addedAt, priority, isWatched)
+                    VALUES (:user_id, :movie_id, GETDATE(), 1, 0)
                 """), {
-                    "watchlist_id": max_id,
                     "user_id": user_id, 
                     "movie_id": movie_id
                 })
@@ -2754,16 +2892,10 @@ def add_favorite(movie_id):
             """), {"user_id": user_id, "movie_id": movie_id}).scalar()
             
             if not existing:
-                # Tạo favoriteId tự động
-                max_id = conn.execute(text("""
-                    SELECT ISNULL(MAX(favoriteId), 0) + 1 FROM cine.Favorite
-                """)).scalar()
-                
                 conn.execute(text("""
-                    INSERT INTO [cine].[Favorite] (favoriteId, userId, movieId, addedAt)
-                    VALUES (:favorite_id, :user_id, :movie_id, GETDATE())
+                    INSERT INTO [cine].[Favorite] (userId, movieId, addedAt)
+                    VALUES (:user_id, :movie_id, GETDATE())
                 """), {
-                    "favorite_id": max_id,
                     "user_id": user_id, 
                     "movie_id": movie_id
                 })
@@ -2957,16 +3089,10 @@ def toggle_favorite(movie_id):
                     "message": "Đã xóa khỏi danh sách yêu thích"
                 })
             else:
-                # Thêm vào favorites - tạo favoriteId tự động
-                max_id = conn.execute(text("""
-                    SELECT ISNULL(MAX(favoriteId), 0) + 1 FROM cine.Favorite
-                """)).scalar()
-                
                 conn.execute(text("""
-                    INSERT INTO [cine].[Favorite] (favoriteId, userId, movieId, addedAt)
-                    VALUES (:favorite_id, :user_id, :movie_id, GETDATE())
+                    INSERT INTO [cine].[Favorite] (userId, movieId, addedAt)
+                    VALUES (:user_id, :movie_id, GETDATE())
                 """), {
-                    "favorite_id": max_id,
                     "user_id": user_id, 
                     "movie_id": movie_id
                 })
@@ -4645,7 +4771,7 @@ def get_recommendations():
                     m.title, m.releaseYear, m.posterUrl, m.country,
                     AVG(CAST(r.value AS FLOAT)) as avgRating,
                     COUNT(r.movieId) as ratingCount,
-                    STRING_AGG(TOP 5 g.name, ', ') as genres
+                    STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
                 FROM [cine].[PersonalRecommendation] pr
                 INNER JOIN [cine].[Movie] m ON pr.movieId = m.movieId
                 LEFT JOIN [cine].[Rating] r ON m.movieId = r.movieId
@@ -4742,7 +4868,7 @@ def get_trending_movies():
                         m.movieId, m.title, m.releaseYear, m.country, m.posterUrl,
                         m.viewCount, COUNT(r.movieId) as ratingCount,
                         AVG(CAST(r.value AS FLOAT)) as avgRating,
-                        STRING_AGG(TOP 5 g.name, ', ') as genres
+                        STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
                     FROM cine.Movie m
                     LEFT JOIN cine.Rating r ON m.movieId = r.movieId
                     LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
@@ -5008,18 +5134,11 @@ def get_personalized_recommendations():
                         
                         # Lưu recommendations mới
                         for rank, rec in enumerate(cf_recommendations, 1):
-                            # Generate recId
-                            rec_id_result = conn.execute(text("""
-                                SELECT ISNULL(MAX(recId), 0) + 1 FROM cine.PersonalRecommendation
-                            """)).fetchone()
-                            rec_id = rec_id_result[0] if rec_id_result else 1
-                            
                             conn.execute(text("""
                                 INSERT INTO cine.PersonalRecommendation 
-                                (recId, userId, movieId, score, rank, algo, generatedAt, expiresAt)
-                                VALUES (:rec_id, :user_id, :movie_id, :score, :rank, 'collaborative', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
+                                (userId, movieId, score, rank, algo, generatedAt, expiresAt)
+                                VALUES (:user_id, :movie_id, :score, :rank, 'collaborative', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
                             """), {
-                                "rec_id": rec_id,
                                 "user_id": user_id,
                                 "movie_id": rec["movieId"],
                                 "score": rec.get("recommendation_score", 0),
@@ -5674,18 +5793,11 @@ def create_sample_recommendations():
             for rank, movie in enumerate(movies, 1):
                 score = round(0.5 + (rank * 0.1), 2)  # Score từ 0.6 đến 1.7
                 
-                # Generate recId
-                rec_id_result = conn.execute(text("""
-                    SELECT ISNULL(MAX(recId), 0) + 1 FROM cine.PersonalRecommendation
-                """)).fetchone()
-                rec_id = rec_id_result[0] if rec_id_result else 1
-                
                 conn.execute(text("""
                     INSERT INTO cine.PersonalRecommendation 
-                    (recId, userId, movieId, score, rank, algo, generatedAt, expiresAt)
-                    VALUES (:rec_id, :user_id, :movie_id, :score, :rank, 'sample', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
+                    (userId, movieId, score, rank, algo, generatedAt, expiresAt)
+                    VALUES (:user_id, :movie_id, :score, :rank, 'sample', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
                 """), {
-                    "rec_id": rec_id,
                     "user_id": user_id,
                     "movie_id": movie["movieId"],
                     "score": score,
