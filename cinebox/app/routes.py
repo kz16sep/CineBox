@@ -8,9 +8,9 @@ import uuid
 import re
 from werkzeug.utils import secure_filename
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from content_based_recommender import ContentBasedRecommender
-from collaborative_recommender import CollaborativeRecommender
-from enhanced_cf_recommender import EnhancedCFRecommender
+from recommenders.content_based import ContentBasedRecommender
+from recommenders.collaborative import CollaborativeRecommender
+from recommenders.enhanced_cf import EnhancedCFRecommender
 # Global recommender instances
 content_recommender = None
 collaborative_recommender = None
@@ -415,7 +415,7 @@ def get_cold_start_recommendations(user_id, conn):
             conn.commit()
             print(f"Generated {len(recommendations)} cold start recommendations for user {user_id}")
         
-        return recommendations[:12]  # Trả về tối đa 12 recommendations
+        return recommendations[:10]  # Trả về tối đa 10 recommendations
         
     except Exception as e:
         print(f"Error generating cold start recommendations: {e}")
@@ -725,18 +725,17 @@ def home():
     
     # Lấy page parameter cho tất cả phim và genre filter
     page = request.args.get('page', 1, type=int)
-    per_page = 12  # Số phim mỗi trang
+    per_page = 10  # Số phim mỗi trang
     genre_filter = request.args.get('genre', '', type=str)  # Lọc theo thể loại
     search_query = request.args.get('q', '', type=str)  # Tìm kiếm
     
-    # 1. Phim mới nhất (12 phim, không phân trang) - thay thế trending
+    # 1. Phim mới nhất (10 phim, không phân trang) - thay thế trending
     try:
         with current_app.db_engine.connect() as conn:
             if genre_filter:
                 # Lấy phim mới nhất theo thể loại
                 rows = conn.execute(text("""
-                    SELECT TOP 12 m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt
-                    SELECT TOP 12 
+                    SELECT TOP 10 
                         m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt,
                         AVG(CAST(r.value AS FLOAT)) AS avgRating,
                         COUNT(r.movieId) AS ratingCount,
@@ -759,10 +758,8 @@ def home():
                 """), {"genre": genre_filter}).mappings().all()
             else:
                 # Lấy phim mới nhất tất cả thể loại
-                rows = conn.execute(text(
-                    "SELECT TOP 12 movieId, title, posterUrl, backdropUrl, overview, createdAt FROM cine.Movie ORDER BY createdAt DESC, movieId DESC"
-                    """
-                    SELECT TOP 12 
+                rows = conn.execute(text("""
+                    SELECT TOP 10 
                         m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt,
                         AVG(CAST(r.value AS FLOAT)) AS avgRating,
                         COUNT(r.movieId) AS ratingCount,
@@ -888,7 +885,7 @@ def home():
                 else:
                     # Lấy gợi ý cá nhân từ PersonalRecommendation
                     personal_rows = conn.execute(text("""
-                        SELECT TOP 12 m.movieId, m.title, m.posterUrl, pr.score
+                        SELECT TOP 10 m.movieId, m.title, m.posterUrl, pr.score
                         FROM cine.PersonalRecommendation pr
                         JOIN cine.Movie m ON m.movieId = pr.movieId
                         WHERE pr.userId = :user_id AND pr.expiresAt > GETDATE()
@@ -904,9 +901,9 @@ def home():
             
             # Thử Enhanced CF model trước
             if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded():
-                personal_recommendations_raw = enhanced_cf_recommender.get_user_recommendations(user_id, limit=12)
+                personal_recommendations_raw = enhanced_cf_recommender.get_user_recommendations(user_id, limit=10)
             elif collaborative_recommender and collaborative_recommender.is_model_loaded():
-                personal_recommendations_raw = collaborative_recommender.get_user_recommendations(user_id, limit=12)
+                personal_recommendations_raw = collaborative_recommender.get_user_recommendations(user_id, limit=10)
             else:
                 personal_recommendations_raw = []
             
@@ -961,14 +958,14 @@ def home():
                     personal_recommendations.append(rec_dict)
             else:
                 # Tạo recommendations dựa trên rating thực tế của user
-                personal_recommendations = create_rating_based_recommendations(user_id, latest_movies[:12], current_app.db_engine)
+                personal_recommendations = create_rating_based_recommendations(user_id, latest_movies[:10], current_app.db_engine)
                 
         except Exception as e:
             # Fallback: Lấy gợi ý từ database nếu model chưa load
             print(f"Error getting personal recommendations: {e}")
             with current_app.db_engine.connect() as conn:
                 personal_rows = conn.execute(text("""
-                    SELECT TOP 12 
+                    SELECT TOP 10 
                         m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
                         pr.score, pr.rank, pr.generatedAt, pr.algo,
                         AVG(CAST(r.value AS FLOAT)) as avgRating,
@@ -1020,7 +1017,7 @@ def home():
                 
                 # Lấy trending movies sử dụng collaborative recommender
                 if collaborative_recommender and collaborative_recommender.is_model_loaded():
-                    trending_recommendations_raw = collaborative_recommender.get_trending_movies(limit=12)
+                    trending_recommendations_raw = collaborative_recommender.get_trending_movies(limit=10)
                     
                     trending_movies = [
                         {
@@ -1039,7 +1036,7 @@ def home():
                 else:
                     # Fallback: Lấy trending movies từ database
                     trending_rows = conn.execute(text("""
-                        SELECT TOP 12
+                        SELECT TOP 10
                             m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
                             COUNT(r.movieId) as ratingCount,
                             AVG(CAST(r.value AS FLOAT)) as avgRating,
@@ -1109,7 +1106,7 @@ def home():
                 """), {"user_id": user_id})
                 
                 # Lưu recommendations mới từ CF model
-                for rank, rec in enumerate(personal_recommendations_raw[:12], 1):
+                for rank, rec in enumerate(personal_recommendations_raw[:10], 1):
                     conn.execute(text("""
                         INSERT INTO cine.PersonalRecommendation 
                         (userId, movieId, score, rank, algo, generatedAt, expiresAt)
@@ -1122,10 +1119,10 @@ def home():
                     })
                 
                 conn.commit()
-                print(f"Debug - Saved {len(personal_recommendations_raw[:12])} recommendations to PersonalRecommendation table")
+                print(f"Debug - Saved {len(personal_recommendations_raw[:10])} recommendations to PersonalRecommendation table")
                 
                 personal_recommendations = []
-                for rec in personal_recommendations_raw[:12]:
+                for rec in personal_recommendations_raw[:10]:
                     rec_dict = {
                         "id": rec["movieId"],
                         "title": rec["title"],
@@ -1159,7 +1156,7 @@ def home():
                 print(f"Debug - Created {len(personal_recommendations)} recommendations from CF model fallback")
         else:
             print(f"Debug - No recommendations from CF model fallback, using latest movies")
-            personal_recommendations = latest_movies[:12]
+            personal_recommendations = latest_movies[:10]
     if not trending_movies:
         trending_movies = latest_movies
     
@@ -1246,10 +1243,6 @@ def home():
                 # Lấy phim theo thể loại với phân trang kèm avgRating, ratingCount, genres
                 print(f"Debug - Getting movies for genre '{genre_filter}', page {page}, offset {offset}, per_page {per_page}")
                 all_rows = conn.execute(text("""
-                    SELECT movieId, title, posterUrl, backdropUrl, overview, releaseYear
-                    FROM (
-                        SELECT DISTINCT m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear,
-                               ROW_NUMBER() OVER (ORDER BY m.movieId DESC) as rn
                     WITH filtered AS (
                         SELECT DISTINCT m.movieId,
                                ROW_NUMBER() OVER (ORDER BY m.movieId DESC) AS rn
@@ -1257,8 +1250,6 @@ def home():
                         JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
                         JOIN cine.Genre g ON mg.genreId = g.genreId
                         WHERE g.name = :genre
-                    ) t
-                    WHERE rn > :offset AND rn <= :offset + :per_page
                     )
                     SELECT 
                         m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear,
@@ -1416,10 +1407,10 @@ def home():
     # Fallback nếu all_movies rỗng (chỉ khi không có genre_filter và search_query)
     if not all_movies and not genre_filter and not search_query:
         print("Debug - all_movies is empty, using fallback")
-        all_movies = latest_movies[:12]  # Sử dụng latest_movies làm fallback
+        all_movies = latest_movies[:10]  # Sử dụng latest_movies làm fallback
         pagination = {
             "page": 1,
-            "per_page": 12,
+            "per_page": 10,
             "total": len(all_movies),
             "pages": 1,
             "has_prev": False,
@@ -1503,7 +1494,7 @@ def home():
             view_history = []
     
     return render_template("home.html", 
-                         latest_movies=latest_movies,  # Phim mới nhất (12 phim, không phân trang)
+                         latest_movies=latest_movies,  # Phim mới nhất (10 phim, không phân trang)
                          carousel_movies=carousel_movies,  # Carousel phim mới nhất (6 phim)
                          recommended=personal_recommendations,  # Phim đề xuất cá nhân (Collaborative Filtering)
                          trending_movies=trending_movies,  # Phim trending (được đánh giá nhiều nhất)
@@ -1517,6 +1508,8 @@ def home():
 
 @main_bp.route("/login", methods=["GET", "POST"])
 def login():
+    # Get success message from URL parameter
+    success = request.args.get('success', '')
     error = None
     if request.method == "POST":
         username = request.form.get("username", "").strip()
@@ -1564,7 +1557,7 @@ def login():
             except Exception as e:
                 print(f"Database error: {e}")
                 error = f"Lỗi database: {str(e)}"
-    return render_template("login.html", error=error)
+    return render_template("login.html", error=error, success=success)
 
 
 @main_bp.route("/register", methods=["GET", "POST"])
@@ -1573,38 +1566,115 @@ def register():
         name = request.form.get("name", "").strip()
         email = request.form.get("email", "").strip()
         password = request.form.get("password", "")
-        print(f"Debug: Form data - name: '{name}', email: '{email}', password: '{password[:3]}...'")
-        if not name or not email or not password:
-            print("Debug: Missing required fields")
-            return render_template("register.html", error="Vui lòng nhập đầy đủ thông tin.")
+        
+        # Validation
+        errors = []
+        
+        # Name validation (1-20 chars, letters, numbers and spaces only, no special characters)
+        if not name:
+            errors.append("Vui lòng nhập user name.")
+        else:
+            if len(name) < 1:
+                errors.append("User name ít nhất phải có 1 ký tự và không chứa ký tự đặc biệt.")
+            elif len(name) > 20:
+                errors.append("User name không được quá 20 ký tự.")
+            else:
+                # Check for letters, numbers and spaces only (no special characters)
+                name_pattern = r'^[a-zA-Z0-9\u00C0-\u017F\u1E00-\u1EFF\u0100-\u017F\u0180-\u024F\s]+$'
+                if not re.match(name_pattern, name):
+                    errors.append("User name ít nhất phải có 1 ký tự và không chứa ký tự đặc biệt.")
+        
+        # Email validation
+        if not email:
+            errors.append("Vui lòng nhập email.")
+        else:
+            # Check email format
+            email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+            if not re.match(email_pattern, email):
+                errors.append("Email không hợp lệ.")
+        
+        # Password strength validation
+        if not password:
+            errors.append("Vui lòng nhập mật khẩu.")
+        else:
+            if len(password) < 8:
+                errors.append("Mật khẩu phải có ít nhất 8 ký tự.")
+            elif len(password) > 20:
+                errors.append("Mật khẩu không được quá 20 ký tự.")
+            # Check for at least one uppercase, one lowercase, and one digit
+            if not re.search(r'[A-Z]', password):
+                errors.append("Mật khẩu phải chứa ít nhất một chữ in hoa.")
+            if not re.search(r'[a-z]', password):
+                errors.append("Mật khẩu phải chứa ít nhất một chữ thường.")
+            if not re.search(r'[0-9]', password):
+                errors.append("Mật khẩu phải chứa ít nhất một số.")
+        
+        # If there are validation errors, return them
+        if errors:
+            return render_template("register.html", error="; ".join(errors))
+        
+        # Check email and username duplicates
+        try:
+            with current_app.db_engine.connect() as conn:
+                # Check email duplicate
+                existing_email = conn.execute(text("""
+                    SELECT 1 FROM cine.[User] WHERE email = :email
+                """), {"email": email}).scalar()
+                
+                if existing_email:
+                    return render_template("register.html", error="Email này đã được sử dụng. Vui lòng đăng nhập hoặc dùng email khác.")
+                
+                # Check username duplicate
+                existing_username = conn.execute(text("""
+                    SELECT 1 FROM cine.[Account] WHERE username = :username
+                """), {"username": name}).scalar()
+                
+                if existing_username:
+                    return render_template("register.html", error="User name này đã được sử dụng. Vui lòng chọn user name khác.")
+        except Exception as check_error:
+            print(f"Debug: Error checking duplicates: {check_error}")
+        
         try:
             print(f"Debug: Starting registration for email: {email}")
             with current_app.db_engine.begin() as conn:
-                # create user with User role
+                # Get role_id for User
                 role_id = conn.execute(text("SELECT roleId FROM cine.Role WHERE roleName=N'User'")).scalar()
                 print(f"Debug: Found role_id: {role_id}")
+                
                 if role_id is None:
                     # Get next available roleId
                     max_role_id = conn.execute(text("SELECT ISNULL(MAX(roleId), 0) FROM cine.Role")).scalar()
                     role_id = max_role_id + 1
                     conn.execute(text("INSERT INTO cine.Role(roleId, roleName, description) VALUES (:roleId, N'User', N'Người dùng')"), {"roleId": role_id})
                     print(f"Debug: Created new role with id: {role_id}")
-                # Insert user with manual ID
+                
+                # Insert user - let IDENTITY column auto-generate userId
                 print(f"Debug: Inserting user with email: {email}, roleId: {role_id}")
-                max_user_id = conn.execute(text("SELECT ISNULL(MAX(userId), 0) FROM cine.[User]")).scalar()
-                user_id = max_user_id + 1
-                conn.execute(text("INSERT INTO cine.[User](userId, email, avatarUrl, roleId) VALUES (:userId, :email, NULL, :roleId)"), {"userId": user_id, "email": email, "roleId": role_id})
-                print(f"Debug: Created user with id: {user_id}")
-                # Insert account with manual ID
-                print(f"Debug: Inserting account for user_id: {user_id}")
-                max_account_id = conn.execute(text("SELECT ISNULL(MAX(accountId), 0) FROM cine.[Account]")).scalar()
-                account_id = max_account_id + 1
-                conn.execute(text("INSERT INTO cine.[Account](accountId, username, passwordHash, userId) VALUES (:accountId, :u, HASHBYTES('SHA2_256', CONVERT(VARBINARY(512), :p)), :uid)"), {"accountId": account_id, "u": email, "p": password, "uid": user_id})
-                print(f"Debug: Registration completed successfully")
-            return render_template("register.html", success="Đăng ký thành công! Bạn có thể đăng nhập ngay.")
+                result = conn.execute(text("""
+                    INSERT INTO cine.[User](email, avatarUrl, roleId) 
+                    OUTPUT INSERTED.userId
+                    VALUES (:email, NULL, :roleId)
+                """), {"email": email, "roleId": role_id})
+                user_id = result.scalar()
+                print(f"Debug: Created user with auto-generated id: {user_id}")
+                
+                # Insert account - let IDENTITY column auto-generate accountId
+                print(f"Debug: Inserting account for user_id: {user_id}, username (name): {name}")
+                
+                # Save name to username column
+                conn.execute(text("""
+                    INSERT INTO cine.[Account](username, passwordHash, userId) 
+                    VALUES (:u, HASHBYTES('SHA2_256', CONVERT(VARBINARY(512), :p)), :uid)
+                """), {"u": name, "p": password, "uid": user_id})
+                
+                print(f"Debug: Registration completed successfully with username: {name}")
+            
+            # Redirect to login with success message
+            return redirect(url_for("main.login", success="Đăng ký thành công! Bạn có thể đăng nhập ngay."))
         except Exception as ex:
             print(f"Debug: Registration error: {str(ex)}")
             return render_template("register.html", error=f"Không thể đăng ký: {str(ex)}")
+    
     return render_template("register.html")
 
 
@@ -2123,7 +2193,7 @@ def account_history():
     # Lấy tham số phân trang và tìm kiếm
     page = request.args.get('page', 1, type=int)
     search_query = request.args.get('q', '', type=str).strip()
-    per_page = 12
+    per_page = 10
     
     try:
         with current_app.db_engine.connect() as conn:
@@ -3900,7 +3970,7 @@ def search():
     
     query = request.args.get('q', '').strip()
     page = request.args.get('page', 1, type=int)
-    per_page = 12
+    per_page = 10
     
     if not query:
         return render_template('search.html', 

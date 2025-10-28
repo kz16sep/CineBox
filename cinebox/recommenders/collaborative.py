@@ -25,12 +25,13 @@ class CollaborativeRecommender:
     def __init__(self, db_engine, model_path: str = None):
         self.db_engine = db_engine
         if model_path is None:
-            # Tự động tìm đường dẫn model
+            # Tự động tìm đường dẫn model - ưu tiên đường dẫn tuyệt đối
+            base_dir = os.path.dirname(os.path.dirname(__file__))
             possible_paths = [
-                'cinebox/model_collaborative/collaborative_model.pkl',
+                os.path.join(base_dir, 'model_collaborative', 'collaborative_model.pkl'),
                 'model_collaborative/collaborative_model.pkl',
                 './model_collaborative/collaborative_model.pkl',
-                os.path.join(os.path.dirname(__file__), 'model_collaborative', 'collaborative_model.pkl')
+                'cinebox/model_collaborative/collaborative_model.pkl'
             ]
             
             for path in possible_paths:
@@ -38,7 +39,7 @@ class CollaborativeRecommender:
                     self.model_path = path
                     break
             else:
-                self.model_path = 'cinebox/model_collaborative/collaborative_model.pkl'
+                self.model_path = os.path.join(base_dir, 'model_collaborative', 'collaborative_model.pkl')
         else:
             self.model_path = model_path
         self.user_factors = None
@@ -534,3 +535,4 @@ class CollaborativeRecommender:
             "user_factors_shape": self.user_factors.shape if self.user_factors is not None else None,
             "item_factors_shape": self.item_factors.shape if self.item_factors is not None else None
         }
+

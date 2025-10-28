@@ -1,4 +1,6 @@
-
+import os
+import secrets
+from datetime import timedelta
 from flask import Flask
 from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
@@ -6,8 +8,15 @@ from sqlalchemy import text
 
 def create_app():
     app = Flask(__name__)
+    
+    # Generate a secure random SECRET_KEY if not set
+    secret_key = os.environ.get('SECRET_KEY')
+    if not secret_key:
+        secret_key = secrets.token_hex(32)
+    
     app.config.from_mapping(
-        SECRET_KEY="change-this",
+        SECRET_KEY=secret_key,
+        PERMANENT_SESSION_LIFETIME=timedelta(hours=2),  # Session expires after 2 hours
         SQLSERVER_DRIVER="ODBC Driver 17 for SQL Server",
         SQLSERVER_SERVER="localhost,1433",   # hoặc "127.0.0.1,1433" hoặc "HOST\INSTANCE"
         SQLSERVER_DB="CineBoxDB",

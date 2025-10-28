@@ -159,20 +159,6 @@
     {% endfor %}
   </div>
 </section>
-{% else %}
-<!-- Hiển thị phim mới nhất của thể loại được chọn -->
-<section>
-  <h3>🆕 Phim {{ genre_filter }} mới nhất</h3>
-  <div class="cards">
-    {% for m in latest_movies %}
-    <a class="card" href="{{ url_for('main.detail', movie_id=m.id) }}">
-      <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
-      <div class="card-title">{{ m.title }}</div>
-      <div class="stars">★★★★★</div>
-    </a>
-    {% endfor %}
-  </div>
-</section>
 {% endif %}
 
 <!-- 2. Cold Start Recommendations (cho user mới) -->

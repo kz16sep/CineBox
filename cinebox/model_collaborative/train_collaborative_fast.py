@@ -18,7 +18,7 @@ from tqdm import tqdm
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from collaborative_recommender import CollaborativeRecommender
+from recommenders.collaborative import CollaborativeRecommender
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -268,8 +268,12 @@ class FastCollaborativeTrainer:
             logger.error(f"Error calculating similarities: {e}")
             return None, None
     
-    def save_model(self, model_data, model_path='model_collaborative/collaborative_model.pkl'):
+    def save_model(self, model_data, model_path=None):
         """Save trained model"""
+        if model_path is None:
+            # Use absolute path
+            model_path = os.path.join(os.path.dirname(__file__), 'collaborative_model.pkl')
+        
         try:
             logger.info(f"Saving model to {model_path}...")
             
@@ -376,12 +380,12 @@ def main():
         
     if success:
         print("\nFast training completed successfully!")
-        print("Model saved to: model_collaborative/collaborative_model.pkl")
+        print("Model saved to: model_collaborative/collaborative_model.pkl (absolute path)")
         print("You can now use the collaborative filtering recommendations in the web app.")
         
         # Also create enhanced model
         print("\nCreating Enhanced CF model...")
-        from enhanced_cf_recommender import EnhancedCFRecommender
+        from recommenders.enhanced_cf import EnhancedCFRecommender
         enhanced_cf = EnhancedCFRecommender(db_engine)
         enhanced_success = enhanced_cf.train_model(
             sample_size=200000,

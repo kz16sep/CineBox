@@ -278,3 +278,4 @@ class ContentBasedRecommender:
                 'medium_similarity_count': 0,
                 'low_similarity_count': 0
             }
+

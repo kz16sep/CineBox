@@ -1,24 +1,89 @@
 {% extends 'base.html' %}
 {% block title %}Đăng ký · CineBox{% endblock %}
 {% block content %}
-<section class="auth-card">
+  <section class="auth-card">
   <h1>Đăng ký</h1>
+  
+  {% if error %}
+    <div class="message error" style="background: #e63946; color: white; padding: 15px; border-radius: 5px; margin-bottom: 20px; animation: slideDown 0.3s;">
+      <strong>❌ Lỗi:</strong> {{ error }}
+    </div>
+  {% elif success %}
+    <div class="message success" style="background: #06d6a0; color: white; padding: 15px; border-radius: 5px; margin-bottom: 20px; animation: slideDown 0.3s;">
+      <strong>✅ Thành công:</strong> {{ success }}
+    </div>
+  {% endif %}
+  
   <form method="post" class="form">
-    {% if error %}
-      <div class="error">{{ error }}</div>
-    {% elif success %}
-      <div class="success">{{ success }}</div>
-    {% endif %}
-    <label>Họ tên</label>
-    <input type="text" name="name" required placeholder="Nguyễn Văn A" />
+    <label>User name</label>
+    <input type="text" name="name" required placeholder="Nguyen Van (1-20 ký tự, chữ, số và khoảng trắng)" 
+           pattern="^[a-zA-Z0-9\u00C0-\u017F\u1E00-\u1EFF\u0100-\u017F\u0180-\u024F\s]{1,20}$"
+           title="User name ít nhất phải có 1 ký tự và không chứa ký tự đặc biệt"/>
     <label>Email</label>
-    <input type="email" name="email" required placeholder="email@domain.com" />
+    <input type="email" name="email" required placeholder="email@domain.com" 
+           pattern="[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+           title="Email không hợp lệ"/>
     <label>Mật khẩu</label>
-    <input type="password" name="password" required placeholder="••••••••" />
+    <input type="password" name="password" required placeholder="Tối thiểu 8-20 ký tự: chữ hoa, chữ thường, số" 
+           pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,20}" 
+           title="Mật khẩu phải có 8-20 ký tự, bao gồm chữ hoa, chữ thường và số"/>
     <button class="btn btn-primary" type="submit">Tạo tài khoản</button>
     <p class="muted highlight">Đã có tài khoản? <a class="highlight-link" href="{{ url_for('main.login') }}">Đăng nhập</a></p>
   </form>
   </section>
+  
+  <style>
+    @keyframes slideDown {
+      from {
+        opacity: 0;
+        transform: translateY(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    
+    .message {
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    
+    .message strong {
+      font-weight: 600;
+    }
+  </style>
+  
+  <script>
+    // Override email validation message
+    document.addEventListener('DOMContentLoaded', function() {
+      const emailInput = document.querySelector('input[type="email"]');
+      if (emailInput) {
+        // Set initial custom message
+        emailInput.setCustomValidity('');
+        
+        emailInput.addEventListener('invalid', function(e) {
+          if (!emailInput.validity.valid) {
+            emailInput.setCustomValidity('Email không hợp lệ');
+          }
+        });
+        
+        emailInput.addEventListener('input', function() {
+          if (emailInput.validity.patternMismatch) {
+            emailInput.setCustomValidity('Email không hợp lệ');
+          } else {
+            emailInput.setCustomValidity('');
+          }
+        });
+        
+        emailInput.addEventListener('blur', function() {
+          if (!emailInput.validity.valid) {
+            emailInput.setCustomValidity('Email không hợp lệ');
+          }
+        });
+      }
+    });
+  </script>
 {% endblock %}
 
 

@@ -1,25 +1,115 @@
-{% extends 'base.html' %}
-{% block title %}Đăng nhập · CineBox{% endblock %}
-{% block content %}
-<section class="auth-card">
-  <h1>Đăng nhập</h1>
-  <form method="post" class="form">
-    {% if error %}
-      <div class="error">{{ error }}</div>
-    {% endif %}
-    <label>Tài khoản hoặc email</label>
-    <input type="text" name="username" required placeholder="admin hoặc email@domain.com" />
-    <label>Mật khẩu</label>
-    <input type="password" name="password" required placeholder="••••••••" />
-    <button class="btn btn-primary" type="submit">Đăng nhập</button>
-    <p class="muted highlight">Chưa có tài khoản? <a class="highlight-link" href="{{ url_for('main.register') }}">Đăng ký ngay</a></p>
-    <div class="divider"><span>Hoặc</span></div>
-    <div class="social">
-      <button type="button" class="btn btn-google">Đăng nhập bằng Google</button>
-      <button type="button" class="btn btn-facebook">Đăng nhập bằng Facebook</button>
-    </div>
-  </form>
-  </section>
-{% endblock %}
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Đăng nhập · CineBox</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <style>
+      /* Scale toàn bộ trang web xuống 80% */
+      * {
+        box-sizing: border-box;
+      }
+      
+      body {
+        transform: scale(0.8);
+        transform-origin: 0 0;
+        width: 125%;
+      }
+      
+      /* Hide search bar on login page */
+      .search {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body class="theme-dark">
+    <header class="navbar">
+      <div class="container">
+        <a href="{{ url_for('main.home') }}" class="logo">Cine<span>Box</span></a>
+        <nav></nav>
+      </div>
+    </header>
+
+    <main class="container main-content">
+      {% if success %}
+        <div class="success-notification" style="position: fixed; top: 80px; right: 20px; background: #06d6a0; color: white; padding: 15px 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 1000; max-width: 400px; animation: slideInRight 0.5s;">
+          <strong>✅ {{ success }}</strong>
+          <button onclick="this.parentElement.remove()" style="float: right; background: none; border: none; color: white; font-size: 18px; cursor: pointer; margin-left: 15px;">&times;</button>
+        </div>
+      {% endif %}
+
+      <section class="auth-card">
+        <h1>Đăng nhập</h1>
+        <form method="post" class="form">
+          {% if error %}
+            <div class="error">{{ error }}</div>
+          {% endif %}
+          <label>Username hoặc email</label>
+          <input type="text" name="username" required placeholder="username hoặc email" />
+          <label>Mật khẩu</label>
+          <input type="password" name="password" required placeholder="••••••••" />
+          <button class="btn btn-primary" type="submit">Đăng nhập</button>
+          
+          <p class="muted highlight">Chưa có tài khoản? <a class="highlight-link" href="{{ url_for('main.register') }}">Đăng ký ngay</a></p>
+          
+          <div class="divider"><span>Hoặc</span></div>
+          <div class="social">
+            <button type="button" class="btn btn-google">Đăng nhập bằng Google</button>
+            <button type="button" class="btn btn-facebook">Đăng nhập bằng Facebook</button>
+          </div>
+        </form>
+      </section>
+
+      <style>
+        @keyframes slideInRight {
+          from {
+            transform: translateX(400px);
+            opacity: 0;
+          }
+          to {
+            transform: translateX(0);
+            opacity: 1;
+          }
+        }
+        
+        @keyframes fadeOut {
+          from {
+            opacity: 1;
+          }
+          to {
+            opacity: 0;
+            transform: translateX(400px);
+          }
+        }
+        
+        .fade-out {
+          animation: fadeOut 0.5s forwards;
+        }
+      </style>
+
+      <script>
+        // Auto-hide success notification after 5 seconds
+        document.addEventListener('DOMContentLoaded', function() {
+          const notification = document.querySelector('.success-notification');
+          if (notification) {
+            setTimeout(function() {
+              notification.style.animation = 'fadeOut 0.5s forwards';
+              setTimeout(function() {
+                notification.remove();
+              }, 500);
+            }, 5000);
+          }
+        });
+      </script>
+    </main>
+
+    <footer class="footer">
+      <div class="container">© 2024 CINEBOX · Điều khoản sử dụng · Liên hệ</div>
+    </footer>
+  </body>
+</html>
 
 

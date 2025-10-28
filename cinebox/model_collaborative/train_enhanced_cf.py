@@ -163,8 +163,12 @@ class EnhancedCollaborativeFilteringTrainer:
             logger.error(f"Error training model: {e}")
             raise
     
-    def save_model(self, model_path='cinebox/model_collaborative/enhanced_cf_model.pkl'):
+    def save_model(self, model_path=None):
         """Lưu model đã train"""
+        if model_path is None:
+            # Use absolute path
+            model_path = os.path.join(os.path.dirname(__file__), 'enhanced_cf_model.pkl')
+        
         try:
             os.makedirs(os.path.dirname(model_path), exist_ok=True)
             
@@ -192,8 +196,11 @@ class EnhancedCollaborativeFilteringTrainer:
             logger.error(f"Error saving model: {e}")
             raise
     
-    def load_model(self, model_path='cinebox/model_collaborative/enhanced_cf_model.pkl'):
+    def load_model(self, model_path=None):
         """Load model đã train"""
+        if model_path is None:
+            # Use absolute path
+            model_path = os.path.join(os.path.dirname(__file__), 'enhanced_cf_model.pkl')
         try:
             with open(model_path, 'rb') as f:
                 model_data = pickle.load(f)

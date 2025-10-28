@@ -7,6 +7,18 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <style>
+      /* Scale toàn bộ trang web xuống 80% */
+      * {
+        box-sizing: border-box;
+      }
+      
+      body {
+        transform: scale(0.8);
+        transform-origin: 0 0;
+        width: 125%;
+      }
+    </style>
   </head>
   <body class="theme-dark">
     <header class="navbar">
