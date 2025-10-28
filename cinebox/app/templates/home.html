@@ -143,7 +143,11 @@
                 ⭐ 0.0
               {% endif %}
             </span>
-            <!-- rating count hidden per request -->
+            {% if m.viewCount and m.viewCount > 0 %}
+            <span class="view-count" style="margin-left: 8px; color: #888; font-size: 0.9em;">
+              👁️ {{ m.viewCount }}
+            </span>
+            {% endif %}
           </div>
         </div>
       </a>
@@ -286,7 +290,11 @@
                 ⭐ 0.0
               {% endif %}
             </span>
-            <!-- rating count hidden per request -->
+            {% if m.viewCount and m.viewCount > 0 %}
+            <span class="view-count" style="margin-left: 8px; color: #888; font-size: 0.9em;">
+              👁️ {{ m.viewCount }}
+            </span>
+            {% endif %}
           </div>
         </div>
       </a>
@@ -344,6 +352,11 @@
                 (0)
               {% endif %}
             </span>
+            {% if m.viewCount and m.viewCount > 0 %}
+            <span class="view-count" style="margin-left: 8px; color: #888; font-size: 0.9em;">
+              👁️ {{ m.viewCount }}
+            </span>
+            {% endif %}
           </div>
         </div>
       </a>

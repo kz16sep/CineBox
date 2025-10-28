@@ -16,6 +16,13 @@ content_recommender = None
 collaborative_recommender = None
 enhanced_cf_recommender = None
 
+# Trending movies cache (10 minutes)
+trending_cache = {
+    'data': None,
+    'timestamp': None,
+    'ttl': 600  # 10 minutes in seconds
+}
+
 # --- CF retrain dirty-flag helpers ---
 def set_cf_dirty(db_engine=None):
     try:
@@ -760,7 +767,7 @@ def home():
                 # Lấy phim mới nhất tất cả thể loại
                 rows = conn.execute(text("""
                     SELECT TOP 10 
-                        m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt,
+                        m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt, m.viewCount,
                         AVG(CAST(r.value AS FLOAT)) AS avgRating,
                         COUNT(r.movieId) AS ratingCount,
                         STUFF((
@@ -774,7 +781,7 @@ def home():
                         ),1,2,'') AS genres
                     FROM cine.Movie m
                     LEFT JOIN cine.Rating r ON m.movieId = r.movieId
-                    GROUP BY m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt
+                    GROUP BY m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt, m.viewCount
                     ORDER BY m.createdAt DESC, m.movieId DESC
                     """
                 )).mappings().all()
@@ -789,6 +796,7 @@ def home():
                     "createdAt": r.get("createdAt"),
                     "avgRating": 0,
                     "ratingCount": 0,
+                    "viewCount": r.get("viewCount", 0) or 0,
                     "genres": r.get("genres") or "",
                 }
                 for r in rows
@@ -1014,55 +1022,124 @@ def home():
                     for row in personal_rows
                 ]
                 
-                
-                # Lấy trending movies sử dụng collaborative recommender
-                if collaborative_recommender and collaborative_recommender.is_model_loaded():
-                    trending_recommendations_raw = collaborative_recommender.get_trending_movies(limit=10)
-                    
-                    trending_movies = [
-                        {
-                            "id": rec["movieId"],
-                            "title": rec["title"],
-                            "poster": rec.get("posterUrl") if rec.get("posterUrl") and rec.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={rec['title'][:20].replace(' ', '+')}",
-                            "releaseYear": rec.get("releaseYear"),
-                            "country": rec.get("country"),
-                            "ratingCount": rec.get("ratingCount", 0),
-                            "avgRating": rec.get("avgRating", 0),
-                            "genres": rec.get("genres", ""),
-                            "viewCount": rec.get("viewCount", 0)
-                        }
-                        for rec in trending_recommendations_raw
-                    ]
-                else:
-                    # Fallback: Lấy trending movies từ database
+                # Lấy trending movies từ database (views + ratings trong 7 ngày)
+            try:
+                with current_app.db_engine.connect() as conn:
                     trending_rows = conn.execute(text("""
                         SELECT TOP 10
-                            m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
-                            COUNT(r.movieId) as ratingCount,
-                            AVG(CAST(r.value AS FLOAT)) as avgRating,
-                            STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+                            m.movieId, m.title, m.posterUrl, m.releaseYear, m.country, m.viewCount,
+                            COUNT(DISTINCT vh.userId) as unique_viewers_7d,
+                            COUNT(DISTINCT vh.historyId) as view_count_7d,
+                            AVG(CAST(r.value AS FLOAT)) as avg_rating_7d,
+                            COUNT(DISTINCT r.userId) as rating_count_7d,
+                            -- Overall rating (to prioritize movies with high overall rating)
+                            (SELECT AVG(CAST(r2.value AS FLOAT)) FROM cine.Rating r2 WHERE r2.movieId = m.movieId) as overall_avg_rating,
+                            (
+                                -- View component (70%): view count + unique viewers * 2
+                                (
+                                    COUNT(DISTINCT vh.historyId) +
+                                    COUNT(DISTINCT vh.userId) * 2
+                                ) * 0.7 +
+                                
+                                -- Rating component (30%): avg_rating * rating_count * 2
+                                COALESCE(
+                                    AVG(CAST(r.value AS FLOAT)) * NULLIF(COUNT(DISTINCT r.userId), 0) * 2,
+                                    0
+                                ) * 0.3
+                            ) as trending_score,
+                            STRING_AGG(DISTINCT g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
                         FROM cine.Movie m
-                        LEFT JOIN cine.Rating r ON m.movieId = r.movieId
+                        LEFT JOIN cine.ViewHistory vh 
+                            ON m.movieId = vh.movieId 
+                            AND vh.startedAt >= DATEADD(day, -7, GETDATE())
+                        LEFT JOIN cine.Rating r 
+                            ON m.movieId = r.movieId 
+                            AND r.ratedAt >= DATEADD(day, -7, GETDATE())
+                            AND r.ratedAt IS NOT NULL
                         LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
                         LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
-                        WHERE m.movieId IN (SELECT DISTINCT movieId FROM cine.Rating)
-                        GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, m.country
-                        ORDER BY ratingCount DESC, avgRating DESC
+                        GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, m.country, m.viewCount
+                        HAVING 
+                            COUNT(DISTINCT vh.historyId) > 0 OR 
+                            COUNT(DISTINCT r.userId) > 0
+                        ORDER BY trending_score DESC
                     """)).mappings().all()
                     
-                    trending_movies = [
-                        {
-                            "id": row["movieId"],
-                            "title": row["title"],
-                            "poster": row.get("posterUrl") if row.get("posterUrl") and row.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={row['title'][:20].replace(' ', '+')}",
-                            "releaseYear": row["releaseYear"],
-                            "country": row["country"],
-                            "ratingCount": row["ratingCount"],
-                            "avgRating": round(float(row["avgRating"]), 2) if row["avgRating"] else 0.0,
-                            "genres": row["genres"] or ""
-                        }
-                        for row in trending_rows
-                    ]
+                    trending_movies = []
+                    for row in trending_rows:
+                        # Get overall rating and viewCount from Movie table
+                        overall_avg_rating = row.overall_avg_rating if row.overall_avg_rating else 0
+                        total_view_count = row.viewCount if row.viewCount else 0
+                        
+                        trending_movies.append({
+                            "id": row.movieId,
+                            "title": row.title,
+                            "poster": get_poster_or_dummy(row.posterUrl, row.title),
+                            "releaseYear": row.releaseYear,
+                            "country": row.country,
+                            "ratingCount": row.rating_count_7d or 0,
+                            "avgRating": round(float(overall_avg_rating), 2),  # Use overall rating, not 24h
+                            "viewCount": total_view_count,  # Use total viewCount from Movie table
+                            "genres": row.genres or ""
+                        })
+                    
+                    # Nếu không đủ 10 phim, bổ sung bằng phim mới nhất
+                    if len(trending_movies) < 10:
+                        existing_movie_ids = [m["id"] for m in trending_movies]
+                        placeholders = ','.join([f':id{i}' for i in range(len(existing_movie_ids))])
+                        params = {f'id{i}': mid for i, mid in enumerate(existing_movie_ids)}
+                        
+                        fallback_limit = 10 - len(trending_movies)
+                        fallback_query = f"""
+                            SELECT TOP {fallback_limit}
+                            m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
+                                STRING_AGG(DISTINCT g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+                        FROM cine.Movie m
+                        LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                        LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
+                            WHERE m.releaseYear IS NOT NULL
+                        """
+                        
+                        if existing_movie_ids:
+                            fallback_query += f" AND m.movieId NOT IN ({placeholders})"
+                        
+                        fallback_query += """
+                        GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, m.country
+                            ORDER BY m.releaseYear DESC, m.movieId DESC
+                        """
+                        
+                        fallback_rows = conn.execute(text(fallback_query), params).mappings().all()
+                        
+                        for row in fallback_rows:
+                            # Get overall rating and viewCount for fallback movies
+                            movie_id = row.movieId
+                            fallback_stats = conn.execute(text("""
+                                SELECT 
+                                    AVG(CAST(r.value AS FLOAT)) as avgRating,
+                                    m.viewCount
+                                FROM cine.Movie m
+                                LEFT JOIN cine.Rating r ON m.movieId = r.movieId
+                                WHERE m.movieId = :movie_id
+                                GROUP BY m.movieId, m.viewCount
+                            """), {"movie_id": movie_id}).mappings().first()
+                            
+                            trending_movies.append({
+                                "id": row.movieId,
+                                "title": row.title,
+                                "poster": get_poster_or_dummy(row.posterUrl, row.title),
+                                "releaseYear": row.releaseYear,
+                                "country": row.country,
+                                "ratingCount": 0,
+                                "avgRating": round(float(fallback_stats["avgRating"] or 0), 2),
+                                "viewCount": fallback_stats["viewCount"] or 0,
+                                "genres": row.genres or ""
+                            })
+                    
+                    trending_movies = trending_movies[:10]
+                    
+            except Exception as e:
+                print(f"Error getting trending movies: {e}")
+                trending_movies = []
                 
         except Exception as e:
             print(f"Error getting personal recommendations: {e}")
@@ -1117,8 +1194,8 @@ def home():
                         "score": rec.get("recommendation_score", 0),
                         "rank": rank
                     })
-                
-                conn.commit()
+                    
+                    conn.commit()
                 print(f"Debug - Saved {len(personal_recommendations_raw[:10])} recommendations to PersonalRecommendation table")
                 
                 personal_recommendations = []
@@ -1252,7 +1329,7 @@ def home():
                         WHERE g.name = :genre
                     )
                     SELECT 
-                        m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear,
+                        m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.viewCount,
                         AVG(CAST(r.value AS FLOAT)) AS avgRating,
                         COUNT(r.movieId) AS ratingCount,
                         STUFF((
@@ -1268,7 +1345,7 @@ def home():
                     JOIN cine.Movie m ON m.movieId = f.movieId
                     LEFT JOIN cine.Rating r ON m.movieId = r.movieId
                     WHERE f.rn > :offset AND f.rn <= :offset + :per_page
-                    GROUP BY m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear
+                    GROUP BY m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.viewCount
                     ORDER BY m.movieId DESC
                 """), {"genre": genre_filter, "offset": offset, "per_page": per_page}).mappings().all()
                 print(f"Debug - Found {len(all_rows)} movies for genre '{genre_filter}' on page {page}")
@@ -1304,7 +1381,7 @@ def home():
                         FROM cine.Movie m
                     )
                     SELECT 
-                        m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear,
+                        m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.viewCount,
                         AVG(CAST(r.value AS FLOAT)) AS avgRating,
                         COUNT(r.movieId) AS ratingCount,
                         STUFF((
@@ -1320,7 +1397,7 @@ def home():
                     JOIN cine.Movie m ON m.movieId = p.movieId
                     LEFT JOIN cine.Rating r ON m.movieId = r.movieId
                     WHERE p.rn > :offset AND p.rn <= :offset + :per_page
-                    GROUP BY m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear
+                    GROUP BY m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.viewCount
                     ORDER BY m.movieId DESC
                 """), {"offset": offset, "per_page": per_page}).mappings().all()
             
@@ -1332,6 +1409,7 @@ def home():
                     "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
                     "description": (r.get("overview") or "")[:160],
                     "year": r.get("releaseYear"),
+                    "viewCount": r.get("viewCount", 0) or 0,
                     "avgRating": 0,
                     "ratingCount": 0,
                     "genres": r.get("genres") or ""
@@ -1806,9 +1884,7 @@ def watch(movie_id: int):
         
         # Tăng view count và lưu lịch sử xem
         if not is_trailer:
-            # Kiểm tra xem user đã xem phim này trong session chưa
-            viewed_movies = session.get('viewed_movies', [])
-            if movie_id not in viewed_movies:
+            # Luôn tăng view count mỗi lần load trang (kể cả refresh)
                 conn.execute(text(
                     "UPDATE cine.Movie SET viewCount = viewCount + 1 WHERE movieId = :id"
                 ), {"id": movie_id})
@@ -1838,9 +1914,6 @@ def watch(movie_id: int):
                         print(f"Error saving view history: {e}")
                 
                 conn.commit()
-                # Đánh dấu đã xem phim này trong session
-                viewed_movies.append(movie_id)
-                session['viewed_movies'] = viewed_movies
         
     if not r:
         return redirect(url_for("main.home"))
@@ -4916,63 +4989,167 @@ def get_similar_movies(movie_id):
 
 @main_bp.route("/api/trending_movies")
 def get_trending_movies():
-    """Lấy danh sách phim trending"""
+    """Lấy danh sách phim trending dựa trên views và ratings trong 7 ngày"""
     try:
-        limit = request.args.get('limit', 20, type=int)
+        limit = request.args.get('limit', 10, type=int)
         
-        # Initialize recommenders if not already done
-        global content_recommender, collaborative_recommender
-        if collaborative_recommender is None:
-            init_recommenders()
+        # Kiểm tra cache
+        global trending_cache
+        if trending_cache['data'] and trending_cache['timestamp']:
+            elapsed = time.time() - trending_cache['timestamp']
+            if elapsed < trending_cache['ttl']:
+                # Trả về cache nếu còn trong TTL và limit phù hợp
+                cached_movies = trending_cache['data'][:limit]
+                return jsonify({
+                    "success": True,
+                    "trending_movies": cached_movies,
+                    "cached": True
+                })
         
-        # Lấy trending movies - Enhanced CF trước
-        if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded():
-            trending_movies = enhanced_cf_recommender.get_trending_movies(limit)
-        elif collaborative_recommender and collaborative_recommender.is_model_loaded():
-            trending_movies = collaborative_recommender.get_trending_movies(limit)
-        else:
-            # Fallback: lấy từ database
-            with current_app.db_engine.connect() as conn:
-                trending_rows = conn.execute(text("""
-                    SELECT TOP :limit
-                        m.movieId, m.title, m.releaseYear, m.country, m.posterUrl,
-                        m.viewCount, COUNT(r.movieId) as ratingCount,
+        with current_app.db_engine.connect() as conn:
+            # Step 1: Lấy phim trending dựa trên views + ratings trong 7 ngày
+            trending_query = text("""
+                SELECT 
+                    m.movieId, 
+                    m.title, 
+                    m.releaseYear, 
+                    m.country, 
+                    m.posterUrl,
+                    
+                    -- View metrics (7 days)
+                    COUNT(DISTINCT vh.userId) as unique_viewers_7d,
+                    COUNT(DISTINCT vh.historyId) as view_count_7d,
+                    
+                    -- Rating metrics (7 days)
+                    AVG(CAST(r.value AS FLOAT)) as avg_rating_7d,
+                    COUNT(DISTINCT r.userId) as rating_count_7d,
+                    
+                    -- Combined trending score (70% view, 30% rating)
+                    (
+                        -- View component (70%): view count + unique viewers * 2
+                        (
+                            COUNT(DISTINCT vh.historyId) +
+                            COUNT(DISTINCT vh.userId) * 2
+                        ) * 0.7 +
+                        
+                        -- Rating component (30%): avg_rating * rating_count * 2
+                        COALESCE(
+                            AVG(CAST(r.value AS FLOAT)) * NULLIF(COUNT(DISTINCT r.userId), 0) * 2,
+                            0
+                        ) * 0.3
+                    ) as trending_score,
+                    
+                    STRING_AGG(DISTINCT g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+                    
+                FROM cine.Movie m
+                
+                LEFT JOIN cine.ViewHistory vh 
+                    ON m.movieId = vh.movieId 
+                    AND vh.startedAt >= DATEADD(day, -7, GETDATE())
+                
+                LEFT JOIN cine.Rating r 
+                    ON m.movieId = r.movieId 
+                    AND r.ratedAt >= DATEADD(day, -7, GETDATE())
+                    AND r.ratedAt IS NOT NULL
+                
+                LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
+                
+                GROUP BY m.movieId, m.title, m.releaseYear, m.country, m.posterUrl
+                
+                HAVING 
+                    -- Chỉ lấy phim có hoạt động trong 7 ngày
+                    COUNT(DISTINCT vh.historyId) > 0 OR 
+                    COUNT(DISTINCT r.userId) > 0
+                
+                ORDER BY trending_score DESC
+            """)
+            
+            trending_rows = conn.execute(trending_query).mappings().all()
+            
+            trending_movies = []
+            for row in trending_rows:
+                trending_movies.append({
+                    'movieId': row.movieId,
+                    'title': row.title,
+                    'releaseYear': row.releaseYear,
+                    'country': row.country,
+                    'posterUrl': get_poster_or_dummy(row.posterUrl, row.title),
+                    'avgRating': round(float(row.avg_rating_7d or 0), 2),
+                    'ratingCount': row.rating_count_7d or 0,
+                    'viewCount': row.view_count_7d or 0,
+                    'uniqueViewers': row.unique_viewers_7d or 0,
+                    'genres': row.genres or '',
+                    'trending_score': float(row.trending_score or 0)
+                })
+            
+            # Step 2: Nếu không đủ limit, bổ sung bằng phim mới nhất
+            if len(trending_movies) < limit:
+                # Lấy danh sách movieId đã có
+                existing_movie_ids = [m['movieId'] for m in trending_movies]
+                placeholders = ','.join([':id' + str(i) for i in range(len(existing_movie_ids))])
+                params = {f'id{i}': mid for i, mid in enumerate(existing_movie_ids)}
+                
+                # Query lấy phim mới nhất (ngoại trừ những phim đã có)
+                fallback_query = f"""
+                    SELECT TOP {limit - len(trending_movies)}
+                        m.movieId, 
+                        m.title, 
+                        m.releaseYear, 
+                        m.country, 
+                        m.posterUrl,
                         AVG(CAST(r.value AS FLOAT)) as avgRating,
-                        STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+                        COUNT(r.movieId) as ratingCount,
+                        STRING_AGG(DISTINCT g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
                     FROM cine.Movie m
                     LEFT JOIN cine.Rating r ON m.movieId = r.movieId
                     LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
                     LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
-                    WHERE m.movieId IN (
-                        SELECT movieId FROM cine.Movie 
-                        WHERE movieId IN (SELECT DISTINCT movieId FROM cine.Rating)
-                    )
-                    GROUP BY m.movieId, m.title, m.releaseYear, m.country, m.posterUrl, m.viewCount
-                    ORDER BY ratingCount DESC, avgRating DESC
-                """), {"limit": limit}).mappings().all()
+                    WHERE m.releaseYear IS NOT NULL
+                    """
                 
-                trending_movies = [
-                    {
+                if existing_movie_ids:
+                    fallback_query += f" AND m.movieId NOT IN ({placeholders})"
+                
+                fallback_query += """
+                    GROUP BY m.movieId, m.title, m.releaseYear, m.country, m.posterUrl
+                    ORDER BY m.releaseYear DESC, m.movieId DESC
+                """
+                
+                fallback_rows = conn.execute(text(fallback_query), params).mappings().all()
+                
+                for row in fallback_rows:
+                    trending_movies.append({
                         'movieId': row.movieId,
                         'title': row.title,
                         'releaseYear': row.releaseYear,
                         'country': row.country,
-                        'posterUrl': row.posterUrl,
-                        'viewCount': row.viewCount,
-                        'ratingCount': row.ratingCount,
-                        'avgRating': round(float(row.avgRating), 2) if row.avgRating else 0.0,
-                        'genres': row.genres or ''
-                    }
-                    for row in trending_rows
-                ]
+                        'posterUrl': get_poster_or_dummy(row.posterUrl, row.title),
+                        'avgRating': round(float(row.avgRating or 0), 2),
+                        'ratingCount': row.ratingCount or 0,
+                        'viewCount': 0,
+                        'uniqueViewers': 0,
+                        'genres': row.genres or '',
+                        'trending_score': 0
+                    })
+            
+            # Chỉ trả về top limit
+            trending_movies = trending_movies[:limit]
+            
+            # Update cache
+            trending_cache['data'] = trending_movies
+            trending_cache['timestamp'] = time.time()
         
         return jsonify({
             "success": True,
-            "trending_movies": trending_movies
+            "trending_movies": trending_movies[:limit],
+            "cached": False
         })
         
     except Exception as e:
         print(f"Error getting trending movies: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"success": False, "message": f"Có lỗi xảy ra: {str(e)}"})
 
 
