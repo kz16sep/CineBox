@@ -24,9 +24,14 @@
            pattern="[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
            title="Email không hợp lệ"/>
     <label>Mật khẩu</label>
-    <input type="password" name="password" required placeholder="Tối thiểu 8-20 ký tự: chữ hoa, chữ thường, số" 
-           pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,20}" 
-           title="Mật khẩu phải có 8-20 ký tự, bao gồm chữ hoa, chữ thường và số"/>
+    <div class="password-input-wrapper">
+      <input type="password" id="password" name="password" required placeholder="Tối thiểu 8-20 ký tự: chữ hoa, chữ thường, số" 
+             pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,20}" 
+             title="Mật khẩu phải có 8-20 ký tự, bao gồm chữ hoa, chữ thường và số"/>
+      <button type="button" class="toggle-password" onclick="togglePassword('password')">
+        <span class="eye-icon">👁️</span>
+      </button>
+    </div>
     <button class="btn btn-primary" type="submit">Tạo tài khoản</button>
     <p class="muted highlight">Đã có tài khoản? <a class="highlight-link" href="{{ url_for('main.login') }}">Đăng nhập</a></p>
   </form>
@@ -52,9 +57,63 @@
     .message strong {
       font-weight: 600;
     }
+    
+    /* Password toggle styles */
+    .password-input-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    
+    .password-input-wrapper input {
+      padding-right: 50px;
+      width: 100%;
+    }
+    
+    .toggle-password {
+      position: absolute;
+      right: 10px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 18px;
+      padding: 5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.2s ease;
+    }
+    
+    .toggle-password:hover {
+      transform: scale(1.1);
+    }
+    
+    .eye-icon {
+      filter: grayscale(0.3);
+      transition: filter 0.2s ease;
+    }
+    
+    .toggle-password:hover .eye-icon {
+      filter: grayscale(0);
+    }
   </style>
   
   <script>
+    // Toggle password visibility
+    function togglePassword(inputId) {
+      const input = document.getElementById(inputId);
+      const button = input.nextElementSibling;
+      const icon = button.querySelector('.eye-icon');
+      
+      if (input.type === 'password') {
+        input.type = 'text';
+        icon.textContent = '🙈';
+      } else {
+        input.type = 'password';
+        icon.textContent = '👁️';
+      }
+    }
+    
     // Override email validation message
     document.addEventListener('DOMContentLoaded', function() {
       const emailInput = document.querySelector('input[type="email"]');

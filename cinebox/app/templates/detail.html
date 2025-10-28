@@ -758,14 +758,19 @@
   position: relative;
 }
 
-.star:hover,
 .star.active {
+  color: #ffc107 !important;
+  transform: scale(1.1);
+  text-shadow: 0 0 10px rgba(255, 193, 7, 0.5);
+}
+
+.star:hover {
   color: #ffc107;
   transform: scale(1.1);
   text-shadow: 0 0 10px rgba(255, 193, 7, 0.5);
 }
 
-.star:hover ~ .star {
+.star:hover ~ .star:not(.active) {
   color: #666;
 }
 
@@ -1148,6 +1153,9 @@ document.addEventListener('DOMContentLoaded', function() {
   stars.forEach(star => {
     star.addEventListener('click', function() {
       const rating = parseInt(this.dataset.rating);
+      // Update stars immediately on click
+      updateStarRating(rating);
+      // Then submit to server
       submitRating(movieId, rating);
     });
     
@@ -1159,10 +1167,10 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Star rating container events
   const starRating = document.getElementById('star-rating');
+  
   starRating.addEventListener('mouseleave', function() {
-    const currentRating = document.querySelector('.star.active') ? 
-      parseInt(document.querySelector('.star.active').dataset.rating) : 0;
-    updateStarRating(currentRating);
+    // Restore to user's actual rating
+    updateStarRating(currentUserRating);
   });
   
   // Delete rating button
@@ -1222,10 +1230,13 @@ function deleteRating(movieId) {
 }
 
 function getRating(movieId) {
+  console.log('getRating called for movieId:', movieId);
   fetch(`/get-rating/${movieId}`)
   .then(response => response.json())
   .then(data => {
+    console.log('Rating data received:', data);
     if (data.success) {
+      console.log('User rating:', data.user_rating);
       updateRatingDisplay(data.user_rating, data.avg_rating, data.total_ratings);
       updateStarRating(data.user_rating);
     }
@@ -1253,15 +1264,30 @@ function updateRatingDisplay(userRating, avgRating, totalRatings) {
   }
 }
 
+let currentUserRating = 0; // Track the user's actual rating
+
 function updateStarRating(rating) {
+  console.log('updateStarRating called with rating:', rating);
   const stars = document.querySelectorAll('.star');
-  stars.forEach((star, index) => {
-    if (index < rating) {
+  stars.forEach((star) => {
+    const starRating = parseInt(star.dataset.rating);
+    if (starRating <= rating) {
       star.classList.add('active');
+      console.log(`Star ${starRating}: adding active class`);
     } else {
       star.classList.remove('active');
+      console.log(`Star ${starRating}: removing active class`);
     }
   });
+  
+  // Verify the state after update
+  const activeStars = document.querySelectorAll('.star.active');
+  console.log(`After update: ${activeStars.length} stars are active`);
+  
+  // Store the rating if it's from API
+  if (rating > 0) {
+    currentUserRating = rating;
+  }
 }
 
 

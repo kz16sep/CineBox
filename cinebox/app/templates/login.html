@@ -50,7 +50,12 @@
           <label>Username hoặc email</label>
           <input type="text" name="username" required placeholder="username hoặc email" />
           <label>Mật khẩu</label>
-          <input type="password" name="password" required placeholder="••••••••" />
+          <div class="password-input-wrapper">
+            <input type="password" id="password" name="password" required placeholder="••••••••" />
+            <button type="button" class="toggle-password" onclick="togglePassword('password')">
+              <span class="eye-icon">👁️</span>
+            </button>
+          </div>
           <button class="btn btn-primary" type="submit">Đăng nhập</button>
           
           <p class="muted highlight">Chưa có tài khoản? <a class="highlight-link" href="{{ url_for('main.register') }}">Đăng ký ngay</a></p>
@@ -75,19 +80,58 @@
           }
         }
         
-        @keyframes fadeOut {
-          from {
-            opacity: 1;
-          }
-          to {
-            opacity: 0;
-            transform: translateX(400px);
-          }
+      @keyframes fadeOut {
+        from {
+          opacity: 1;
         }
-        
-        .fade-out {
-          animation: fadeOut 0.5s forwards;
+        to {
+          opacity: 0;
+          transform: translateX(400px);
         }
+      }
+      
+      .fade-out {
+        animation: fadeOut 0.5s forwards;
+      }
+      
+      /* Password toggle styles */
+      .password-input-wrapper {
+        position: relative;
+        display: flex;
+        align-items: center;
+      }
+      
+      .password-input-wrapper input {
+        padding-right: 50px;
+        width: 100%;
+      }
+      
+      .toggle-password {
+        position: absolute;
+        right: 10px;
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-size: 18px;
+        padding: 5px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: transform 0.2s ease;
+      }
+      
+      .toggle-password:hover {
+        transform: scale(1.1);
+      }
+      
+      .eye-icon {
+        filter: grayscale(0.3);
+        transition: filter 0.2s ease;
+      }
+      
+      .toggle-password:hover .eye-icon {
+        filter: grayscale(0);
+      }
       </style>
 
       <script>
@@ -103,6 +147,21 @@
             }, 5000);
           }
         });
+        
+        // Toggle password visibility
+        function togglePassword(inputId) {
+          const input = document.getElementById(inputId);
+          const button = input.nextElementSibling;
+          const icon = button.querySelector('.eye-icon');
+          
+          if (input.type === 'password') {
+            input.type = 'text';
+            icon.textContent = '🙈';
+          } else {
+            input.type = 'password';
+            icon.textContent = '👁️';
+          }
+        }
       </script>
     </main>
 
