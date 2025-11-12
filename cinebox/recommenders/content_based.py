@@ -35,10 +35,16 @@ class ContentBasedRecommender:
             List[Dict]: Danh sách phim liên quan với thông tin chi tiết
         """
         try:
+            # Validate và sanitize limit để tránh SQL injection
+            from app.sql_helpers import validate_limit, safe_top_clause
+            validated_limit = validate_limit(limit, max_limit=100, default=5)
+            top_clause = safe_top_clause(validated_limit, max_limit=100)
+            
             with self.db_engine.connect() as conn:
                 # Lấy phim liên quan từ MovieSimilarity
+                # Sử dụng validated limit thay vì f-string trực tiếp
                 query = text(f"""
-                    SELECT TOP {limit}
+                    SELECT {top_clause}
                         m.movieId, m.title, m.releaseYear, m.country, m.posterUrl,
                         ms.similarity,
                         STRING_AGG(g.name, ', ') as genres
@@ -96,10 +102,18 @@ class ContentBasedRecommender:
             List[Dict]: Danh sách phim liên quan fallback
         """
         try:
+            # Validate và sanitize limit để tránh SQL injection
+            from app.sql_helpers import validate_limit, safe_top_clause
+            validated_limit = validate_limit(limit, max_limit=100, default=5)
+            # Tính toán limit * 2 một cách an toàn
+            fallback_limit = min(validated_limit * 2, 200)  # Cap at 200
+            top_clause = safe_top_clause(fallback_limit, max_limit=200)
+            
             with self.db_engine.connect() as conn:
                 # Lấy phim ngẫu nhiên với genres tương tự (nếu có)
+                # Sử dụng validated limit thay vì f-string trực tiếp
                 query = text(f"""
-                    SELECT TOP {limit * 2}
+                    SELECT {top_clause}
                         m.movieId, m.title, m.releaseYear, m.country, m.posterUrl,
                         STRING_AGG(g.name, ', ') as genres
                     FROM cine.Movie m
@@ -278,4 +292,179 @@ class ContentBasedRecommender:
                 'medium_similarity_count': 0,
                 'low_similarity_count': 0
             }
+    
+    def get_user_recommendations(self, user_id: int, limit: int = 10) -> List[Dict]:
+        """
+        Lấy danh sách phim được recommend cho user dựa trên content-based approach.
+        Dựa trên các phim user đã tương tác (rated, viewed, favorited), tìm các phim tương tự.
+        
+        Args:
+            user_id: ID của user
+            limit: Số lượng phim được recommend tối đa
+            
+        Returns:
+            List[Dict]: Danh sách phim được recommend với thông tin chi tiết
+        """
+        try:
+            from app.sql_helpers import validate_limit, safe_top_clause
+            validated_limit = validate_limit(limit, max_limit=100, default=10)
+            top_clause = safe_top_clause(validated_limit * 2, max_limit=200)  # Lấy nhiều hơn để merge
+            
+            with self.db_engine.connect() as conn:
+                # Lấy các phim user đã tương tác tích cực (để tìm phim tương tự)
+                # Chỉ lấy phim user thích (rated >= 3.5, viewed >= 70%, favorited)
+                user_movies_query = text("""
+                    SELECT DISTINCT movieId FROM (
+                        -- Rated >= 3.5
+                        SELECT movieId FROM cine.Rating 
+                        WHERE userId = :user_id AND value >= 3.5
+                        UNION
+                        -- Viewed (completed >= 70%)
+                        SELECT vh.movieId FROM cine.ViewHistory vh
+                        INNER JOIN cine.Movie m ON vh.movieId = m.movieId
+                        WHERE vh.userId = :user_id 
+                        AND (vh.finishedAt IS NOT NULL 
+                             OR (m.durationMin > 0 AND CAST(vh.progressSec AS FLOAT) / 60.0 / m.durationMin >= 0.7))
+                        UNION
+                        -- Favorited
+                        SELECT movieId FROM cine.Favorite 
+                        WHERE userId = :user_id
+                    ) AS user_movies
+                """)
+                
+                # Đảm bảo user_id là int
+                user_id = int(user_id) if user_id is not None else None
+                if user_id is None:
+                    logger.error("Invalid user_id: None")
+                    return []
+                
+                user_movies_result = conn.execute(user_movies_query, {'user_id': user_id})
+                user_movie_ids = [int(row[0]) for row in user_movies_result.fetchall() if row[0] is not None]
+                
+                if not user_movie_ids:
+                    logger.info(f"User {user_id} has no positive interactions, cannot generate content-based recommendations")
+                    return []
+                
+                # Lấy tất cả phim user đã xem/rated để loại bỏ khỏi recommendations
+                # Bao gồm: tất cả rated, tất cả viewed >= 70% hoặc finished
+                # Loại bỏ phim đang xem dở (< 70% và chưa finished) để có thể recommend tiếp tục xem
+                exclude_movies_query = text("""
+                    SELECT DISTINCT movieId FROM (
+                        -- Tất cả phim đã rated
+                        SELECT movieId FROM cine.Rating 
+                        WHERE userId = :user_id
+                        UNION
+                        -- Tất cả phim đã xem hoàn thành (>= 70% hoặc finished)
+                        SELECT vh.movieId FROM cine.ViewHistory vh
+                        INNER JOIN cine.Movie m ON vh.movieId = m.movieId
+                        WHERE vh.userId = :user_id 
+                        AND (
+                            vh.finishedAt IS NOT NULL 
+                            OR (m.durationMin > 0 AND CAST(vh.progressSec AS FLOAT) / 60.0 / m.durationMin >= 0.7)
+                        )
+                    ) AS exclude_movies
+                """)
+                
+                exclude_result = conn.execute(exclude_movies_query, {'user_id': user_id})
+                exclude_movie_ids = [int(row[0]) for row in exclude_result.fetchall() if row[0] is not None]
+                
+                # Lấy các phim tương tự từ MovieSimilarity
+                # Aggregate similarity scores từ nhiều phim user đã tương tác
+                placeholders = ','.join([f':movie_id{i}' for i in range(len(user_movie_ids))])
+                params = {f'movie_id{i}': mid for i, mid in enumerate(user_movie_ids)}
+                
+                # Thêm exclude_movie_ids vào params để filter (nếu có)
+                exclude_condition = ""
+                if exclude_movie_ids:
+                    exclude_placeholders = ','.join([f':exclude_movie_id{i}' for i in range(len(exclude_movie_ids))])
+                    exclude_params = {f'exclude_movie_id{i}': mid for i, mid in enumerate(exclude_movie_ids)}
+                    params.update(exclude_params)
+                    exclude_condition = f"AND ms.movieId2 NOT IN ({exclude_placeholders})"
+                
+                similar_movies_query = text(f"""
+                    SELECT {top_clause}
+                        ms.movieId2 as movieId,
+                        MAX(ms.similarity) as max_similarity,
+                        AVG(ms.similarity) as avg_similarity,
+                        COUNT(*) as source_count
+                    FROM cine.MovieSimilarity ms
+                    WHERE ms.movieId1 IN ({placeholders})
+                    AND ms.movieId2 NOT IN ({placeholders})  -- Loại bỏ phim user đã tương tác tích cực
+                    {exclude_condition}  -- Loại bỏ tất cả phim đã xem/rated (nếu có)
+                    GROUP BY ms.movieId2
+                    ORDER BY max_similarity DESC, avg_similarity DESC, source_count DESC
+                """)
+                
+                similar_result = conn.execute(similar_movies_query, params)
+                similar_rows = similar_result.fetchall()
+                
+                if not similar_rows:
+                    logger.info(f"No similar movies found for user {user_id}")
+                    return []
+                
+                # Lấy thông tin chi tiết của các phim
+                similar_movie_ids = [row[0] for row in similar_rows]
+                
+                # Tạo placeholders mới cho similar_movie_ids (không dùng placeholders cũ từ user_movie_ids)
+                if not similar_movie_ids:
+                    logger.warning(f"No similar movie IDs to query details for user {user_id}")
+                    return []
+                
+                movie_details_placeholders = ','.join([f':movie_detail_id{i}' for i in range(len(similar_movie_ids))])
+                movie_details_query = text(f"""
+                    SELECT 
+                        m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
+                        STRING_AGG(g.name, ', ') as genres
+                    FROM cine.Movie m
+                    LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                    LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
+                    WHERE m.movieId IN ({movie_details_placeholders})
+                    GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, m.country
+                """)
+                
+                movie_details_params = {f'movie_detail_id{i}': mid for i, mid in enumerate(similar_movie_ids)}
+                movie_details_result = conn.execute(movie_details_query, movie_details_params)
+                movie_details = {row[0]: {
+                    'movieId': row[0],
+                    'title': row[1],
+                    'posterUrl': row[2],
+                    'releaseYear': row[3],
+                    'country': row[4],
+                    'genres': row[5] or ''
+                } for row in movie_details_result.fetchall()}
+                
+                # Kết hợp similarity scores với movie details
+                recommendations = []
+                for row in similar_rows[:validated_limit]:
+                    movie_id = int(row[0]) if row[0] is not None else None
+                    if movie_id is None or movie_id not in movie_details:
+                        continue
+                    
+                    movie = movie_details[movie_id]
+                    # Clamp similarity để tránh quá gần 1.0 (< 0.98)
+                    max_sim = float(row[1]) if row[1] is not None else 0.0
+                    avg_sim = float(row[2]) if row[2] is not None else 0.0
+                    # Clamp similarity values
+                    max_sim = min(0.98, max(0.0, max_sim))
+                    avg_sim = min(0.98, max(0.0, avg_sim))
+                    
+                    recommendations.append({
+                        'movieId': movie_id,  # Đảm bảo là int
+                        'title': movie['title'],
+                        'posterUrl': movie['posterUrl'],
+                        'releaseYear': movie['releaseYear'],
+                        'country': movie['country'],
+                        'genres': movie['genres'],
+                        'similarity': max_sim,  # max_similarity (clamped < 0.98)
+                        'avg_similarity': avg_sim,  # avg_similarity (clamped < 0.98)
+                        'source_count': int(row[3]) if row[3] is not None else 0,  # source_count
+                        'score': max_sim * 0.7 + avg_sim * 0.3  # Weighted score
+                    })
+                
+                logger.info(f"Generated {len(recommendations)} content-based recommendations for user {user_id}")
+                return recommendations
+                
+        except Exception as e:
+            logger.error(f"Error getting content-based recommendations for user {user_id}: {e}")
+            return []
 

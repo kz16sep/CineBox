@@ -1,29 +1,40 @@
 import os
 import secrets
-from datetime import timedelta
 from flask import Flask
 from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
 from sqlalchemy import text
+from config import get_config
 
 def create_app():
     app = Flask(__name__)
     
+    # Load configuration from environment variables
+    config = get_config()
+    
     # Generate a secure random SECRET_KEY if not set
-    secret_key = os.environ.get('SECRET_KEY')
+    secret_key = config.SECRET_KEY
     if not secret_key:
         secret_key = secrets.token_hex(32)
+        # Warn if using generated key (should set SECRET_KEY in .env)
+        import warnings
+        warnings.warn(
+            "SECRET_KEY not set in environment variables. "
+            "Using generated key (will change on restart). "
+            "Set SECRET_KEY in .env file for production!",
+            UserWarning
+        )
     
     app.config.from_mapping(
         SECRET_KEY=secret_key,
-        PERMANENT_SESSION_LIFETIME=timedelta(hours=2),  # Session expires after 2 hours
-        SQLSERVER_DRIVER="ODBC Driver 17 for SQL Server",
-        SQLSERVER_SERVER="localhost,1433",   # hoặc "127.0.0.1,1433" hoặc "HOST\INSTANCE"
-        SQLSERVER_DB="CineBoxDB",
-        SQLSERVER_UID="sa",                  # dùng sa theo yêu cầu
-        SQLSERVER_PWD="sapassword",
-        SQL_ENCRYPT="yes",
-        SQL_TRUST_CERT="yes",
+        PERMANENT_SESSION_LIFETIME=config.PERMANENT_SESSION_LIFETIME,
+        SQLSERVER_DRIVER=config.SQLSERVER_DRIVER,
+        SQLSERVER_SERVER=config.SQLSERVER_SERVER,
+        SQLSERVER_DB=config.SQLSERVER_DB,
+        SQLSERVER_UID=config.SQLSERVER_UID,
+        SQLSERVER_PWD=config.SQLSERVER_PWD,
+        SQL_ENCRYPT=config.SQL_ENCRYPT,
+        SQL_TRUST_CERT=config.SQL_TRUST_CERT,
     )
 
     odbc_str = (
@@ -36,7 +47,24 @@ def create_app():
         f"TrustServerCertificate={app.config['SQL_TRUST_CERT']};"
     )
     connection_url = URL.create("mssql+pyodbc", query={"odbc_connect": odbc_str})
-    engine = create_engine(connection_url, pool_pre_ping=True, fast_executemany=True)
+    
+    # Connection Pool Configuration
+    # pool_size: Số connections giữ trong pool
+    # max_overflow: Số connections có thể tạo thêm khi cần
+    # pool_timeout: Thời gian chờ connection từ pool (seconds)
+    # pool_recycle: Thời gian recycle connection để tránh stale connections (seconds)
+    # pool_pre_ping: Kiểm tra connection trước khi sử dụng (tránh stale connections)
+    # fast_executemany: Tối ưu cho bulk operations
+    engine = create_engine(
+        connection_url,
+        pool_size=config.DB_POOL_SIZE,
+        max_overflow=config.DB_MAX_OVERFLOW,
+        pool_timeout=config.DB_POOL_TIMEOUT,
+        pool_recycle=config.DB_POOL_RECYCLE,
+        pool_pre_ping=True,  # Kiểm tra connection trước khi dùng
+        fast_executemany=True,  # Tối ưu bulk operations
+        echo=config.DB_ECHO  # Log SQL queries (chỉ bật khi debug)
+    )
 
     app.db_engine = engine
 

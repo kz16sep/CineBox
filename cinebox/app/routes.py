@@ -6,21 +6,52 @@ import os
 import time
 import uuid
 import re
+import random
 from werkzeug.utils import secure_filename
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from recommenders.content_based import ContentBasedRecommender
-from recommenders.collaborative import CollaborativeRecommender
 from recommenders.enhanced_cf import EnhancedCFRecommender
+# Import helpers để tránh code duplication
+from .movie_query_helpers import (
+    get_movie_rating_stats, 
+    get_movie_genres,
+    get_movies_genres,  # Batch query genres
+    get_movie_interaction_stats,
+    get_movies_interaction_stats  # Batch query để tránh N+1
+)
+from .recommendation_helpers import (
+    calculate_user_interaction_score,
+    sort_recommendations,
+    format_recommendation,
+    hybrid_recommendations
+)
+from .sql_helpers import (
+    validate_limit,
+    safe_top_clause
+)
 # Global recommender instances
 content_recommender = None
-collaborative_recommender = None
 enhanced_cf_recommender = None
 
-# Trending movies cache (10 minutes)
+# Trending movies cache (1 hour - tăng lên để giảm queries)
 trending_cache = {
     'data': None,
     'timestamp': None,
-    'ttl': 600  # 10 minutes in seconds
+    'ttl': 3600  # 1 hour in seconds (trending movies không cần update quá thường xuyên)
+}
+
+# Latest movies cache (5 minutes)
+latest_movies_cache = {
+    'data': None,
+    'timestamp': None,
+    'ttl': 300  # 5 minutes in seconds
+}
+
+# Carousel movies cache (5 minutes)
+carousel_movies_cache = {
+    'data': None,
+    'timestamp': None,
+    'ttl': 300  # 5 minutes in seconds
 }
 
 # --- CF retrain dirty-flag helpers ---
@@ -28,7 +59,8 @@ def set_cf_dirty(db_engine=None):
     try:
         if db_engine is None:
             db_engine = current_app.db_engine
-        with db_engine.connect() as conn:
+        # Sử dụng begin() để tự động quản lý transaction
+        with db_engine.begin() as conn:
             conn.execute(text("""
                 IF OBJECT_ID('cine.AppState','U') IS NULL
                 BEGIN
@@ -40,46 +72,96 @@ def set_cf_dirty(db_engine=None):
                 WHEN MATCHED THEN UPDATE SET [value] = 'true'
                 WHEN NOT MATCHED THEN INSERT ([key],[value]) VALUES (s.[key], s.[value]);
             """))
-            conn.commit()
+            # begin() tự động commit khi exit context thành công
     except Exception as e:
         print(f"Error setting cf_dirty: {e}")
+
+
+def get_cf_state(db_engine=None):
+    """Lấy trạng thái CF model từ AppState table"""
+    try:
+        if db_engine is None:
+            db_engine = current_app.db_engine
+        
+        # Đảm bảo table tồn tại (sử dụng begin() cho DDL)
+        with db_engine.begin() as conn:
+            conn.execute(text("""
+                IF OBJECT_ID('cine.AppState','U') IS NULL
+                BEGIN
+                  CREATE TABLE cine.AppState ( [key] NVARCHAR(50) PRIMARY KEY, [value] NVARCHAR(255) NULL )
+                END;
+            """))
+        
+        # Lấy các giá trị từ AppState (read-only, sử dụng connect())
+        with db_engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT [key], [value] 
+                FROM cine.AppState 
+                WHERE [key] IN ('cf_dirty', 'cf_last_retrain')
+            """)).mappings().all()
+            
+            # Chuyển đổi thành dict
+            state = {}
+            for row in result:
+                state[row['key']] = row['value']
+            
+            return state
+    except Exception as e:
+        print(f"Error getting cf_state: {e}")
+        return {}
+
+
+def clear_cf_dirty_and_set_last(timestamp, db_engine=None):
+    """Xóa flag cf_dirty và cập nhật cf_last_retrain"""
+    try:
+        if db_engine is None:
+            db_engine = current_app.db_engine
+        
+        with db_engine.begin() as conn:
+            # Đảm bảo table tồn tại
+            conn.execute(text("""
+                IF OBJECT_ID('cine.AppState','U') IS NULL
+                BEGIN
+                  CREATE TABLE cine.AppState ( [key] NVARCHAR(50) PRIMARY KEY, [value] NVARCHAR(255) NULL )
+                END;
+            """))
+            
+            # Cập nhật cf_dirty = 'false' và cf_last_retrain = timestamp
+            conn.execute(text("""
+                MERGE cine.AppState AS t
+                USING (SELECT 'cf_dirty' AS [key], 'false' AS [value]) AS s
+                ON t.[key] = s.[key]
+                WHEN MATCHED THEN UPDATE SET [value] = 'false'
+                WHEN NOT MATCHED THEN INSERT ([key],[value]) VALUES (s.[key], s.[value]);
+            """))
+            
+            conn.execute(text("""
+                MERGE cine.AppState AS t
+                USING (SELECT 'cf_last_retrain' AS [key], :timestamp AS [value]) AS s
+                ON t.[key] = s.[key]
+                WHEN MATCHED THEN UPDATE SET [value] = :timestamp
+                WHEN NOT MATCHED THEN INSERT ([key],[value]) VALUES (s.[key], s.[value]);
+            """), {"timestamp": timestamp})
+            
+            # begin() tự động commit khi exit context thành công
+    except Exception as e:
+        print(f"Error clearing cf_dirty and setting last retrain: {e}")
 
 
 def fetch_rating_stats_for_movies(movie_ids, db_engine=None):
     """Fetch avgRating and ratingCount for a list of movie IDs uniformly.
 
     Returns a dict: movieId -> {"avgRating": float, "ratingCount": int}
+    
+    Note: This function now uses the helper module to avoid code duplication.
     """
-    if not movie_ids:
-        return {}
-    if db_engine is None:
-        db_engine = current_app.db_engine
-    try:
-        params = {f"id{i}": int(mid) for i, mid in enumerate(movie_ids)}
-        placeholders = ",".join([f":id{i}" for i in range(len(movie_ids))])
-        with db_engine.connect() as conn:
-            rows = conn.execute(text(f"""
-                SELECT m.movieId,
-                       AVG(CAST(r.value AS FLOAT)) AS avgRating,
-                       COUNT(r.movieId) AS ratingCount
-                FROM cine.Movie m
-                LEFT JOIN cine.Rating r ON m.movieId = r.movieId
-                WHERE m.movieId IN ({placeholders})
-                GROUP BY m.movieId
-            """), params).mappings().all()
-        return {
-            row["movieId"]: {
-                "avgRating": round(float(row["avgRating"] or 0), 2),
-                "ratingCount": int(row["ratingCount"] or 0),
-            }
-            for row in rows
-        }
-    except Exception as e:
-        print(f"Error fetching rating stats: {e}")
-        return {}
+    return get_movie_rating_stats(movie_ids, db_engine)
 
 def calculate_user_based_score(user_id, movie_id, db_engine=None):
-    """Tính điểm gợi ý dựa trên tất cả tương tác của user với phim"""
+    """Tính điểm gợi ý dựa trên tất cả tương tác của user với phim
+    
+    Note: This function now uses the helper module to avoid code duplication.
+    """
     try:
         if db_engine is None:
             db_engine = current_app.db_engine
@@ -109,92 +191,48 @@ def calculate_user_based_score(user_id, movie_id, db_engine=None):
             if not interaction_result:
                 return 0.5  # Fallback score
             
-            user_rating = interaction_result[0] or 0
-            is_favorite = interaction_result[1]
-            is_watchlist = interaction_result[2]
-            has_viewed = interaction_result[3]
-            has_commented = interaction_result[4]
-            total_ratings = interaction_result[5] or 0
-            avg_rating = interaction_result[6] or 0
-            
-            # Tính điểm dựa trên tất cả các yếu tố
-            score = 0.0
-            
-            # 1. Rating của user (trọng số cao nhất)
-            if user_rating > 0:
-                score += (user_rating / 5.0) * 0.4  # 0-0.4 điểm
-            
-            # 2. Favorite (trọng số cao)
-            if is_favorite:
-                score += 0.3  # +0.3 điểm
-            
-            # 3. Watchlist (trọng số cao)
-            if is_watchlist:
-                score += 0.25  # +0.25 điểm
-            
-            # 4. View History (trọng số trung bình)
-            if has_viewed:
-                score += 0.2  # +0.2 điểm
-            
-            # 5. Comments (trọng số trung bình)
-            if has_commented:
-                score += 0.15  # +0.15 điểm
-            
-            # 6. Rating trung bình của phim (trọng số thấp)
-            if avg_rating > 0:
-                score += (avg_rating / 5.0) * 0.1  # 0-0.1 điểm
-            
-            # 7. Độ phổ biến (số lượng rating)
-            if total_ratings > 0:
-                popularity_bonus = min(total_ratings / 100.0, 0.1)  # Tối đa 0.1 điểm
-                score += popularity_bonus
-            
-            # Đảm bảo điểm trong khoảng 0-2.0
-            score = max(0.0, min(score, 2.0))
-            
-            return round(score, 3)
+            # Sử dụng helper function để tính điểm
+            return calculate_user_interaction_score(
+                user_rating=interaction_result[0] or 0,
+                is_favorite=bool(interaction_result[1]),
+                is_watchlist=bool(interaction_result[2]),
+                has_viewed=bool(interaction_result[3]),
+                has_commented=bool(interaction_result[4]),
+                total_ratings=interaction_result[5] or 0,
+                avg_rating=interaction_result[6] or 0
+            )
             
     except Exception as e:
         print(f"Error calculating user based score: {e}")
         return 0.5  # Fallback score
 
 def create_rating_based_recommendations(user_id, movies, db_engine=None):
-    """Tạo recommendations dựa trên rating thực tế của user"""
+    """Tạo recommendations dựa trên rating thực tế của user
+    
+    Note: Sử dụng batch queries để tránh N+1 query problem.
+    """
     try:
+        if not movies:
+            return []
+        
+        if db_engine is None:
+            db_engine = current_app.db_engine
+        
+        # Batch query: Lấy interaction stats cho tất cả movies cùng lúc
+        movie_ids = [movie["id"] for movie in movies]
+        all_interaction_stats = get_movies_interaction_stats(movie_ids, db_engine)
+        
         recommendations = []
         for movie in movies:
-            score = calculate_user_based_score(user_id, movie["id"], db_engine)
+            movie_id = movie["id"]
+            score = calculate_user_based_score(user_id, movie_id, db_engine)
             
-            # Lấy thêm thông tin về view, watchlist, favorites, comments
-            try:
-                with db_engine.connect() as conn:
-                    # Lấy thông tin về view history, watchlist, favorites, comments
-                    stats_result = conn.execute(text("""
-                        SELECT 
-                            COUNT(DISTINCT vh.userId) as viewHistoryCount,
-                            COUNT(DISTINCT w.userId) as watchlistCount,
-                            COUNT(DISTINCT f.userId) as favoriteCount,
-                            COUNT(DISTINCT c.userId) as commentCount
-                        FROM cine.Movie m
-                        LEFT JOIN cine.ViewHistory vh ON m.movieId = vh.movieId
-                        LEFT JOIN cine.Watchlist w ON m.movieId = w.movieId
-                        LEFT JOIN cine.Favorite f ON m.movieId = f.movieId
-                        LEFT JOIN cine.Comment c ON m.movieId = c.movieId
-                        WHERE m.movieId = :movie_id
-                        GROUP BY m.movieId
-                    """), {"movie_id": movie["id"]}).fetchone()
-                    
-                    if stats_result:
-                        viewHistoryCount = stats_result[0] or 0
-                        watchlistCount = stats_result[1] or 0
-                        favoriteCount = stats_result[2] or 0
-                        commentCount = stats_result[3] or 0
-                    else:
-                        viewHistoryCount = watchlistCount = favoriteCount = commentCount = 0
-                        
-            except Exception as e:
-                print(f"Error getting stats for movie {movie['id']}: {e}")
-                viewHistoryCount = watchlistCount = favoriteCount = commentCount = 0
+            # Lấy stats từ batch query result
+            stats = all_interaction_stats.get(movie_id, {})
+            viewHistoryCount = stats.get("viewHistoryCount", 0)
+            watchlistCount = stats.get("watchlistCount", 0)
+            favoriteCount = stats.get("favoriteCount", 0)
+            commentCount = stats.get("commentCount", 0)
             
             recommendations.append({
                 "id": movie["id"],
@@ -214,8 +252,11 @@ def create_rating_based_recommendations(user_id, movies, db_engine=None):
                 "reason": "User rating based recommendation"
             })
         
-        # Sắp xếp theo điểm giảm dần, sau đó theo rating giảm dần
-        recommendations.sort(key=lambda x: (x["score"], x["avgRating"], x["ratingCount"]), reverse=True)
+        # Sắp xếp theo điểm giảm dần, sau đó theo rating giảm dần (sử dụng helper)
+        recommendations = sort_recommendations(
+            recommendations,
+            sort_keys=['score', 'avgRating', 'ratingCount']
+        )
         return recommendations
         
     except Exception as e:
@@ -223,20 +264,14 @@ def create_rating_based_recommendations(user_id, movies, db_engine=None):
         return []
 
 def init_recommenders():
-    """Initialize recommender instances"""
-    global content_recommender, collaborative_recommender, enhanced_cf_recommender
+    """Initialize recommender instances - chỉ load Enhanced CF model"""
+    global content_recommender, enhanced_cf_recommender
     try:
         content_recommender = ContentBasedRecommender(current_app.db_engine)
-        collaborative_recommender = CollaborativeRecommender(current_app.db_engine)
         enhanced_cf_recommender = EnhancedCFRecommender(current_app.db_engine)
         
-        # Load CF models
-        print("Loading Collaborative Filtering models...")
-        if collaborative_recommender.load_model():
-            print("Collaborative CF model loaded successfully")
-        else:
-            print("Collaborative CF model not found or failed to load")
-            
+        # Chỉ load Enhanced CF model
+        print("Loading Enhanced CF model...")
         if enhanced_cf_recommender.is_model_loaded():
             print("Enhanced CF model loaded successfully")
         else:
@@ -308,11 +343,16 @@ def get_cold_start_recommendations(user_id, conn):
                 m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
                 m.viewCount, AVG(CAST(r.value AS FLOAT)) AS avgRating,
                 COUNT(r.movieId) AS ratingCount,
-                STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+                STUFF((
+                    SELECT TOP 10 ', ' + g2.name
+                    FROM cine.MovieGenre mg2
+                    JOIN cine.Genre g2 ON mg2.genreId = g2.genreId
+                    WHERE mg2.movieId = m.movieId
+                    ORDER BY g2.name
+                    FOR XML PATH(''), TYPE
+                ).value('.', 'NVARCHAR(MAX)'), 1, 2, '') as genres
             FROM cine.Movie m
             LEFT JOIN cine.Rating r ON m.movieId = r.movieId
-            LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
-            LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
             WHERE m.viewCount > 0
             GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, m.country, m.viewCount
             ORDER BY m.viewCount DESC, avgRating DESC
@@ -339,11 +379,16 @@ def get_cold_start_recommendations(user_id, conn):
                 m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
                 AVG(CAST(r.value AS FLOAT)) AS avgRating,
                 COUNT(r.movieId) AS ratingCount,
-                STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+                STUFF((
+                    SELECT TOP 10 ', ' + g2.name
+                    FROM cine.MovieGenre mg2
+                    JOIN cine.Genre g2 ON mg2.genreId = g2.genreId
+                    WHERE mg2.movieId = m.movieId
+                    ORDER BY g2.name
+                    FOR XML PATH(''), TYPE
+                ).value('.', 'NVARCHAR(MAX)'), 1, 2, '') as genres
             FROM cine.Movie m
             LEFT JOIN cine.Rating r ON m.movieId = r.movieId
-            LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
-            LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
             WHERE m.releaseYear >= YEAR(GETDATE()) - 2
             GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, m.country
             ORDER BY m.releaseYear DESC, avgRating DESC
@@ -371,11 +416,16 @@ def get_cold_start_recommendations(user_id, conn):
                 m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
                 AVG(CAST(r.value AS FLOAT)) AS avgRating,
                 COUNT(r.movieId) AS ratingCount,
-                STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+                STUFF((
+                    SELECT TOP 10 ', ' + g2.name
+                    FROM cine.MovieGenre mg2
+                    JOIN cine.Genre g2 ON mg2.genreId = g2.genreId
+                    WHERE mg2.movieId = m.movieId
+                    ORDER BY g2.name
+                    FOR XML PATH(''), TYPE
+                ).value('.', 'NVARCHAR(MAX)'), 1, 2, '') as genres
             FROM cine.Movie m
             INNER JOIN cine.Rating r ON m.movieId = r.movieId
-            LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
-            LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
             GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, m.country
             HAVING COUNT(r.movieId) >= 10  -- Ít nhất 10 ratings
             ORDER BY avgRating DESC, ratingCount DESC
@@ -399,27 +449,37 @@ def get_cold_start_recommendations(user_id, conn):
         
         # Lưu cold start recommendations vào database
         if recommendations:
-            # Xóa recommendations cũ
-            conn.execute(text("""
-                DELETE FROM cine.ColdStartRecommendations WHERE userId = :user_id
-            """), {"user_id": user_id})
-            
-            # Lưu recommendations mới
-            for rec in recommendations:
-                conn.execute(text("""
-                    INSERT INTO cine.ColdStartRecommendations 
-                    (userId, movieId, score, rank, source, generatedAt, expiresAt, reason)
-                    VALUES (:user_id, :movie_id, :score, :rank, :source, GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()), :reason)
-                """), {
-                    "user_id": user_id,
-                    "movie_id": rec["id"],
-                    "score": rec["score"],
-                    "rank": rec["rank"],
-                    "source": rec["source"],
-                    "reason": f"Cold start recommendation based on {rec['source']}"
-                })
-            
-            conn.commit()
+            # Sử dụng begin() để tự động quản lý transaction
+            from flask import current_app
+            with current_app.db_engine.begin() as trans_conn:
+                # Xóa recommendations cũ
+                trans_conn.execute(text("""
+                    DELETE FROM cine.ColdStartRecommendations WHERE userId = :user_id
+                """), {"user_id": user_id})
+                
+                # Lấy max recId để tạo recId mới
+                max_rec_id_result = trans_conn.execute(text("""
+                    SELECT ISNULL(MAX(recId), 0) FROM cine.ColdStartRecommendations
+                """)).scalar()
+                rec_id = max_rec_id_result + 1 if max_rec_id_result else 1
+                
+                # Lưu recommendations mới
+                for rec in recommendations:
+                    trans_conn.execute(text("""
+                        INSERT INTO cine.ColdStartRecommendations 
+                        (recId, userId, movieId, score, rank, source, generatedAt, expiresAt, reason)
+                        VALUES (:rec_id, :user_id, :movie_id, :score, :rank, :source, GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()), :reason)
+                    """), {
+                        "rec_id": rec_id,
+                        "user_id": user_id,
+                        "movie_id": rec["id"],
+                        "score": rec["score"],
+                        "rank": rec["rank"],
+                        "source": rec["source"],
+                        "reason": f"Cold start recommendation based on {rec['source']}"
+                    })
+                    rec_id += 1
+                # begin() tự động commit khi exit context thành công
             print(f"Generated {len(recommendations)} cold start recommendations for user {user_id}")
         
         return recommendations[:10]  # Trả về tối đa 10 recommendations
@@ -449,7 +509,7 @@ def view_history():
                 SELECT TOP (:per_page) 
                     vh.historyId, vh.startedAt, vh.finishedAt, vh.progressSec,
                     m.movieId, m.title, m.posterUrl, m.releaseYear, m.overview,
-                    STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+                    CAST(STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) AS NVARCHAR(MAX)) as genres
                 FROM cine.ViewHistory vh
                 INNER JOIN cine.Movie m ON vh.movieId = m.movieId
                 LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
@@ -521,7 +581,7 @@ def get_view_history():
                 SELECT TOP (:limit)
                     vh.historyId, vh.startedAt, vh.finishedAt, vh.progressSec,
                     m.movieId, m.title, m.posterUrl, m.releaseYear,
-                    STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+                    CAST(STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) AS NVARCHAR(MAX)) as genres
                 FROM cine.ViewHistory vh
                 INNER JOIN cine.Movie m ON vh.movieId = m.movieId
                 LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
@@ -634,23 +694,47 @@ def update_watch_progress():
     """Cập nhật tiến độ xem phim"""
     try:
         user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"success": False, "message": "Bạn cần đăng nhập để cập nhật tiến độ xem"})
+        
         data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "message": "Thiếu dữ liệu yêu cầu"})
         
         movie_id = data.get('movie_id')
         progress_sec = data.get('progress_sec', 0)
         is_finished = data.get('is_finished', False)
         
-        
         if not movie_id:
             return jsonify({"success": False, "message": "Thiếu thông tin movie_id"})
         
+        # Đảm bảo movie_id và progress_sec là số
+        try:
+            movie_id = int(movie_id)
+            progress_sec = int(progress_sec) if progress_sec else 0
+        except (ValueError, TypeError):
+            return jsonify({"success": False, "message": "Dữ liệu không hợp lệ"})
+        
         with current_app.db_engine.begin() as conn:
             # Kiểm tra xem có history record nào cho movie này không
-            history_record = conn.execute(text("""
+            result = conn.execute(text("""
                 SELECT TOP 1 historyId FROM cine.ViewHistory 
                 WHERE userId = :user_id AND movieId = :movie_id
                 ORDER BY startedAt DESC
-            """), {"user_id": user_id, "movie_id": movie_id}).scalar()
+            """), {"user_id": user_id, "movie_id": movie_id})
+            
+            # Lấy giá trị scalar một cách an toàn
+            # Sử dụng fetchone() và lấy phần tử đầu tiên để tương thích với nhiều phiên bản SQLAlchemy
+            row = result.fetchone()
+            if row:
+                # Truy cập phần tử đầu tiên, hỗ trợ cả Row object và tuple
+                try:
+                    history_record = row[0]
+                except (TypeError, IndexError):
+                    # Nếu là Row object với named access
+                    history_record = row.historyId if hasattr(row, 'historyId') else None
+            else:
+                history_record = None
             
             if history_record:
                 # Cập nhật record hiện tại
@@ -668,12 +752,20 @@ def update_watch_progress():
                     """), {"history_id": history_record, "progress_sec": progress_sec})
             else:
                 # Tạo record mới
+                # Lấy max historyId để tạo ID mới
+                max_history_id_result = conn.execute(text("""
+                    SELECT ISNULL(MAX(historyId), 0) FROM cine.ViewHistory
+                """)).fetchone()
+                max_history_id = max_history_id_result[0] if max_history_id_result else 0
+                new_history_id = max_history_id + 1
+                
                 if is_finished:
                     # Nếu hoàn thành, set cả startedAt và finishedAt
                     conn.execute(text("""
-                        INSERT INTO cine.ViewHistory (userId, movieId, startedAt, progressSec, finishedAt, deviceType, ipAddress, userAgent)
-                        VALUES (:user_id, :movie_id, GETDATE(), :progress_sec, GETDATE(), :device_type, :ip_address, :user_agent)
+                        INSERT INTO cine.ViewHistory (historyId, userId, movieId, startedAt, progressSec, finishedAt, deviceType, ipAddress, userAgent)
+                        VALUES (:history_id, :user_id, :movie_id, GETDATE(), :progress_sec, GETDATE(), :device_type, :ip_address, :user_agent)
                     """), {
+                        "history_id": new_history_id,
                         "user_id": user_id,
                         "movie_id": movie_id,
                         "progress_sec": progress_sec,
@@ -684,9 +776,10 @@ def update_watch_progress():
                 else:
                     # Nếu chưa hoàn thành, chỉ set startedAt
                     conn.execute(text("""
-                        INSERT INTO cine.ViewHistory (userId, movieId, startedAt, progressSec, deviceType, ipAddress, userAgent)
-                        VALUES (:user_id, :movie_id, GETDATE(), :progress_sec, :device_type, :ip_address, :user_agent)
+                        INSERT INTO cine.ViewHistory (historyId, userId, movieId, startedAt, progressSec, deviceType, ipAddress, userAgent)
+                        VALUES (:history_id, :user_id, :movie_id, GETDATE(), :progress_sec, :device_type, :ip_address, :user_agent)
                     """), {
+                        "history_id": new_history_id,
                         "user_id": user_id,
                         "movie_id": movie_id,
                         "progress_sec": progress_sec,
@@ -702,8 +795,11 @@ def update_watch_progress():
             return jsonify({"success": True, "message": message})
             
     except Exception as e:
-        print(f"Error updating watch progress: {e}")
-        return jsonify({"success": False, "message": "Có lỗi xảy ra khi cập nhật tiến độ xem"})
+        current_app.logger.error(f"Error updating watch progress: {e}", exc_info=True)
+        import traceback
+        error_details = traceback.format_exc()
+        current_app.logger.error(f"Traceback: {error_details}")
+        return jsonify({"success": False, "message": f"Có lỗi xảy ra khi cập nhật tiến độ xem: {str(e)}"})
 
 
 @main_bp.route("/")
@@ -719,6 +815,10 @@ def home():
                     SELECT COALESCE(hasCompletedOnboarding, 0) FROM cine.[User] WHERE userId = :user_id
                 """), {"user_id": user_id}).scalar()
                 
+                # Cache trong session
+                session["onboarding_checked"] = True
+                session["onboarding_completed"] = bool(has_completed)
+                
                 if not has_completed:
                     return redirect(url_for('main.onboarding'))
         except Exception as e:
@@ -730,62 +830,51 @@ def home():
     if not session.get("user_id"):
         return redirect(url_for("main.login"))
     
+    # ✅ TỐI ƯU: Sử dụng cached onboarding status nếu đã check
+    if session.get("onboarding_checked") and not session.get("onboarding_completed"):
+        return redirect(url_for('main.onboarding'))
+    
     # Lấy page parameter cho tất cả phim và genre filter
     page = request.args.get('page', 1, type=int)
     per_page = 10  # Số phim mỗi trang
     genre_filter = request.args.get('genre', '', type=str)  # Lọc theo thể loại
     search_query = request.args.get('q', '', type=str)  # Tìm kiếm
     
-    # 1. Phim mới nhất (10 phim, không phân trang) - thay thế trending
-    try:
-        with current_app.db_engine.connect() as conn:
-            if genre_filter:
-                # Lấy phim mới nhất theo thể loại
-                rows = conn.execute(text("""
-                    SELECT TOP 10 
-                        m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt,
-                        AVG(CAST(r.value AS FLOAT)) AS avgRating,
-                        COUNT(r.movieId) AS ratingCount,
-                        STUFF((
-                            SELECT ', ' + g2.name
-                            FROM cine.MovieGenre mg2
-                            JOIN cine.Genre g2 ON mg2.genreId = g2.genreId
-                            WHERE mg2.movieId = m.movieId
-                            GROUP BY g2.name
-                            ORDER BY g2.name
-                            FOR XML PATH('')
-                        ),1,2,'') AS genres
+    # 1. Phim mới nhất (10 phim, không phân trang) - với caching
+    cache_key = f"latest_{genre_filter}"
+    current_time = time.time()
+    
+    # Kiểm tra cache
+    if (latest_movies_cache.get('data') and 
+        latest_movies_cache.get('key') == cache_key and
+        latest_movies_cache.get('timestamp') and 
+        current_time - latest_movies_cache['timestamp'] < latest_movies_cache['ttl']):
+        latest_movies = latest_movies_cache['data']
+    else:
+        try:
+            with current_app.db_engine.connect() as conn:
+                # Query đơn giản không có STUFF subquery
+                if genre_filter:
+                    rows = conn.execute(text("""
+                        SELECT DISTINCT TOP 10
+                            m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt, m.viewCount
                     FROM cine.Movie m
                     JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
                     JOIN cine.Genre g ON mg.genreId = g.genreId
-                    LEFT JOIN cine.Rating r ON m.movieId = r.movieId
                     WHERE g.name = :genre
-                    GROUP BY m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt
                     ORDER BY m.createdAt DESC, m.movieId DESC
                 """), {"genre": genre_filter}).mappings().all()
-            else:
-                # Lấy phim mới nhất tất cả thể loại
-                rows = conn.execute(text("""
+                else:
+                    rows = conn.execute(text("""
                     SELECT TOP 10 
-                        m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt, m.viewCount,
-                        AVG(CAST(r.value AS FLOAT)) AS avgRating,
-                        COUNT(r.movieId) AS ratingCount,
-                        STUFF((
-                            SELECT ', ' + g.name
-                            FROM cine.MovieGenre mg
-                            JOIN cine.Genre g ON mg.genreId = g.genreId
-                            WHERE mg.movieId = m.movieId
-                            GROUP BY g.name
-                            ORDER BY g.name
-                            FOR XML PATH('')
-                        ),1,2,'') AS genres
-                    FROM cine.Movie m
-                    LEFT JOIN cine.Rating r ON m.movieId = r.movieId
-                    GROUP BY m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt, m.viewCount
-                    ORDER BY m.createdAt DESC, m.movieId DESC
-                    """
-                )).mappings().all()
+                            movieId, title, posterUrl, backdropUrl, overview, createdAt, viewCount
+                        FROM cine.Movie
+                        ORDER BY createdAt DESC, movieId DESC
+                    """)).mappings().all()
+                
+                movie_ids = [r["movieId"] for r in rows]
             
+            # ✅ TỐI ƯU: Không query genres/ratings ở đây, sẽ combine query sau
             latest_movies = [
                 {
                     "id": r["movieId"],
@@ -794,51 +883,41 @@ def home():
                     "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
                     "description": (r.get("overview") or "")[:160],
                     "createdAt": r.get("createdAt"),
-                    "avgRating": 0,
-                    "ratingCount": 0,
+                    "avgRating": 0,  # Sẽ được update sau khi combine query
+                    "ratingCount": 0,  # Sẽ được update sau khi combine query
                     "viewCount": r.get("viewCount", 0) or 0,
-                    "genres": r.get("genres") or "",
+                    "genres": "",  # Sẽ được update sau khi combine query
                 }
                 for r in rows
             ]
-            # Overwrite ratings using a single uniform aggregation
-            try:
-                stats = fetch_rating_stats_for_movies([m["id"] for m in latest_movies])
-                for m in latest_movies:
-                    s = stats.get(m["id"]) or {}
-                    m["avgRating"] = s.get("avgRating", 0)
-                    m["ratingCount"] = s.get("ratingCount", 0)
-            except Exception:
-                pass
             
-            # Tạo carousel_movies từ 6 phim mới nhất (theo thể loại nếu có)
-            if genre_filter:
+            # Update cache
+            latest_movies_cache['data'] = latest_movies
+            latest_movies_cache['key'] = cache_key
+            latest_movies_cache['timestamp'] = current_time
+        except Exception as e:
+            current_app.logger.error(f"Error loading latest movies: {e}", exc_info=True)
+            latest_movies = []
+    
+    # 2. Carousel movies (6 phim mới nhất) - với caching
+    if (carousel_movies_cache.get('data') and 
+        carousel_movies_cache.get('timestamp') and 
+        current_time - carousel_movies_cache['timestamp'] < carousel_movies_cache['ttl']):
+        carousel_movies = carousel_movies_cache['data']
+    else:
+        try:
+            with current_app.db_engine.connect() as conn:
+                # Query đơn giản không có STUFF subquery
                 carousel_rows = conn.execute(text("""
-                    SELECT TOP 6 m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt
-                    FROM cine.Movie m
-                    JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
-                    JOIN cine.Genre g ON mg.genreId = g.genreId
-                    WHERE g.name = :genre
-                    ORDER BY m.createdAt DESC, m.movieId DESC
-                """), {"genre": genre_filter}).mappings().all()
-            else:
-                carousel_rows = conn.execute(text(
-                    "SELECT TOP 6 movieId, title, posterUrl, backdropUrl, overview, createdAt FROM cine.Movie ORDER BY createdAt DESC, movieId DESC"
-                )).mappings().all()
-            # Tạo carousel_movies từ 6 phim mới nhất (luôn lấy từ tất cả phim, không phụ thuộc genre)
-            carousel_rows = conn.execute(text(
-                """
                 SELECT TOP 6 
-                    m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt,
-                    AVG(CAST(r.value AS FLOAT)) AS avgRating,
-                    COUNT(r.movieId) AS ratingCount
-                FROM cine.Movie m
-                LEFT JOIN cine.Rating r ON m.movieId = r.movieId
-                GROUP BY m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt
-                ORDER BY m.createdAt DESC, m.movieId DESC
-                """
-            )).mappings().all()
+                        movieId, title, posterUrl, backdropUrl, overview, createdAt
+                    FROM cine.Movie
+                    ORDER BY createdAt DESC, movieId DESC
+                """)).mappings().all()
+                
+                carousel_movie_ids = [r["movieId"] for r in carousel_rows]
             
+            # ✅ TỐI ƯU: Không query genres/ratings ở đây, sẽ combine query sau
             carousel_movies = [
                 {
                     "id": r["movieId"],
@@ -847,23 +926,19 @@ def home():
                     "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
                     "description": (r.get("overview") or "")[:160],
                     "createdAt": r.get("createdAt"),
-                    "avgRating": 0,
-                    "ratingCount": 0,
-                    "genres": r.get("genres") or "",
+                    "avgRating": 0,  # Sẽ được update sau khi combine query
+                    "ratingCount": 0,  # Sẽ được update sau khi combine query
+                    "genres": "",  # Sẽ được update sau khi combine query
                 }
                 for r in carousel_rows
             ]
-            try:
-                stats = fetch_rating_stats_for_movies([m["id"] for m in carousel_movies])
-                for m in carousel_movies:
-                    s = stats.get(m["id"]) or {}
-                    m["avgRating"] = s.get("avgRating", 0)
-                    m["ratingCount"] = s.get("ratingCount", 0)
-            except Exception:
-                pass
-    except Exception:
-        latest_movies = []
-        carousel_movies = []
+            
+            # Update cache
+            carousel_movies_cache['data'] = carousel_movies
+            carousel_movies_cache['timestamp'] = current_time
+        except Exception as e:
+            current_app.logger.error(f"Error loading carousel movies: {e}", exc_info=True)
+            carousel_movies = []
     
     # Personal recommendations (gợi ý cá nhân)
     # Personal recommendations (gợi ý cá nhân) - Collaborative Filtering + Cold Start
@@ -875,98 +950,182 @@ def home():
         try:
             # Kiểm tra xem user có đủ dữ liệu để tạo recommendations không
             with current_app.db_engine.connect() as conn:
-                # Đếm số lượng ratings và view history của user
-                rating_count = conn.execute(text("""
-                    SELECT COUNT(*) FROM cine.Rating WHERE userId = :user_id
-                """), {"user_id": user_id}).scalar()
+                # Combine 2 queries thành 1 để tối ưu
+                interaction_counts = conn.execute(text("""
+                    SELECT 
+                        (SELECT COUNT(*) FROM cine.Rating WHERE userId = :user_id) as rating_count,
+                        (SELECT COUNT(*) FROM cine.ViewHistory WHERE userId = :user_id) as view_count
+                """), {"user_id": user_id}).mappings().first()
                 
-                view_count = conn.execute(text("""
-                    SELECT COUNT(*) FROM cine.ViewHistory WHERE userId = :user_id
-                """), {"user_id": user_id}).scalar()
+                total_interactions = (interaction_counts.rating_count or 0) + (interaction_counts.view_count or 0)
                 
-                total_interactions = rating_count + view_count
+                # Progressive Cold Start: Tỷ lệ cold start giảm dần theo số interactions
+                # 0-5 interactions: 100% cold start
+                # 6-10 interactions: 70% CF/CB, 30% cold start
+                # 11-20 interactions: 80% CF/CB, 20% cold start
+                # 21-50 interactions: 90% CF/CB, 10% cold start
+                # 51+ interactions: 95% CF/CB, 5% cold start
                 
-                # Nếu user có ít hơn 5 interactions, sử dụng cold start
                 if total_interactions < 5:
-                    print(f"User {user_id} has only {total_interactions} interactions, using cold start")
-                    personal_recommendations = get_cold_start_recommendations(user_id, conn)
+                    # 100% cold start
+                    cold_start_weight = 1.0
+                    cf_cb_weight = 0.0
+                    current_app.logger.info(f"User {user_id} has {total_interactions} interactions, using 100% cold start")
+                elif total_interactions < 11:
+                    # 30% cold start, 70% CF/CB
+                    cold_start_weight = 0.3
+                    cf_cb_weight = 0.7
+                    current_app.logger.info(f"User {user_id} has {total_interactions} interactions, using 30% cold start, 70% CF/CB")
+                elif total_interactions < 21:
+                    # 20% cold start, 80% CF/CB
+                    cold_start_weight = 0.2
+                    cf_cb_weight = 0.8
+                    current_app.logger.info(f"User {user_id} has {total_interactions} interactions, using 20% cold start, 80% CF/CB")
+                elif total_interactions < 51:
+                    # 10% cold start, 90% CF/CB
+                    cold_start_weight = 0.1
+                    cf_cb_weight = 0.9
+                    current_app.logger.info(f"User {user_id} has {total_interactions} interactions, using 10% cold start, 90% CF/CB")
                 else:
-                    # Lấy gợi ý cá nhân từ PersonalRecommendation
+                    # 5% cold start, 95% CF/CB
+                    cold_start_weight = 0.05
+                    cf_cb_weight = 0.95
+                    current_app.logger.info(f"User {user_id} has {total_interactions} interactions, using 5% cold start, 95% CF/CB")
+                
+                # Lấy cold start recommendations nếu cần
+                cold_start_recs = []
+                if cold_start_weight > 0:
+                    cold_start_recs = get_cold_start_recommendations(user_id, conn)
+                    # Format cold start recs để có cùng structure với CF/CB
+                    for rec in cold_start_recs:
+                        rec['algo'] = 'cold_start'
+                        rec['cf_score'] = 0.0
+                        rec['cb_score'] = 0.0
+                        rec['hybrid_score'] = rec.get('score', 0.0)
+                
+                # Lấy CF/CB recommendations nếu cần
+                cf_cb_recs = []
+                if cf_cb_weight > 0:
+                    # ✅ TỐI ƯU: Chỉ lấy từ database, không generate mỗi request
+                    # Ưu tiên hybrid recommendations, nếu không có thì lấy CF
                     personal_rows = conn.execute(text("""
-                        SELECT TOP 10 m.movieId, m.title, m.posterUrl, pr.score
+                        SELECT TOP 10 
+                            m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
+                            pr.score, pr.rank, pr.generatedAt, pr.algo
                         FROM cine.PersonalRecommendation pr
                         JOIN cine.Movie m ON m.movieId = pr.movieId
-                        WHERE pr.userId = :user_id AND pr.expiresAt > GETDATE()
-                        ORDER BY pr.rank
+                        WHERE pr.userId = :user_id AND pr.expiresAt > GETUTCDATE()
+                        ORDER BY 
+                            CASE WHEN pr.algo = 'hybrid' THEN 0 ELSE 1 END,  -- Ưu tiên hybrid trước
+                            pr.rank
                     """), {"user_id": user_id}).mappings().all()
             
-            # Initialize recommenders if not already done
-            global content_recommender, collaborative_recommender
-            if collaborative_recommender is None:
-                init_recommenders()
-            
-            # Sử dụng Enhanced CF Recommender trước, fallback về Collaborative CF
-            
-            # Thử Enhanced CF model trước
-            if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded():
-                personal_recommendations_raw = enhanced_cf_recommender.get_user_recommendations(user_id, limit=10)
-            elif collaborative_recommender and collaborative_recommender.is_model_loaded():
-                personal_recommendations_raw = collaborative_recommender.get_user_recommendations(user_id, limit=10)
-            else:
-                personal_recommendations_raw = []
-            
-            if personal_recommendations_raw:
-                
-                # Sắp xếp recommendations theo score, sau đó theo avgRating
-                personal_recommendations_raw.sort(key=lambda x: (x.get("recommendation_score", 0), x.get("avgRating", 0), x.get("ratingCount", 0)), reverse=True)
-                
-                # Lưu recommendations vào bảng PersonalRecommendation
-                with current_app.db_engine.connect() as conn:
-                    # Xóa recommendations cũ của user này
-                    conn.execute(text("""
-                        DELETE FROM cine.PersonalRecommendation 
-                        WHERE userId = :user_id
-                    """), {"user_id": user_id})
+                    # Kiểm tra xem có recommendations cũ (collaborative) không
+                    has_old_collaborative = False
+                    has_hybrid = False
+                    if personal_rows:
+                        for row in personal_rows:
+                            if row["algo"] == "collaborative" or row["algo"] == "enhanced_cf":
+                                has_old_collaborative = True
+                            elif row["algo"] == "hybrid":
+                                has_hybrid = True
                     
-                    # Lưu recommendations mới từ CF model
-                    for rank, rec in enumerate(personal_recommendations_raw, 1):
-                        conn.execute(text("""
-                            INSERT INTO cine.PersonalRecommendation 
-                            (userId, movieId, score, rank, algo, generatedAt, expiresAt)
-                            VALUES (:user_id, :movie_id, :score, :rank, 'collaborative', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
-                        """), {
-                            "user_id": user_id,
-                            "movie_id": rec["movieId"],
-                            "score": rec.get("recommendation_score", 0),
-                            "rank": rank
-                        })
+                    # ✅ TỐI ƯU: Bỏ auto-generate hybrid trong route home() - quá chậm
+                    # User có thể generate hybrid qua API endpoint /api/generate_recommendations
+                    # Nếu có recommendations cũ (collaborative) nhưng chưa có hybrid, chỉ log warning
+                    if has_old_collaborative and not has_hybrid:
+                        current_app.logger.info(f"User {user_id} has old collaborative recommendations but no hybrid. User can generate via API.")
                     
-                    conn.commit()
+                    if personal_rows:
+                        # Có recommendations từ database - sử dụng luôn
+                        personal_movie_ids = [row["movieId"] for row in personal_rows]
+                        
+                        # ✅ TỐI ƯU: Không query genres/ratings ở đây, sẽ combine query sau
+                        cf_cb_recs = []
+                        for row in personal_rows:
+                            # Nếu là hybrid, cần lấy thêm CF và CB scores từ hybrid_recs nếu có
+                            # Tạm thời set default, sẽ được update nếu có hybrid_recs
+                            row_score = float(row["score"]) if row["score"] is not None else 0.0
+                            rec_dict = {
+                                "id": row["movieId"],
+                                "title": row["title"],
+                                "poster": row.get("posterUrl") if row.get("posterUrl") and row.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={row['title'][:20].replace(' ', '+')}",
+                                "year": row.get("releaseYear"),
+                                "country": row.get("country"),
+                                "score": round(row_score, 4),
+                                "rank": row["rank"],
+                                "genres": "",  # Sẽ được update sau khi combine query
+                                # Đảm bảo movieId là int để match với dict key
+                                "avgRating": 0.0,  # Sẽ được update sau khi combine query
+                                "ratingCount": 0,  # Sẽ được update sau khi combine query
+                                "algo": row["algo"] or "hybrid",
+                                "reason": "Cached recommendation",
+                                # Default scores (sẽ được update nếu có hybrid_recs)
+                                "cf_score": 0.0,
+                                "cb_score": 0.0,
+                                "hybrid_score": round(row_score, 4)
+                            }
+                            cf_cb_recs.append(rec_dict)
+                        
+                        # ✅ TỐI ƯU: Bỏ regenerate CF/CB scores - quá chậm (limit=200)
+                        # Chỉ hiển thị hybrid_score từ database, CF/CB scores = 0.0
+                        # Nếu cần CF/CB scores, user có thể generate lại recommendations qua API
+                        # Hybrid recommendations đã được tính toán và lưu trong DB, không cần regenerate
+                    else:
+                        # Không có recommendations trong database - fallback về rating-based
+                        cf_cb_recs = create_rating_based_recommendations(user_id, latest_movies[:10], current_app.db_engine)
                 
-                personal_recommendations = []
-                for rec in personal_recommendations_raw:
-                    rec_dict = {
-                        "id": rec["movieId"],
-                        "title": rec["title"],
-                        "poster": rec.get("posterUrl") if rec.get("posterUrl") and rec.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={rec['title'][:20].replace(' ', '+')}",
-                        "year": rec.get("releaseYear"),
-                        "country": rec.get("country"),
-                        "score": rec.get("recommendation_score", 0),
-                        "genres": rec.get("genres", ""),
-                        "avgRating": rec.get("avgRating", 0),
-                        "ratingCount": rec.get("ratingCount", 0),
-                        "watchlistCount": rec.get("watchlistCount", 0),
-                        "viewHistoryCount": rec.get("viewHistoryCount", 0),
-                        "favoriteCount": rec.get("favoriteCount", 0),
-                        "commentCount": rec.get("commentCount", 0),
-                        "algo": "enhanced_cf" if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded() else "collaborative_cf",
-                        "reason": rec.get("reason", "Model prediction")
-                    }
-                    
-                    personal_recommendations.append(rec_dict)
-            else:
-                # Tạo recommendations dựa trên rating thực tế của user
-                personal_recommendations = create_rating_based_recommendations(user_id, latest_movies[:10], current_app.db_engine)
+                # Merge cold start và CF/CB recommendations theo tỷ lệ
+                # CHỈ blend cold start nếu CF/CB recommendations không đủ hoặc chất lượng thấp
+                if cold_start_weight > 0 and cold_start_recs:
+                    if cf_cb_weight > 0 and cf_cb_recs:
+                        # Kiểm tra chất lượng CF/CB recommendations
+                        # Nếu có ít nhất 5 CF/CB recommendations với hybrid_score > 0.3 hoặc có CF/CB scores > 0, không cần cold start
+                        high_quality_cf_cb = [
+                            rec for rec in cf_cb_recs 
+                            if rec.get('hybrid_score', 0) > 0.3 
+                            or rec.get('cf_score', 0) > 0 
+                            or rec.get('cb_score', 0) > 0
+                        ]
+                        
+                        if len(high_quality_cf_cb) >= 5:
+                            # Có đủ CF/CB recommendations chất lượng cao, không cần cold start
+                            personal_recommendations = cf_cb_recs[:10]
+                            current_app.logger.info(f"Using {len(personal_recommendations)} CF/CB recommendations (high quality: {len(high_quality_cf_cb)} items, skipping cold start) for user {user_id}")
+                        else:
+                            # Blend cold start với CF/CB khi CF/CB không đủ chất lượng
+                            # Tính số lượng recommendations từ mỗi source
+                            num_cold_start = max(1, int(10 * cold_start_weight))
+                            num_cf_cb = 10 - num_cold_start
+                            
+                            # Lấy top recommendations từ mỗi source
+                            selected_cold_start = cold_start_recs[:num_cold_start]
+                            selected_cf_cb = cf_cb_recs[:num_cf_cb] if len(cf_cb_recs) >= num_cf_cb else cf_cb_recs
+                            
+                            # Merge và shuffle để trộn đều
+                            personal_recommendations = selected_cold_start + selected_cf_cb
+                            # Shuffle để trộn đều cold start và CF/CB recommendations
+                            random.shuffle(personal_recommendations)
+                            personal_recommendations = personal_recommendations[:10]
+                            
+                            # Update scores để reflect blending
+                            for rec in personal_recommendations:
+                                if rec.get('algo') == 'cold_start':
+                                    rec['hybrid_score'] = rec.get('score', 0.0) * cold_start_weight
+                                else:
+                                    # CF/CB recommendations giữ nguyên hybrid_score nhưng nhân với weight
+                                    rec['hybrid_score'] = rec.get('hybrid_score', rec.get('score', 0.0)) * cf_cb_weight
+                            
+                            current_app.logger.info(f"Blended {len(selected_cold_start)} cold start ({cold_start_weight*100:.0f}%) + {len(selected_cf_cb)} CF/CB ({cf_cb_weight*100:.0f}%) recommendations for user {user_id}")
+                    else:
+                        # Chỉ có cold start
+                        personal_recommendations = cold_start_recs[:10]
+                elif cf_cb_weight > 0 and cf_cb_recs:
+                    # Chỉ có CF/CB
+                    personal_recommendations = cf_cb_recs[:10]
+                else:
+                    # Fallback: không có recommendations
+                    personal_recommendations = []
                 
         except Exception as e:
             # Fallback: Lấy gợi ý từ database nếu model chưa load
@@ -982,7 +1141,7 @@ def home():
                         COUNT(DISTINCT vh.userId) as viewHistoryCount,
                         COUNT(DISTINCT f.userId) as favoriteCount,
                         COUNT(DISTINCT c.userId) as commentCount,
-                        STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+                        CAST(STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) AS NVARCHAR(MAX)) as genres
                     FROM cine.PersonalRecommendation pr
                     JOIN cine.Movie m ON m.movieId = pr.movieId
                     LEFT JOIN cine.Rating r ON m.movieId = r.movieId
@@ -1022,217 +1181,137 @@ def home():
                     for row in personal_rows
                 ]
                 
-                # Lấy trending movies từ database (views + ratings trong 7 ngày)
-            try:
-                with current_app.db_engine.connect() as conn:
-                    trending_rows = conn.execute(text("""
-                        SELECT TOP 10
-                            m.movieId, m.title, m.posterUrl, m.releaseYear, m.country, m.viewCount,
-                            COUNT(DISTINCT vh.userId) as unique_viewers_7d,
-                            COUNT(DISTINCT vh.historyId) as view_count_7d,
-                            AVG(CAST(r.value AS FLOAT)) as avg_rating_7d,
-                            COUNT(DISTINCT r.userId) as rating_count_7d,
-                            -- Overall rating (to prioritize movies with high overall rating)
-                            (SELECT AVG(CAST(r2.value AS FLOAT)) FROM cine.Rating r2 WHERE r2.movieId = m.movieId) as overall_avg_rating,
-                            (
-                                -- View component (70%): view count + unique viewers * 2
-                                (
-                                    COUNT(DISTINCT vh.historyId) +
-                                    COUNT(DISTINCT vh.userId) * 2
-                                ) * 0.7 +
-                                
-                                -- Rating component (30%): avg_rating * rating_count * 2
-                                COALESCE(
-                                    AVG(CAST(r.value AS FLOAT)) * NULLIF(COUNT(DISTINCT r.userId), 0) * 2,
-                                    0
-                                ) * 0.3
-                            ) as trending_score,
-                            STRING_AGG(DISTINCT g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
-                        FROM cine.Movie m
-                        LEFT JOIN cine.ViewHistory vh 
-                            ON m.movieId = vh.movieId 
-                            AND vh.startedAt >= DATEADD(day, -7, GETDATE())
-                        LEFT JOIN cine.Rating r 
-                            ON m.movieId = r.movieId 
-                            AND r.ratedAt >= DATEADD(day, -7, GETDATE())
-                            AND r.ratedAt IS NOT NULL
-                        LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
-                        LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
-                        GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, m.country, m.viewCount
-                        HAVING 
-                            COUNT(DISTINCT vh.historyId) > 0 OR 
-                            COUNT(DISTINCT r.userId) > 0
-                        ORDER BY trending_score DESC
-                    """)).mappings().all()
-                    
-                    trending_movies = []
-                    for row in trending_rows:
-                        # Get overall rating and viewCount from Movie table
-                        overall_avg_rating = row.overall_avg_rating if row.overall_avg_rating else 0
-                        total_view_count = row.viewCount if row.viewCount else 0
-                        
-                        trending_movies.append({
-                            "id": row.movieId,
-                            "title": row.title,
-                            "poster": get_poster_or_dummy(row.posterUrl, row.title),
-                            "releaseYear": row.releaseYear,
-                            "country": row.country,
-                            "ratingCount": row.rating_count_7d or 0,
-                            "avgRating": round(float(overall_avg_rating), 2),  # Use overall rating, not 24h
-                            "viewCount": total_view_count,  # Use total viewCount from Movie table
-                            "genres": row.genres or ""
-                        })
-                    
-                    # Nếu không đủ 10 phim, bổ sung bằng phim mới nhất
-                    if len(trending_movies) < 10:
-                        existing_movie_ids = [m["id"] for m in trending_movies]
-                        placeholders = ','.join([f':id{i}' for i in range(len(existing_movie_ids))])
-                        params = {f'id{i}': mid for i, mid in enumerate(existing_movie_ids)}
-                        
-                        fallback_limit = 10 - len(trending_movies)
-                        fallback_query = f"""
-                            SELECT TOP {fallback_limit}
-                            m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
-                                STRING_AGG(DISTINCT g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
-                        FROM cine.Movie m
-                        LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
-                        LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
-                            WHERE m.releaseYear IS NOT NULL
-                        """
-                        
-                        if existing_movie_ids:
-                            fallback_query += f" AND m.movieId NOT IN ({placeholders})"
-                        
-                        fallback_query += """
-                        GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, m.country
-                            ORDER BY m.releaseYear DESC, m.movieId DESC
-                        """
-                        
-                        fallback_rows = conn.execute(text(fallback_query), params).mappings().all()
-                        
-                        for row in fallback_rows:
-                            # Get overall rating and viewCount for fallback movies
-                            movie_id = row.movieId
-                            fallback_stats = conn.execute(text("""
-                                SELECT 
-                                    AVG(CAST(r.value AS FLOAT)) as avgRating,
-                                    m.viewCount
+                # ✅ TỐI ƯU: Lấy trending movies từ cache hoặc query đơn giản hơn
+                # Kiểm tra cache trending movies
+                if (trending_cache.get('data') and 
+                    trending_cache.get('timestamp') and 
+                    current_time - trending_cache['timestamp'] < trending_cache['ttl']):
+                    trending_movies = trending_cache['data']
+                else:
+                    try:
+                        with current_app.db_engine.connect() as conn:
+                            # ✅ TỐI ƯU: Query được tối ưu để giảm chi phí
+                            # 1. Tính DATEADD một lần trong CTE thay vì trong JOIN condition
+                            # 2. Sử dụng subquery để filter trước khi JOIN (giảm số rows scan)
+                            # 3. Loại bỏ HAVING bằng cách filter trong WHERE của subquery
+                            trending_rows = conn.execute(text("""
+                                WITH date_threshold AS (
+                                    SELECT DATEADD(day, -7, GETDATE()) AS threshold_date
+                                ),
+                                recent_views AS (
+                                    SELECT movieId, COUNT(DISTINCT historyId) as view_count_7d
+                                    FROM cine.ViewHistory vh, date_threshold dt
+                                    WHERE vh.startedAt >= dt.threshold_date
+                                    GROUP BY movieId
+                                ),
+                                recent_ratings AS (
+                                    SELECT movieId, COUNT(DISTINCT userId) as rating_count_7d
+                                    FROM cine.Rating r, date_threshold dt
+                                    WHERE r.ratedAt >= dt.threshold_date
+                                    GROUP BY movieId
+                                )
+                                SELECT TOP 10
+                                    m.movieId, m.title, m.posterUrl, m.releaseYear, m.country, m.viewCount,
+                                    ISNULL(rv.view_count_7d, 0) as view_count_7d,
+                                    ISNULL(rr.rating_count_7d, 0) as rating_count_7d
                                 FROM cine.Movie m
-                                LEFT JOIN cine.Rating r ON m.movieId = r.movieId
-                                WHERE m.movieId = :movie_id
-                                GROUP BY m.movieId, m.viewCount
-                            """), {"movie_id": movie_id}).mappings().first()
+                                LEFT JOIN recent_views rv ON m.movieId = rv.movieId
+                                LEFT JOIN recent_ratings rr ON m.movieId = rr.movieId
+                                WHERE (rv.view_count_7d > 0 OR rr.rating_count_7d > 0)
+                                ORDER BY 
+                                    (m.viewCount * 0.5 + ISNULL(rv.view_count_7d, 0) * 0.3 + ISNULL(rr.rating_count_7d, 0) * 0.2) DESC
+                            """)).mappings().all()
                             
-                            trending_movies.append({
-                                "id": row.movieId,
-                                "title": row.title,
-                                "poster": get_poster_or_dummy(row.posterUrl, row.title),
-                                "releaseYear": row.releaseYear,
-                                "country": row.country,
-                                "ratingCount": 0,
-                                "avgRating": round(float(fallback_stats["avgRating"] or 0), 2),
-                                "viewCount": fallback_stats["viewCount"] or 0,
-                                "genres": row.genres or ""
-                            })
-                    
-                    trending_movies = trending_movies[:10]
-                    
-            except Exception as e:
-                print(f"Error getting trending movies: {e}")
-                trending_movies = []
+                            # ✅ TỐI ƯU: Không query genres/ratings ở đây, sẽ combine query sau
+                            trending_movie_ids = [row.movieId for row in trending_rows]
+                            
+                            trending_movies = []
+                            for row in trending_rows:
+                                trending_movies.append({
+                                    "id": row.movieId,
+                                    "title": row.title,
+                                    "poster": get_poster_or_dummy(row.posterUrl, row.title),
+                                    "releaseYear": row.releaseYear,
+                                    "country": row.country,
+                                    "ratingCount": 0,  # Sẽ được update sau khi combine query
+                                    "avgRating": 0,  # Sẽ được update sau khi combine query
+                                    "viewCount": row.viewCount or 0,
+                                    "genres": ""  # Sẽ được update sau khi combine query
+                                })
+                            
+                            # Update cache
+                            trending_cache['data'] = trending_movies
+                            trending_cache['timestamp'] = current_time
+                            
+                            # Nếu không đủ 10 phim, bổ sung bằng phim mới nhất
+                            if len(trending_movies) < 10:
+                                existing_movie_ids = [m["id"] for m in trending_movies]
+                                placeholders = ','.join([f':id{i}' for i in range(len(existing_movie_ids))])
+                                params = {f'id{i}': mid for i, mid in enumerate(existing_movie_ids)}
+                                
+                                # Validate và sanitize fallback_limit để tránh SQL injection
+                                fallback_limit = max(1, 10 - len(trending_movies))  # Đảm bảo >= 1
+                                validated_fallback_limit = validate_limit(fallback_limit, max_limit=100, default=10)
+                                top_clause = safe_top_clause(validated_fallback_limit, max_limit=100)
+                                
+                                # ✅ TỐI ƯU: Query đơn giản không có STRING_AGG
+                                fallback_query = f"""
+                                    SELECT {top_clause}
+                                    m.movieId, m.title, m.posterUrl, m.releaseYear, m.country
+                                    FROM cine.Movie m
+                                    WHERE m.releaseYear IS NOT NULL
+                                """
+                                
+                                if existing_movie_ids:
+                                    fallback_query += f" AND m.movieId NOT IN ({placeholders})"
+                                
+                                fallback_query += """
+                                    ORDER BY m.releaseYear DESC, m.movieId DESC
+                                """
+                                
+                                fallback_rows = conn.execute(text(fallback_query), params).mappings().all()
+                                
+                                # ✅ TỐI ƯU: Không query genres/ratings ở đây, sẽ combine query sau
+                                fallback_movie_ids = [row.movieId for row in fallback_rows]
+                                
+                                # Get viewCount từ Movie table
+                                fallback_view_counts = {}
+                                if fallback_movie_ids:
+                                    placeholders_view = ','.join([f':id{i}' for i in range(len(fallback_movie_ids))])
+                                    params_view = {f'id{i}': mid for i, mid in enumerate(fallback_movie_ids)}
+                                    view_count_rows = conn.execute(text(f"""
+                                        SELECT movieId, viewCount
+                                        FROM cine.Movie
+                                        WHERE movieId IN ({placeholders_view})
+                                    """), params_view).mappings().all()
+                                    fallback_view_counts = {row["movieId"]: row["viewCount"] or 0 for row in view_count_rows}
+                                
+                                for row in fallback_rows:
+                                    movie_id = row.movieId
+                                    trending_movies.append({
+                                        "id": movie_id,
+                                        "title": row.title,
+                                        "poster": get_poster_or_dummy(row.posterUrl, row.title),
+                                        "releaseYear": row.releaseYear,
+                                        "country": row.country,
+                                        "ratingCount": 0,  # Sẽ được update sau khi combine query
+                                        "avgRating": 0,  # Sẽ được update sau khi combine query
+                                        "viewCount": fallback_view_counts.get(movie_id, 0),
+                                        "genres": ""  # Sẽ được update sau khi combine query
+                                    })
+                            
+                            trending_movies = trending_movies[:10]
+                    except Exception as e:
+                        current_app.logger.error(f"Error getting trending movies: {e}", exc_info=True)
+                        trending_movies = []
                 
         except Exception as e:
             print(f"Error getting personal recommendations: {e}")
             personal_recommendations = []
             trending_movies = []
     
-    # Fallback nếu không có gợi ý cá nhân - sử dụng CF model
+    # ✅ TỐI ƯU: Fallback - chỉ dùng latest movies, không gọi CF model (quá chậm)
     if not personal_recommendations:
-        
-        # Thử enhanced CF model trước
-        if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded():
-            personal_recommendations_raw = enhanced_cf_recommender.get_user_recommendations(user_id, limit=50)
-        elif collaborative_recommender and collaborative_recommender.is_model_loaded():
-            personal_recommendations_raw = collaborative_recommender.get_user_recommendations(user_id, limit=50)
-        else:
-            personal_recommendations_raw = []
-        
-        if personal_recommendations_raw:
-            print(f"Debug - Got {len(personal_recommendations_raw)} CF recommendations for user {user_id}")
-            
-            # Debug first few recommendations
-            for i, rec in enumerate(personal_recommendations_raw[:3]):
-                print(f"Debug - CF Recommendation {i+1}:")
-                print(f"  Title: {rec.get('title', 'N/A')}")
-                print(f"  Score: {rec.get('recommendation_score', 0)}")
-                print(f"  Ratings: {rec.get('ratingCount', 0)}")
-                print(f"  Views: {rec.get('viewHistoryCount', 0)}")
-                print(f"  Watchlist: {rec.get('watchlistCount', 0)}")
-                print(f"  Favorites: {rec.get('favoriteCount', 0)}")
-                print(f"  Comments: {rec.get('commentCount', 0)}")
-            
-            # Sắp xếp recommendations theo score, sau đó theo avgRating
-            personal_recommendations_raw.sort(key=lambda x: (x.get("recommendation_score", 0), x.get("avgRating", 0), x.get("ratingCount", 0)), reverse=True)
-            
-            # Lưu recommendations vào bảng PersonalRecommendation
-            with current_app.db_engine.connect() as conn:
-                # Xóa recommendations cũ của user này
-                conn.execute(text("""
-                    DELETE FROM cine.PersonalRecommendation 
-                    WHERE userId = :user_id
-                """), {"user_id": user_id})
-                
-                # Lưu recommendations mới từ CF model
-                for rank, rec in enumerate(personal_recommendations_raw[:10], 1):
-                    conn.execute(text("""
-                        INSERT INTO cine.PersonalRecommendation 
-                        (userId, movieId, score, rank, algo, generatedAt, expiresAt)
-                        VALUES (:user_id, :movie_id, :score, :rank, 'collaborative', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
-                    """), {
-                        "user_id": user_id,
-                        "movie_id": rec["movieId"],
-                        "score": rec.get("recommendation_score", 0),
-                        "rank": rank
-                    })
-                    
-                    conn.commit()
-                print(f"Debug - Saved {len(personal_recommendations_raw[:10])} recommendations to PersonalRecommendation table")
-                
-                personal_recommendations = []
-                for rec in personal_recommendations_raw[:10]:
-                    rec_dict = {
-                        "id": rec["movieId"],
-                        "title": rec["title"],
-                        "poster": rec.get("posterUrl") if rec.get("posterUrl") and rec.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={rec['title'][:20].replace(' ', '+')}",
-                        "year": rec.get("releaseYear"),
-                        "country": rec.get("country"),
-                        "score": rec.get("recommendation_score", 0),
-                        "genres": rec.get("genres", ""),
-                        "avgRating": rec.get("avgRating", 0),
-                        "ratingCount": rec.get("ratingCount", 0),
-                        "watchlistCount": rec.get("watchlistCount", 0),
-                        "viewHistoryCount": rec.get("viewHistoryCount", 0),
-                        "favoriteCount": rec.get("favoriteCount", 0),
-                        "commentCount": rec.get("commentCount", 0),
-                        "algo": "enhanced_cf" if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded() else "collaborative_cf",
-                        "reason": rec.get("reason", "Model prediction")
-                    }
-                    
-                    # Debug logging for first few recommendations
-                    if len(personal_recommendations) < 3:
-                        print(f"Debug - Fallback recommendation {len(personal_recommendations)+1}:")
-                        print(f"  Title: {rec_dict['title']}")
-                        print(f"  Score: {rec_dict['score']}")
-                        print(f"  Ratings: {rec_dict['ratingCount']}")
-                        print(f"  Views: {rec_dict['viewHistoryCount']}")
-                        print(f"  Watchlist: {rec_dict['watchlistCount']}")
-                        print(f"  Favorites: {rec_dict['favoriteCount']}")
-                        print(f"  Comments: {rec_dict['commentCount']}")
-                    
-                    personal_recommendations.append(rec_dict)
-                print(f"Debug - Created {len(personal_recommendations)} recommendations from CF model fallback")
-        else:
-            print(f"Debug - No recommendations from CF model fallback, using latest movies")
             personal_recommendations = latest_movies[:10]
     if not trending_movies:
         trending_movies = latest_movies
@@ -1317,7 +1396,7 @@ def home():
                 print(f"Debug - Pagination: total_movies={total_movies}, per_page={per_page}, total_pages={total_pages}, page={page}, offset={offset}")
                 
                 # Lấy phim theo thể loại với phân trang
-                # Lấy phim theo thể loại với phân trang kèm avgRating, ratingCount, genres
+                # ✅ TỐI ƯU: Query movies trước, batch query genres sau
                 print(f"Debug - Getting movies for genre '{genre_filter}', page {page}, offset {offset}, per_page {per_page}")
                 all_rows = conn.execute(text("""
                     WITH filtered AS (
@@ -1329,25 +1408,15 @@ def home():
                         WHERE g.name = :genre
                     )
                     SELECT 
-                        m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.viewCount,
-                        AVG(CAST(r.value AS FLOAT)) AS avgRating,
-                        COUNT(r.movieId) AS ratingCount,
-                        STUFF((
-                            SELECT ', ' + g2.name
-                            FROM cine.MovieGenre mg2
-                            JOIN cine.Genre g2 ON mg2.genreId = g2.genreId
-                            WHERE mg2.movieId = m.movieId
-                            GROUP BY g2.name
-                            ORDER BY g2.name
-                            FOR XML PATH('')
-                        ),1,2,'') AS genres
+                        m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.viewCount
                     FROM filtered f
                     JOIN cine.Movie m ON m.movieId = f.movieId
-                    LEFT JOIN cine.Rating r ON m.movieId = r.movieId
                     WHERE f.rn > :offset AND f.rn <= :offset + :per_page
-                    GROUP BY m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.viewCount
                     ORDER BY m.movieId DESC
                 """), {"genre": genre_filter, "offset": offset, "per_page": per_page}).mappings().all()
+                
+                # ✅ TỐI ƯU: Không query genres/ratings ở đây, sẽ combine query sau
+                all_movie_ids = [r["movieId"] for r in all_rows]
                 print(f"Debug - Found {len(all_rows)} movies for genre '{genre_filter}' on page {page}")
                 
                 # Tạo pagination info cho genre
@@ -1372,8 +1441,7 @@ def home():
                 total_pages = (total_movies + per_page - 1) // per_page
                 offset = (page - 1) * per_page
                 
-                # Lấy tất cả phim với phân trang
-                # Lấy tất cả phim với phân trang kèm avgRating, ratingCount, genres
+                # ✅ TỐI ƯU: Query movies trước, batch query genres sau
                 all_rows = conn.execute(text("""
                     WITH paged AS (
                         SELECT m.movieId,
@@ -1381,26 +1449,17 @@ def home():
                         FROM cine.Movie m
                     )
                     SELECT 
-                        m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.viewCount,
-                        AVG(CAST(r.value AS FLOAT)) AS avgRating,
-                        COUNT(r.movieId) AS ratingCount,
-                        STUFF((
-                            SELECT ', ' + g.name
-                            FROM cine.MovieGenre mg
-                            JOIN cine.Genre g ON mg.genreId = g.genreId
-                            WHERE mg.movieId = m.movieId
-                            GROUP BY g.name
-                            ORDER BY g.name
-                            FOR XML PATH('')
-                        ),1,2,'') AS genres
+                        m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.viewCount
                     FROM paged p
                     JOIN cine.Movie m ON m.movieId = p.movieId
-                    LEFT JOIN cine.Rating r ON m.movieId = r.movieId
                     WHERE p.rn > :offset AND p.rn <= :offset + :per_page
-                    GROUP BY m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.viewCount
                     ORDER BY m.movieId DESC
                 """), {"offset": offset, "per_page": per_page}).mappings().all()
             
+                # ✅ TỐI ƯU: Không query genres/ratings ở đây, sẽ combine query sau
+                all_movie_ids = [r["movieId"] for r in all_rows]
+            
+            # ✅ TỐI ƯU: Tạo all_movies structure, genres/ratings sẽ được update sau
             all_movies = [
                 {
                     "id": r["movieId"],
@@ -1410,20 +1469,12 @@ def home():
                     "description": (r.get("overview") or "")[:160],
                     "year": r.get("releaseYear"),
                     "viewCount": r.get("viewCount", 0) or 0,
-                    "avgRating": 0,
-                    "ratingCount": 0,
-                    "genres": r.get("genres") or ""
+                    "avgRating": 0,  # Sẽ được update sau khi combine query
+                    "ratingCount": 0,  # Sẽ được update sau khi combine query
+                    "genres": ""  # Sẽ được update sau khi combine query
                 }
                 for r in all_rows
             ]
-            try:
-                stats = fetch_rating_stats_for_movies([m["id"] for m in all_movies])
-                for m in all_movies:
-                    s = stats.get(m["id"]) or {}
-                    m["avgRating"] = s.get("avgRating", 0)
-                    m["ratingCount"] = s.get("ratingCount", 0)
-            except Exception:
-                pass
             print(f"Debug - all_movies length: {len(all_movies)}")
             if all_movies:
                 print(f"Debug - First movie: {all_movies[0]['title']} (ID: {all_movies[0]['id']})")
@@ -1522,54 +1573,142 @@ def home():
         ]
     
     print(f"Debug - Final pagination: {pagination}")
-    # Lấy lịch sử xem cho trang chủ (chỉ 10 phim gần nhất)
-    view_history = []
+    # Lấy lịch sử xem gần đây cho trang chủ (10 phim unique, với thông tin số lần xem)
+    recent_watched = []
     if user_id:
         try:
             with current_app.db_engine.connect() as conn:
+                # ✅ Query để lấy phim xem gần đây với thông tin:
+                # - Số lần xem (watch_count)
+                # - Trạng thái hoàn thành (isCompleted - dựa trên lần xem gần nhất)
+                # - Lần xem gần nhất (lastWatchedAt)
                 history_rows = conn.execute(text("""
-                    SELECT TOP 10 
-                        vh.historyId, vh.movieId, vh.startedAt, vh.finishedAt, vh.progressSec,
-                        m.title, m.posterUrl, m.releaseYear,
-                        STUFF((
-                            SELECT ', ' + g2.name
-                            FROM cine.MovieGenre mg2
-                            JOIN cine.Genre g2 ON mg2.genreId = g2.genreId
-                            WHERE mg2.movieId = m.movieId
-                            GROUP BY g2.name
-                            ORDER BY g2.name
-                            FOR XML PATH('')
-                        ),1,2,'') AS genres,
-                        CASE WHEN vh.finishedAt IS NOT NULL THEN 1 ELSE 0 END AS isCompleted
+                    SELECT TOP 10
+                        m.movieId,
+                        m.title,
+                        m.posterUrl,
+                        m.releaseYear,
+                        m.durationMin,
+                        MAX(vh.startedAt) AS lastWatchedAt,
+                        MAX(vh.finishedAt) AS lastFinishedAt,
+                        COUNT(vh.historyId) AS watch_count,
+                        CASE WHEN MAX(vh.finishedAt) IS NOT NULL THEN 1 ELSE 0 END AS isCompleted,
+                        MAX(vh.progressSec) AS lastProgressSec
                     FROM cine.ViewHistory vh
                     JOIN cine.Movie m ON vh.movieId = m.movieId
                     WHERE vh.userId = :user_id
-                    ORDER BY vh.startedAt DESC
+                    GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, m.durationMin
+                    ORDER BY MAX(vh.startedAt) DESC
                 """), {"user_id": user_id}).mappings().all()
                 
-                print(f"Debug - Found {len(history_rows)} history records for user {user_id}")
-                for row in history_rows:
-                    print(f"Debug - History item: {row['title']}, completed: {bool(row['isCompleted'])}, finishedAt: {row['finishedAt']}")
+                # Lưu movie_ids để combine query sau
+                history_movie_ids = [row["movieId"] for row in history_rows]
                 
-                view_history = []
+                recent_watched = []
                 for row in history_rows:
-                    view_history.append({
-                        "historyId": row["historyId"],
+                    # Tính phần trăm hoàn thành dựa trên progress và duration
+                    progress_percent = 0
+                    if row["durationMin"] and row["durationMin"] > 0 and row["lastProgressSec"]:
+                        progress_percent = min(100, (row["lastProgressSec"] / 60.0 / row["durationMin"]) * 100)
+                    
+                    recent_watched.append({
                         "movieId": row["movieId"],
+                        "id": row["movieId"],
                         "title": row["title"],
-                        "posterUrl": row["posterUrl"],
+                        "posterUrl": row["posterUrl"] if row["posterUrl"] and row["posterUrl"] != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={row['title'][:20].replace(' ', '+')}",
+                        "poster": row["posterUrl"] if row["posterUrl"] and row["posterUrl"] != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={row['title'][:20].replace(' ', '+')}",
                         "releaseYear": row["releaseYear"],
-                        "genres": row["genres"],
-                        "startedAt": row["startedAt"],
-                        "finishedAt": row["finishedAt"],
-                        "progressSec": row["progressSec"],
-                        "isCompleted": bool(row["isCompleted"])
+                        "genres": "",  # Sẽ được update sau khi combine query
+                        "lastWatchedAt": row["lastWatchedAt"],
+                        "lastFinishedAt": row["lastFinishedAt"],
+                        "watchCount": int(row["watch_count"]),
+                        "isCompleted": bool(row["isCompleted"]),
+                        "progressPercent": round(progress_percent, 1)
                     })
-                
-                print(f"Debug - Processed {len(view_history)} history items")
         except Exception as e:
-            print(f"Error loading view history: {e}")
-            view_history = []
+            current_app.logger.error(f"Error loading recent watched: {e}")
+            recent_watched = []
+            history_movie_ids = []
+    
+    # ✅ TỐI ƯU: Combine tất cả movie_ids và query genres/ratings một lần
+    all_movie_ids_combined = set()
+    
+    # Thu thập movie_ids từ tất cả sections
+    if latest_movies:
+        all_movie_ids_combined.update([m.get("id") for m in latest_movies if m.get("id")])
+    if carousel_movies:
+        all_movie_ids_combined.update([m.get("id") for m in carousel_movies if m.get("id")])
+    if personal_recommendations:
+        all_movie_ids_combined.update([m.get("id") for m in personal_recommendations if m.get("id")])
+    if trending_movies:
+        all_movie_ids_combined.update([m.get("id") for m in trending_movies if m.get("id")])
+    if recent_watched:
+        all_movie_ids_combined.update([m.get("id") for m in recent_watched if m.get("id")])
+    if all_movies:
+        all_movie_ids_combined.update([m.get("id") for m in all_movies if m.get("id")])
+    
+    # Query genres và ratings một lần cho tất cả movies
+    if all_movie_ids_combined:
+        combined_movie_ids = list(all_movie_ids_combined)
+        combined_genres_dict = get_movies_genres(combined_movie_ids, current_app.db_engine)
+        combined_rating_stats = get_movie_rating_stats(combined_movie_ids, current_app.db_engine)
+        
+        # Update genres và ratings cho tất cả sections
+        # Latest movies
+        for movie in latest_movies:
+            movie_id = movie.get("id")
+            if movie_id:
+                movie["genres"] = combined_genres_dict.get(movie_id, movie.get("genres", ""))
+                if movie_id in combined_rating_stats:
+                    stats = combined_rating_stats[movie_id]
+                    movie["avgRating"] = stats.get("avgRating", movie.get("avgRating", 0))
+                    movie["ratingCount"] = stats.get("ratingCount", movie.get("ratingCount", 0))
+        
+        # Carousel movies
+        for movie in carousel_movies:
+            movie_id = movie.get("id")
+            if movie_id:
+                movie["genres"] = combined_genres_dict.get(movie_id, movie.get("genres", ""))
+                if movie_id in combined_rating_stats:
+                    stats = combined_rating_stats[movie_id]
+                    movie["avgRating"] = stats.get("avgRating", movie.get("avgRating", 0))
+                    movie["ratingCount"] = stats.get("ratingCount", movie.get("ratingCount", 0))
+        
+        # Personal recommendations
+        for movie in personal_recommendations:
+            movie_id = movie.get("id")
+            if movie_id:
+                movie["genres"] = combined_genres_dict.get(movie_id, movie.get("genres", ""))
+                if movie_id in combined_rating_stats:
+                    stats = combined_rating_stats[movie_id]
+                    movie["avgRating"] = stats.get("avgRating", movie.get("avgRating", 0))
+                    movie["ratingCount"] = stats.get("ratingCount", movie.get("ratingCount", 0))
+        
+        # Trending movies
+        for movie in trending_movies:
+            movie_id = movie.get("id")
+            if movie_id:
+                movie["genres"] = combined_genres_dict.get(movie_id, movie.get("genres", ""))
+                if movie_id in combined_rating_stats:
+                    stats = combined_rating_stats[movie_id]
+                    movie["avgRating"] = stats.get("avgRating", movie.get("avgRating", 0))
+                    movie["ratingCount"] = stats.get("ratingCount", movie.get("ratingCount", 0))
+        
+        # Recent watched
+        for movie in recent_watched:
+            movie_id = movie.get("id")
+            if movie_id:
+                movie["genres"] = combined_genres_dict.get(movie_id, "")
+        
+        # All movies
+        for movie in all_movies:
+            movie_id = movie.get("id")
+            if movie_id:
+                movie["genres"] = combined_genres_dict.get(movie_id, movie.get("genres", ""))
+                if movie_id in combined_rating_stats:
+                    stats = combined_rating_stats[movie_id]
+                    movie["avgRating"] = stats.get("avgRating", movie.get("avgRating", 0))
+                    movie["ratingCount"] = stats.get("ratingCount", movie.get("ratingCount", 0))
     
     return render_template("home.html", 
                          latest_movies=latest_movies,  # Phim mới nhất (10 phim, không phân trang)
@@ -1577,7 +1716,7 @@ def home():
                          recommended=personal_recommendations,  # Phim đề xuất cá nhân (Collaborative Filtering)
                          trending_movies=trending_movies,  # Phim trending (được đánh giá nhiều nhất)
                          all_movies=all_movies,  # Tất cả phim (có phân trang)
-                         view_history=view_history,  # Lịch sử xem (10 phim gần nhất)
+                         recent_watched=recent_watched,  # Phim xem gần đây (10 phim unique với số lần xem)
                          pagination=pagination,
                          genre_filter=genre_filter,
                          search_query=search_query,
@@ -1876,44 +2015,53 @@ def watch(movie_id: int):
     # Kiểm tra xem có phải trailer không
     is_trailer = request.args.get('type') == 'trailer'
     
+    # Lấy thông tin phim chính (read-only, không cần transaction)
     with current_app.db_engine.connect() as conn:
-        # Lấy thông tin phim chính
         r = conn.execute(text(
             "SELECT movieId, title, posterUrl, backdropUrl, releaseYear, overview, trailerUrl, viewCount FROM cine.Movie WHERE movieId=:id"
         ), {"id": movie_id}).mappings().first()
         
-        # Tăng view count và lưu lịch sử xem
-        if not is_trailer:
+    # Tăng view count và lưu lịch sử xem (cần transaction)
+    if not is_trailer:
+        # Sử dụng begin() để tự động quản lý transaction
+        with current_app.db_engine.begin() as conn:
             # Luôn tăng view count mỗi lần load trang (kể cả refresh)
-                conn.execute(text(
-                    "UPDATE cine.Movie SET viewCount = viewCount + 1 WHERE movieId = :id"
-                ), {"id": movie_id})
-                
-                # Lưu lịch sử xem vào database nếu user đã đăng nhập
-                user_id = session.get("user_id")
-                if user_id:
-                    try:
-                        # Lưu vào ViewHistory
-                        conn.execute(text("""
-                            INSERT INTO cine.ViewHistory (userId, movieId, startedAt, deviceType, ipAddress, userAgent)
-                            VALUES (:user_id, :movie_id, GETDATE(), :device_type, :ip_address, :user_agent)
-                        """), {
-                            "user_id": user_id,
-                            "movie_id": movie_id,
-                            "device_type": request.headers.get('User-Agent', 'Unknown')[:50],
-                            "ip_address": request.remote_addr,
-                            "user_agent": request.headers.get('User-Agent', '')[:500]
-                        })
-                        
-                        # Cập nhật lastLoginAt trong User table
-                        conn.execute(text("""
-                            UPDATE cine.[User] SET lastLoginAt = GETDATE() WHERE userId = :user_id
-                        """), {"user_id": user_id})
-                        
-                    except Exception as e:
-                        print(f"Error saving view history: {e}")
-                
-                conn.commit()
+            conn.execute(text(
+                "UPDATE cine.Movie SET viewCount = viewCount + 1 WHERE movieId = :id"
+            ), {"id": movie_id})
+            
+            # Lưu lịch sử xem vào database nếu user đã đăng nhập
+            user_id = session.get("user_id")
+            if user_id:
+                try:
+                    # Lưu vào ViewHistory
+                    # Lấy max historyId để tạo ID mới
+                    max_history_id_result = conn.execute(text("""
+                        SELECT ISNULL(MAX(historyId), 0) FROM cine.ViewHistory
+                    """)).fetchone()
+                    max_history_id = max_history_id_result[0] if max_history_id_result else 0
+                    new_history_id = max_history_id + 1
+                    
+                    conn.execute(text("""
+                        INSERT INTO cine.ViewHistory (historyId, userId, movieId, startedAt, deviceType, ipAddress, userAgent)
+                        VALUES (:history_id, :user_id, :movie_id, GETDATE(), :device_type, :ip_address, :user_agent)
+                    """), {
+                        "history_id": new_history_id,
+                        "user_id": user_id,
+                        "movie_id": movie_id,
+                        "device_type": request.headers.get('User-Agent', 'Unknown')[:50],
+                        "ip_address": request.remote_addr,
+                        "user_agent": request.headers.get('User-Agent', '')[:500]
+                    })
+                    
+                    # Cập nhật lastLoginAt trong User table
+                    conn.execute(text("""
+                        UPDATE cine.[User] SET lastLoginAt = GETDATE() WHERE userId = :user_id
+                    """), {"user_id": user_id})
+                    
+                except Exception as e:
+                    print(f"Error saving view history: {e}")
+            # begin() tự động commit khi exit context thành công
         
     if not r:
         return redirect(url_for("main.home"))
@@ -2063,12 +2211,12 @@ def reset_view_count(movie_id):
         flash("Bạn không có quyền thực hiện hành động này!", "error")
         return redirect(url_for("main.home"))
     
-    # Reset view count
-    with current_app.db_engine.connect() as conn:
+    # Reset view count - sử dụng begin() để tự động quản lý transaction
+    with current_app.db_engine.begin() as conn:
         conn.execute(text(
             "UPDATE cine.Movie SET viewCount = 0 WHERE movieId = :id"
         ), {"id": movie_id})
-        conn.commit()
+        # begin() tự động commit khi exit context thành công
     
     flash(f"Đã reset view count cho phim ID {movie_id}", "success")
     return redirect(url_for("main.admin_movies"))
@@ -2858,20 +3006,33 @@ def add_watchlist(movie_id):
             """), {"user_id": user_id, "movie_id": movie_id}).scalar()
             
             if not existing:
+                # Lấy watchlistId tiếp theo (vì watchlistId không phải IDENTITY)
+                result = conn.execute(text("""
+                    SELECT ISNULL(MAX(watchlistId), 0) FROM [cine].[Watchlist]
+                """)).fetchone()
+                next_watchlist_id = (result[0] if result else 0) + 1
+                
                 conn.execute(text("""
-                    INSERT INTO [cine].[Watchlist] (userId, movieId, addedAt, priority, isWatched)
-                    VALUES (:user_id, :movie_id, GETDATE(), 1, 0)
+                    INSERT INTO [cine].[Watchlist] (watchlistId, userId, movieId, addedAt, priority, isWatched)
+                    VALUES (:watchlist_id, :user_id, :movie_id, GETDATE(), 1, 0)
                 """), {
+                    "watchlist_id": next_watchlist_id,
                     "user_id": user_id, 
                     "movie_id": movie_id
                 })
+                
+                # Mark CF model as dirty
+                try:
+                    set_cf_dirty(current_app.db_engine)
+                except Exception:
+                    pass
                 
                 return jsonify({"success": True, "message": "Đã thêm vào danh sách xem sau"})
             else:
                 return jsonify({"success": False, "message": "Phim đã có trong danh sách xem sau"})
                 
     except Exception as e:
-        print(f"Error adding to watchlist: {e}")
+        current_app.logger.error(f"Error adding to watchlist for user {user_id}, movie {movie_id}: {e}", exc_info=True)
         return jsonify({"success": False, "message": "Có lỗi xảy ra"})
 
 
@@ -2893,7 +3054,7 @@ def remove_watchlist(movie_id):
             return jsonify({"success": True, "message": "Đã xóa khỏi danh sách xem sau"})
             
     except Exception as e:
-        print(f"Error removing from watchlist: {e}")
+        current_app.logger.error(f"Error removing from watchlist for user {user_id}, movie {movie_id}: {e}", exc_info=True)
         return jsonify({"success": False, "message": "Có lỗi xảy ra"})
 
 
@@ -2937,7 +3098,7 @@ def check_watchlist(movie_id):
             return jsonify({"success": True, "is_watchlist": is_watchlist})
             
     except Exception as e:
-        print(f"Error checking watchlist status: {e}")
+        current_app.logger.error(f"Error checking watchlist status for user {user_id}, movie {movie_id}: {e}", exc_info=True)
         return jsonify({"success": False, "is_watchlist": False})
 
 
@@ -2985,36 +3146,47 @@ def toggle_watchlist(movie_id):
                     WHERE userId = :user_id AND movieId = :movie_id
                 """), {"user_id": user_id, "movie_id": movie_id})
                 
+                # Mark CF model as dirty
+                try:
+                    set_cf_dirty(current_app.db_engine)
+                except Exception:
+                    pass
+                
                 return jsonify({
                     "success": True, 
                     "is_watchlist": False,
                     "message": "Đã xóa khỏi danh sách xem sau"
                 })
             else:
+                # Lấy watchlistId tiếp theo (vì watchlistId không phải IDENTITY)
+                result = conn.execute(text("""
+                    SELECT ISNULL(MAX(watchlistId), 0) FROM [cine].[Watchlist]
+                """)).fetchone()
+                next_watchlist_id = (result[0] if result else 0) + 1
+                
                 conn.execute(text("""
-                    INSERT INTO [cine].[Watchlist] (userId, movieId, addedAt, priority, isWatched)
-                    VALUES (:user_id, :movie_id, GETDATE(), 1, 0)
+                    INSERT INTO [cine].[Watchlist] (watchlistId, userId, movieId, addedAt, priority, isWatched)
+                    VALUES (:watchlist_id, :user_id, :movie_id, GETDATE(), 1, 0)
                 """), {
+                    "watchlist_id": next_watchlist_id,
                     "user_id": user_id, 
                     "movie_id": movie_id
                 })
+                
+                # Mark CF model as dirty
+                try:
+                    set_cf_dirty(current_app.db_engine)
+                except Exception:
+                    pass
                 
                 return jsonify({
                     "success": True, 
                     "is_watchlist": True,
                     "message": "Đã thêm vào danh sách xem sau"
                 })
-            
-            # Mark CF model as dirty
-            try:
-                set_cf_dirty(current_app.db_engine)
-            except Exception:
-                pass
                 
     except Exception as e:
-        print(f"Error toggling watchlist: {e}")
-        import traceback
-        traceback.print_exc()
+        current_app.logger.error(f"Error toggling watchlist for user {user_id}, movie {movie_id}: {e}", exc_info=True)
         return jsonify({"success": False, "message": f"Có lỗi xảy ra: {str(e)}"})
 
 
@@ -3035,26 +3207,33 @@ def add_favorite(movie_id):
             """), {"user_id": user_id, "movie_id": movie_id}).scalar()
             
             if not existing:
+                # Lấy favoriteId tiếp theo (vì favoriteId không phải IDENTITY)
+                result = conn.execute(text("""
+                    SELECT ISNULL(MAX(favoriteId), 0) FROM [cine].[Favorite]
+                """)).fetchone()
+                next_favorite_id = (result[0] if result else 0) + 1
+                
                 conn.execute(text("""
-                    INSERT INTO [cine].[Favorite] (userId, movieId, addedAt)
-                    VALUES (:user_id, :movie_id, GETDATE())
+                    INSERT INTO [cine].[Favorite] (favoriteId, userId, movieId, addedAt)
+                    VALUES (:favorite_id, :user_id, :movie_id, GETDATE())
                 """), {
+                    "favorite_id": next_favorite_id,
                     "user_id": user_id, 
                     "movie_id": movie_id
                 })
                 
+                # Mark CF model as dirty
+                try:
+                    set_cf_dirty(current_app.db_engine)
+                except Exception:
+                    pass
+                
                 return jsonify({"success": True, "message": "Đã thêm vào danh sách yêu thích"})
             else:
                 return jsonify({"success": False, "message": "Phim đã có trong danh sách yêu thích"})
-            
-            # Mark CF model as dirty
-            try:
-                set_cf_dirty(current_app.db_engine)
-            except Exception:
-                pass
                 
     except Exception as e:
-        print(f"Error adding to favorites: {e}")
+        current_app.logger.error(f"Error adding to favorites for user {user_id}, movie {movie_id}: {e}", exc_info=True)
         return jsonify({"success": False, "message": "Có lỗi xảy ra"})
 
 
@@ -3076,7 +3255,7 @@ def remove_favorite(movie_id):
             return jsonify({"success": True, "message": "Đã xóa khỏi danh sách yêu thích"})
             
     except Exception as e:
-        print(f"Error removing from favorites: {e}")
+        current_app.logger.error(f"Error removing from favorites for user {user_id}, movie {movie_id}: {e}", exc_info=True)
         return jsonify({"success": False, "message": "Có lỗi xảy ra"})
 
 
@@ -3176,7 +3355,8 @@ def api_search_watchlist():
             })
             
     except Exception as e:
-        print(f"Error searching watchlist: {e}")
+        user_id = session.get("user_id")
+        current_app.logger.error(f"Error searching watchlist for user {user_id}: {e}", exc_info=True)
         return jsonify({"success": False, "message": "Có lỗi xảy ra"})
 
 
@@ -3199,7 +3379,8 @@ def check_favorite(movie_id):
             return jsonify({"success": True, "is_favorite": is_favorite})
             
     except Exception as e:
-        print(f"Error checking favorite status: {e}")
+        user_id = session.get("user_id")
+        current_app.logger.error(f"Error checking favorite status for user {user_id}, movie {movie_id}: {e}", exc_info=True)
         return jsonify({"success": False, "is_favorite": False})
 
 
@@ -3226,36 +3407,47 @@ def toggle_favorite(movie_id):
                     WHERE userId = :user_id AND movieId = :movie_id
                 """), {"user_id": user_id, "movie_id": movie_id})
                 
+                # Mark CF model as dirty
+                try:
+                    set_cf_dirty(current_app.db_engine)
+                except Exception:
+                    pass
+                
                 return jsonify({
                     "success": True, 
                     "is_favorite": False,
                     "message": "Đã xóa khỏi danh sách yêu thích"
                 })
             else:
+                # Lấy favoriteId tiếp theo (vì favoriteId không phải IDENTITY)
+                result = conn.execute(text("""
+                    SELECT ISNULL(MAX(favoriteId), 0) FROM [cine].[Favorite]
+                """)).fetchone()
+                next_favorite_id = (result[0] if result else 0) + 1
+                
                 conn.execute(text("""
-                    INSERT INTO [cine].[Favorite] (userId, movieId, addedAt)
-                    VALUES (:user_id, :movie_id, GETDATE())
+                    INSERT INTO [cine].[Favorite] (favoriteId, userId, movieId, addedAt)
+                    VALUES (:favorite_id, :user_id, :movie_id, GETDATE())
                 """), {
+                    "favorite_id": next_favorite_id,
                     "user_id": user_id, 
                     "movie_id": movie_id
                 })
+                
+                # Mark CF model as dirty
+                try:
+                    set_cf_dirty(current_app.db_engine)
+                except Exception:
+                    pass
                 
                 return jsonify({
                     "success": True, 
                     "is_favorite": True,
                     "message": "Đã thêm vào danh sách yêu thích"
                 })
-            
-            # Mark CF model as dirty
-            try:
-                set_cf_dirty(current_app.db_engine)
-            except Exception:
-                pass
                 
     except Exception as e:
-        print(f"Error toggling favorite: {e}")
-        import traceback
-        traceback.print_exc()
+        current_app.logger.error(f"Error toggling favorite for user {user_id}, movie {movie_id}: {e}", exc_info=True)
         return jsonify({"success": False, "message": f"Có lỗi xảy ra: {str(e)}"})
 
 
@@ -3353,7 +3545,8 @@ def api_search_favorites():
             })
             
     except Exception as e:
-        print(f"Error searching favorites: {e}")
+        user_id = session.get("user_id")
+        current_app.logger.error(f"Error searching favorites for user {user_id}: {e}", exc_info=True)
         return jsonify({"success": False, "message": "Có lỗi xảy ra"})
 
 
@@ -4198,10 +4391,15 @@ def search_suggestions():
                 "suggestions": []
             })
         
+        # Validate và sanitize limit để tránh SQL injection
+        validated_limit = validate_limit(limit, max_limit=50, default=10)
+        top_clause = safe_top_clause(validated_limit, max_limit=50)
+        
         with current_app.db_engine.connect() as conn:
             # Tìm kiếm phim theo title (case-insensitive)
+            # Sử dụng validated limit thay vì f-string trực tiếp
             suggestions = conn.execute(text(f"""
-                SELECT TOP {limit} movieId, title, releaseYear, posterUrl
+                SELECT {top_clause} movieId, title, releaseYear, posterUrl
                 FROM cine.Movie 
                 WHERE title LIKE :query
                 ORDER BY 
@@ -4599,16 +4797,11 @@ def delete_comment(comment_id):
 @main_bp.route("/api/retrain_model", methods=["POST"])
 @admin_required
 def retrain_model():
-    """Retrain collaborative filtering model"""
+    """Retrain collaborative filtering model - redirect to retrain_cf_model"""
     try:
-        # Simple retrain logic without external module
-        current_app.logger.info("Starting simple model retrain...")
-        
-        # For now, just return success - implement actual retrain logic later
-        return jsonify({
-            "success": True,
-            "message": "Model retrain completed (placeholder)"
-        })
+        # Gọi retrain_cf_model để thực hiện retrain thực sự
+        current_app.logger.info("Retrain model requested, redirecting to retrain_cf_model...")
+        return retrain_cf_model()
         
     except Exception as e:
         current_app.logger.error(f"Error in retrain_model: {e}")
@@ -4689,32 +4882,21 @@ def train_cf_model():
 def model_status_public():
     """Get model status for public access"""
     try:
-        global collaborative_recommender, enhanced_cf_recommender
+        global enhanced_cf_recommender
         
         # Debug logging
-        current_app.logger.info(f"collaborative_recommender: {collaborative_recommender}")
         current_app.logger.info(f"enhanced_cf_recommender: {enhanced_cf_recommender}")
         
         # Initialize if not already done
-        if collaborative_recommender is None or enhanced_cf_recommender is None:
+        if enhanced_cf_recommender is None:
             current_app.logger.info("Recommenders not initialized, initializing now...")
             init_recommenders()
         
-        # Try Enhanced CF model first
+        # Chỉ sử dụng Enhanced CF model
         if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded():
             model_info = enhanced_cf_recommender.get_model_info()
             model_info['model_type'] = 'Enhanced CF'
             current_app.logger.info(f"Enhanced CF model info: {model_info}")
-            return jsonify({
-                "success": True,
-                "modelInfo": model_info
-            })
-        
-        # Try Collaborative CF model
-        if collaborative_recommender and collaborative_recommender.is_model_loaded():
-            model_info = collaborative_recommender.get_model_info()
-            model_info['model_type'] = 'CF'
-            current_app.logger.info(f"Collaborative CF model info: {model_info}")
             return jsonify({
                 "success": True,
                 "modelInfo": model_info
@@ -4740,30 +4922,15 @@ def model_status_public():
 @admin_required
 @login_required
 def switch_model(model_type):
-    """Switch between CF and Enhanced CF models"""
+    """Switch model - chỉ hỗ trợ Enhanced CF model"""
     try:
-        global collaborative_recommender, enhanced_cf_recommender
+        global enhanced_cf_recommender
         
-        if model_type == "cf":
-            if collaborative_recommender and collaborative_recommender.is_model_loaded():
-                # Set priority to use CF model
-                return jsonify({
-                    "success": True,
-                    "message": "Đã chuyển sang CF model",
-                    "model_type": "CF"
-                })
-            else:
-                return jsonify({
-                    "success": False,
-                    "message": "CF model chưa được load"
-                })
-                
-        elif model_type == "enhanced":
+        if model_type == "enhanced" or model_type == "cf":
             if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded():
-                # Set priority to use Enhanced CF model
                 return jsonify({
                     "success": True,
-                    "message": "Đã chuyển sang Enhanced CF model",
+                    "message": "Đang sử dụng Enhanced CF model",
                     "model_type": "Enhanced CF"
                 })
             else:
@@ -4774,7 +4941,7 @@ def switch_model(model_type):
         else:
             return jsonify({
                 "success": False,
-                "message": "Model type không hợp lệ. Chọn 'cf' hoặc 'enhanced'"
+                "message": "Chỉ hỗ trợ Enhanced CF model"
             })
             
     except Exception as e:
@@ -4784,15 +4951,307 @@ def switch_model(model_type):
             "message": f"Lỗi khi chuyển model: {str(e)}"
         })
 
+@main_bp.route("/api/reload_cf_model", methods=["POST"])
+@admin_required
+@login_required
+def reload_cf_model():
+    """Reload CF model from disk (useful when model file is updated)"""
+    try:
+        global enhanced_cf_recommender
+        
+        if enhanced_cf_recommender:
+            success = enhanced_cf_recommender.reload_model()
+            if success:
+                return jsonify({
+                    "success": True,
+                    "message": "Model CF đã được reload thành công",
+                    "model_info": enhanced_cf_recommender.get_model_info()
+                })
+            else:
+                return jsonify({
+                    "success": False,
+                    "message": "Không thể reload model. Kiểm tra file model có tồn tại không."
+                })
+        else:
+            # Nếu chưa có, khởi tạo lại
+            init_recommenders()
+            if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded():
+                return jsonify({
+                    "success": True,
+                    "message": "Model CF đã được load thành công",
+                    "model_info": enhanced_cf_recommender.get_model_info()
+                })
+            else:
+                return jsonify({
+                    "success": False,
+                    "message": "Không thể load model"
+                })
+    except Exception as e:
+        current_app.logger.error(f"Error reloading model: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Lỗi khi reload model: {str(e)}"
+        })
+
+@main_bp.route("/api/hybrid_status", methods=["GET"])
+@login_required
+def hybrid_status():
+    """Kiểm tra trạng thái hybrid recommendations cho user hiện tại - CHI TIẾT"""
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"success": False, "message": "Chưa đăng nhập"})
+        
+        with current_app.db_engine.connect() as conn:
+            # Kiểm tra recommendations trong database với chi tiết scores
+            recs_result = conn.execute(text("""
+                SELECT 
+                    COUNT(*) as total_count,
+                    COUNT(CASE WHEN algo = 'hybrid' THEN 1 END) as hybrid_count,
+                    COUNT(CASE WHEN algo = 'enhanced_cf' THEN 1 END) as cf_count,
+                    COUNT(CASE WHEN algo = 'collaborative' THEN 1 END) as collaborative_count,
+                    COUNT(CASE WHEN algo = 'cold_start' THEN 1 END) as cold_start_count,
+                    MAX(generatedAt) as last_generated,
+                    MAX(expiresAt) as last_expires,
+                    AVG(CAST(score AS FLOAT)) as avg_score,
+                    MIN(CAST(score AS FLOAT)) as min_score,
+                    MAX(CAST(score AS FLOAT)) as max_score
+                FROM cine.PersonalRecommendation
+                WHERE userId = :user_id AND expiresAt > GETUTCDATE()
+            """), {"user_id": user_id}).mappings().first()
+            
+            # Lấy top 5 hybrid recommendations để phân tích chi tiết
+            hybrid_details = conn.execute(text("""
+                SELECT TOP 5
+                    m.movieId, m.title, pr.score, pr.rank, pr.algo
+                FROM cine.PersonalRecommendation pr
+                JOIN cine.Movie m ON m.movieId = pr.movieId
+                WHERE pr.userId = :user_id AND pr.expiresAt > GETUTCDATE() AND pr.algo = 'hybrid'
+                ORDER BY pr.rank
+            """), {"user_id": user_id}).mappings().all()
+            
+            # Kiểm tra CF model
+            cf_loaded = enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded()
+            
+            # Kiểm tra Content-Based recommender
+            cb_available = content_recommender is not None
+            
+            # Test CF recommendations với chi tiết
+            cf_test = []
+            cf_test_details = []
+            if cf_loaded:
+                try:
+                    cf_test = enhanced_cf_recommender.get_user_recommendations(user_id, limit=5)
+                    cf_test_details = [
+                        {
+                            "movieId": rec.get('movieId') or rec.get('id'),
+                            "title": rec.get('title', 'N/A'),
+                            "score": rec.get('recommendation_score') or rec.get('score', 0.0)
+                        }
+                        for rec in cf_test[:5]
+                    ]
+                except Exception as e:
+                    current_app.logger.warning(f"CF test failed: {e}")
+            
+            # Test CB recommendations với chi tiết
+            cb_test = []
+            cb_test_details = []
+            if cb_available:
+                try:
+                    cb_test = content_recommender.get_user_recommendations(user_id, limit=5)
+                    cb_test_details = [
+                        {
+                            "movieId": rec.get('movieId') or rec.get('id'),
+                            "title": rec.get('title', 'N/A'),
+                            "score": rec.get('score') or rec.get('similarity', 0.0)
+                        }
+                        for rec in cb_test[:5]
+                    ]
+                except Exception as e:
+                    current_app.logger.warning(f"CB test failed: {e}")
+            
+            # Kiểm tra số interactions của user
+            interaction_counts = conn.execute(text("""
+                SELECT 
+                    (SELECT COUNT(*) FROM cine.Rating WHERE userId = :user_id) as rating_count,
+                    (SELECT COUNT(*) FROM cine.ViewHistory WHERE userId = :user_id) as view_count
+            """), {"user_id": user_id}).mappings().first()
+            total_interactions = (interaction_counts.rating_count or 0) + (interaction_counts.view_count or 0)
+            
+            # Determine status
+            has_hybrid = recs_result and recs_result["hybrid_count"] > 0
+            can_generate_hybrid = cf_loaded and cb_available and (len(cf_test) > 0 or len(cb_test) > 0)
+            
+            # Tính cold start weight dựa trên interactions
+            if total_interactions < 5:
+                cold_start_weight = 1.0
+            elif total_interactions < 11:
+                cold_start_weight = 0.3
+            elif total_interactions < 21:
+                cold_start_weight = 0.2
+            elif total_interactions < 51:
+                cold_start_weight = 0.1
+            else:
+                cold_start_weight = 0.05
+            
+            return jsonify({
+                "success": True,
+                "hybrid_active": has_hybrid,
+                "can_generate_hybrid": can_generate_hybrid,
+                "user_info": {
+                    "user_id": user_id,
+                    "total_interactions": total_interactions,
+                    "rating_count": interaction_counts.rating_count or 0,
+                    "view_count": interaction_counts.view_count or 0,
+                    "cold_start_weight": round(cold_start_weight * 100, 1),
+                    "cf_cb_weight": round((1 - cold_start_weight) * 100, 1)
+                },
+                "recommendations": {
+                    "total": recs_result["total_count"] if recs_result else 0,
+                    "hybrid": recs_result["hybrid_count"] if recs_result else 0,
+                    "cf": recs_result["cf_count"] if recs_result else 0,
+                    "collaborative": recs_result["collaborative_count"] if recs_result else 0,
+                    "cold_start": recs_result["cold_start_count"] if recs_result else 0,
+                    "last_generated": recs_result["last_generated"].isoformat() if recs_result and recs_result["last_generated"] else None,
+                    "expires_at": recs_result["last_expires"].isoformat() if recs_result and recs_result["last_expires"] else None,
+                    "score_stats": {
+                        "avg": round(float(recs_result["avg_score"]), 4) if recs_result and recs_result["avg_score"] else 0.0,
+                        "min": round(float(recs_result["min_score"]), 4) if recs_result and recs_result["min_score"] else 0.0,
+                        "max": round(float(recs_result["max_score"]), 4) if recs_result and recs_result["max_score"] else 0.0
+                    },
+                    "hybrid_details": [
+                        {
+                            "movieId": row["movieId"],
+                            "title": row["title"],
+                            "score": round(float(row["score"]), 4),
+                            "rank": row["rank"]
+                        }
+                        for row in hybrid_details
+                    ]
+                },
+                "models": {
+                    "cf_loaded": cf_loaded,
+                    "cb_available": cb_available,
+                    "cf_test_count": len(cf_test),
+                    "cb_test_count": len(cb_test),
+                    "cf_test_details": cf_test_details,
+                    "cb_test_details": cb_test_details
+                },
+                "status": "hybrid" if has_hybrid else ("ready" if can_generate_hybrid else "not_ready"),
+                "health_check": {
+                    "cf_model_ok": cf_loaded and len(cf_test) > 0,
+                    "cb_model_ok": cb_available and len(cb_test) > 0,
+                    "hybrid_working": has_hybrid and recs_result and recs_result["hybrid_count"] > 0,
+                    "overall_status": "healthy" if (cf_loaded and cb_available and has_hybrid) else ("partial" if (cf_loaded or cb_available) else "unhealthy")
+                }
+            })
+            
+    except Exception as e:
+        current_app.logger.error(f"Error checking hybrid status: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Lỗi khi kiểm tra trạng thái: {str(e)}"
+        })
+
+@main_bp.route("/api/score_distribution", methods=["GET"])
+@login_required
+def score_distribution():
+    """Lấy thống kê phân phối điểm hybrid_score để kiểm tra"""
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"success": False, "message": "Chưa đăng nhập"})
+        
+        with current_app.db_engine.connect() as conn:
+            # Lấy tất cả hybrid scores của user
+            scores_result = conn.execute(text("""
+                SELECT score 
+                FROM cine.PersonalRecommendation
+                WHERE userId = :user_id 
+                    AND algo = 'hybrid'
+                    AND expiresAt > GETUTCDATE()
+                ORDER BY score DESC
+            """), {"user_id": user_id}).fetchall()
+            
+            if not scores_result:
+                return jsonify({
+                    "success": False,
+                    "message": "Không có hybrid recommendations để phân tích"
+                })
+            
+            scores = [float(row[0]) for row in scores_result if row[0] is not None]
+            
+            if not scores:
+                return jsonify({
+                    "success": False,
+                    "message": "Không có scores hợp lệ"
+                })
+            
+            import numpy as np
+            scores_array = np.array(scores)
+            
+            # Tính các thống kê
+            stats = {
+                "count": len(scores),
+                "min": float(np.min(scores_array)),
+                "max": float(np.max(scores_array)),
+                "mean": float(np.mean(scores_array)),
+                "median": float(np.median(scores_array)),
+                "std": float(np.std(scores_array)),
+                "range": float(np.max(scores_array) - np.min(scores_array)),
+                "p5": float(np.percentile(scores_array, 5)),
+                "p25": float(np.percentile(scores_array, 25)),
+                "p50": float(np.percentile(scores_array, 50)),
+                "p75": float(np.percentile(scores_array, 75)),
+                "p95": float(np.percentile(scores_array, 95))
+            }
+            
+            # Tạo histogram (10 bins từ 0-1)
+            hist, bin_edges = np.histogram(scores_array, bins=10, range=(0.0, 1.0))
+            histogram = {
+                "bins": [float(edge) for edge in bin_edges],
+                "counts": [int(count) for count in hist],
+                "bin_centers": [float((bin_edges[i] + bin_edges[i+1]) / 2) for i in range(len(bin_edges)-1)]
+            }
+            
+            # Đánh giá phân phối
+            is_clustered = stats["range"] < 0.1 or stats["std"] < 0.05
+            is_skewed_left = stats["mean"] < 0.3  # Tụ về 0
+            is_skewed_right = stats["mean"] > 0.7  # Tụ về 1
+            is_uniform = stats["std"] > 0.15 and 0.3 < stats["mean"] < 0.7  # Phân phối đều
+            
+            evaluation = {
+                "is_clustered": is_clustered,
+                "is_skewed_left": is_skewed_left,
+                "is_skewed_right": is_skewed_right,
+                "is_uniform": is_uniform,
+                "quality": "good" if is_uniform and not is_clustered else "needs_improvement"
+            }
+            
+            return jsonify({
+                "success": True,
+                "stats": stats,
+                "histogram": histogram,
+                "evaluation": evaluation
+            })
+            
+    except Exception as e:
+        current_app.logger.error(f"Error getting score distribution: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Error: {str(e)}"
+        })
+
+
 @main_bp.route("/api/model_status", methods=["GET"])
 @admin_required
 def model_status():
     """Get model status and user information"""
     try:
-        global collaborative_recommender
+        global enhanced_cf_recommender
         
-        if collaborative_recommender and collaborative_recommender.is_model_loaded():
-            model_info = collaborative_recommender.get_model_info()
+        if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded():
+            model_info = enhanced_cf_recommender.get_model_info()
             
             # Get users from database
             with current_app.db_engine.connect() as conn:
@@ -4812,7 +5271,7 @@ def model_status():
                     user_id = user[0]
                     email = user[1]
                     rating_count = user[2]
-                    in_model = user_id in collaborative_recommender.user_mapping
+                    in_model = user_id in enhanced_cf_recommender.user_mapping
                     
                     user_info.append({
                         "userId": user_id,
@@ -4844,55 +5303,134 @@ def model_status():
 @main_bp.route("/api/generate_recommendations", methods=["POST"])
 @login_required
 def generate_recommendations():
-    """Tạo recommendations cho user hiện tại và lưu vào database"""
+    """Tạo hybrid recommendations cho user hiện tại và lưu vào database"""
     try:
         user_id = session.get("user_id")
         if not user_id:
             return jsonify({"success": False, "message": "Chưa đăng nhập"})
         
-        # Khởi tạo collaborative recommender
-        cf_recommender = CollaborativeRecommender(current_app.config['odbc_connect'])
+        # Lấy công tắc kiểm thử alpha từ request (nếu có)
+        data = request.get_json() or {}
+        alpha = data.get('alpha')  # alpha=1 → chỉ CF, alpha=0 → chỉ CB
+        if alpha is not None:
+            try:
+                alpha = float(alpha)
+                alpha = max(0.0, min(1.0, alpha))  # Clamp về 0-1
+                current_app.logger.info(f"Using test switch alpha={alpha} (alpha=1→CF only, alpha=0→CB only)")
+            except (ValueError, TypeError):
+                alpha = None
+                current_app.logger.warning(f"Invalid alpha value, using default weights")
         
-        if not cf_recommender.is_model_loaded():
-            return jsonify({"success": False, "message": "Model collaborative filtering chưa được load"})
+        # Lấy CF recommendations
+        cf_recommendations = []
+        if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded():
+            cf_recommendations = enhanced_cf_recommender.get_user_recommendations(user_id, limit=30)
         
-        # Lấy recommendations từ model
-        recommendations = cf_recommender.get_user_recommendations(user_id, limit=50)
+        # Lấy Content-Based recommendations
+        cb_recommendations = []
+        if content_recommender:
+            cb_recommendations = content_recommender.get_user_recommendations(user_id, limit=30)
         
-        if not recommendations:
+        # Kết hợp thành hybrid recommendations
+        if not cf_recommendations and not cb_recommendations:
             return jsonify({"success": False, "message": "Không tìm thấy recommendations cho user này"})
         
+        # Sử dụng hybrid recommendations với công tắc alpha (nếu có)
+        if alpha is not None:
+            recommendations = hybrid_recommendations(
+                cf_recommendations=cf_recommendations,
+                cb_recommendations=cb_recommendations,
+                alpha=alpha,  # Công tắc kiểm thử
+                limit=50
+            )
+        else:
+            # Mặc định: CF weight: 0.6, CB weight: 0.4
+            recommendations = hybrid_recommendations(
+                cf_recommendations=cf_recommendations,
+                cb_recommendations=cb_recommendations,
+                cf_weight=0.6,
+                cb_weight=0.4,
+                limit=50
+            )
+        
+        if not recommendations:
+            return jsonify({"success": False, "message": "Không tìm thấy recommendations sau khi merge"})
+        
         # Lưu recommendations vào database
-        with current_app.config['odbc_connect'].connect() as conn:
-            # Xóa recommendations cũ của user này
-            conn.execute(text("""
+        # Sử dụng begin() để tự động quản lý transaction
+        with current_app.db_engine.begin() as conn:
+            # Xóa TẤT CẢ recommendations cũ của user này (bao gồm cả collaborative và hybrid cũ)
+            deleted_count = conn.execute(text("""
                 DELETE FROM [cine].[PersonalRecommendation] 
                 WHERE userId = :user_id
-            """), {"user_id": user_id})
+            """), {"user_id": user_id}).rowcount
+            
+            # Logging chi tiết theo checklist: score_cf_norm, score_cb, score_hybrid, alpha, top-K
+            alpha_used = alpha if alpha is not None else 0.6  # Default alpha = cf_weight
+            top_k = min(10, len(recommendations))
+            top_k_movies = recommendations[:top_k]
+            
+            # Log top-K với đầy đủ thông tin
+            log_details = []
+            for i, movie in enumerate(top_k_movies, 1):
+                movie_id = movie.get('movieId') or movie.get('id')
+                log_details.append({
+                    "rank": i,
+                    "movieId": movie_id,
+                    "title": movie.get('title', 'N/A'),
+                    "score_hybrid": movie.get('hybrid_score', 0),
+                    "score_cf_norm": movie.get('cf_score_normalized', 0),
+                    "score_cb": movie.get('cb_score_normalized', 0),
+                    "score_cf_original": movie.get('cf_score', 0),
+                    "score_cb_original": movie.get('cb_score', 0)
+                })
+            
+            current_app.logger.info(
+                f"Hybrid recommendations generated for user {user_id}: "
+                f"alpha={alpha_used:.2f}, total={len(recommendations)}, top-K={top_k}. "
+                f"Top-K details: {log_details}"
+            )
+            
+            current_app.logger.info(f"Deleted {deleted_count} old recommendations for user {user_id}, generating {len(recommendations)} new hybrid recommendations")
+            
+            # Lấy max recId để tạo recId mới
+            max_rec_id_result = conn.execute(text("""
+                SELECT ISNULL(MAX(recId), 0) FROM cine.PersonalRecommendation
+            """)).scalar()
+            rec_id = max_rec_id_result + 1 if max_rec_id_result else 1
             
             # Lưu recommendations mới
             for rank, movie in enumerate(recommendations, 1):
+                movie_id = movie.get('movieId') or movie.get('id')
+                if not movie_id:
+                    continue
+                
+                score = movie.get('hybrid_score') or movie.get('score') or movie.get('similarity', 0)
+                
                 conn.execute(text("""
                     INSERT INTO [cine].[PersonalRecommendation] 
-                    (userId, movieId, score, rank, algo, generatedAt, expiresAt)
-                    VALUES (:user_id, :movie_id, :score, :rank, 'collaborative', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
+                    (recId, userId, movieId, score, rank, algo, generatedAt, expiresAt)
+                    VALUES (:rec_id, :user_id, :movie_id, :score, :rank, 'hybrid', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
                 """), {
+                    "rec_id": rec_id,
                     "user_id": user_id,
-                    "movie_id": movie['movieId'],
-                    "score": movie['recommendation_score'],
+                    "movie_id": movie_id,
+                    "score": score,
                     "rank": rank
                 })
-            
-            conn.commit()
+                rec_id += 1
+            # begin() tự động commit khi exit context thành công
         
         return jsonify({
             "success": True, 
-            "message": f"Đã tạo {len(recommendations)} recommendations",
-            "recommendations": recommendations[:10]  # Trả về 10 recommendations đầu tiên
+            "message": f"Đã tạo {len(recommendations)} hybrid recommendations",
+            "recommendations": recommendations[:10],  # Trả về 10 recommendations đầu tiên
+            "cf_count": len(cf_recommendations),
+            "cb_count": len(cb_recommendations)
         })
         
     except Exception as e:
-        print(f"Error generating recommendations: {e}")
+        current_app.logger.error(f"Error generating hybrid recommendations: {e}", exc_info=True)
         return jsonify({"success": False, "message": f"Có lỗi xảy ra: {str(e)}"})
 
 
@@ -4914,7 +5452,7 @@ def get_recommendations():
                     m.title, m.releaseYear, m.posterUrl, m.country,
                     AVG(CAST(r.value AS FLOAT)) as avgRating,
                     COUNT(r.movieId) as ratingCount,
-                    STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+                    CAST(STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) AS NVARCHAR(MAX)) as genres
                 FROM [cine].[PersonalRecommendation] pr
                 INNER JOIN [cine].[Movie] m ON pr.movieId = m.movieId
                 LEFT JOIN [cine].[Rating] r ON m.movieId = r.movieId
@@ -4962,15 +5500,13 @@ def get_similar_movies(movie_id):
         limit = request.args.get('limit', 10, type=int)
         
         # Initialize recommenders if not already done
-        global content_recommender, collaborative_recommender
-        if collaborative_recommender is None:
+        global content_recommender, enhanced_cf_recommender
+        if enhanced_cf_recommender is None:
             init_recommenders()
         
-        # Sử dụng Enhanced CF trước, fallback về Collaborative CF
+        # Chỉ sử dụng Enhanced CF
         if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded():
             similar_movies = enhanced_cf_recommender.get_similar_movies(movie_id, limit)
-        elif collaborative_recommender and collaborative_recommender.is_model_loaded():
-            similar_movies = collaborative_recommender.get_similar_movies(movie_id, limit)
         else:
             # Fallback: sử dụng content-based recommender
             if content_recommender is None:
@@ -5090,9 +5626,15 @@ def get_trending_movies():
                 placeholders = ','.join([':id' + str(i) for i in range(len(existing_movie_ids))])
                 params = {f'id{i}': mid for i, mid in enumerate(existing_movie_ids)}
                 
+                # Validate và sanitize fallback limit để tránh SQL injection
+                fallback_limit = max(1, limit - len(trending_movies))  # Đảm bảo >= 1
+                validated_fallback_limit = validate_limit(fallback_limit, max_limit=100, default=10)
+                top_clause = safe_top_clause(validated_fallback_limit, max_limit=100)
+                
                 # Query lấy phim mới nhất (ngoại trừ những phim đã có)
+                # Sử dụng validated limit thay vì f-string trực tiếp
                 fallback_query = f"""
-                    SELECT TOP {limit - len(trending_movies)}
+                    SELECT {top_clause}
                         m.movieId, 
                         m.title, 
                         m.releaseYear, 
@@ -5164,8 +5706,8 @@ def get_user_rating_history():
         
         limit = request.args.get('limit', 20, type=int)
         
-        # Khởi tạo collaborative recommender
-        cf_recommender = CollaborativeRecommender(current_app.config['odbc_connect'])
+        # Khởi tạo enhanced CF recommender
+        cf_recommender = EnhancedCFRecommender(current_app.db_engine)
         
         # Lấy rating history
         rating_history = cf_recommender.get_user_rating_history(user_id, limit)
@@ -5185,12 +5727,12 @@ def get_model_status():
     """Kiểm tra trạng thái của model collaborative filtering"""
     try:
         # Initialize recommenders if not already done
-        global content_recommender, collaborative_recommender
-        if collaborative_recommender is None:
+        global content_recommender, enhanced_cf_recommender
+        if enhanced_cf_recommender is None:
             init_recommenders()
         
-        if collaborative_recommender:
-            model_info = collaborative_recommender.get_model_info()
+        if enhanced_cf_recommender:
+            model_info = enhanced_cf_recommender.get_model_info()
         else:
             model_info = {"status": "not_loaded", "message": "Recommender not initialized"}
         
@@ -5356,85 +5898,175 @@ def get_personalized_recommendations():
         limit = request.args.get('limit', 12, type=int)
         force_refresh = request.args.get('refresh', 'false').lower() == 'true'
         
+        # ✅ TỐI ƯU: Kiểm tra recommendations đã lưu trong database trước
+        if not force_refresh:
+            with current_app.db_engine.connect() as conn:
+                existing_recs = conn.execute(text("""
+                    SELECT TOP (:limit)
+                        pr.movieId, pr.score, pr.rank,
+                        m.title, m.releaseYear, m.posterUrl, m.country,
+                        AVG(CAST(r.value AS FLOAT)) as avgRating,
+                        COUNT(r.movieId) as ratingCount,
+                        STUFF((
+                            SELECT ', ' + g2.name
+                            FROM cine.MovieGenre mg2
+                            INNER JOIN cine.Genre g2 ON mg2.genreId = g2.genreId
+                            WHERE mg2.movieId = pr.movieId
+                            ORDER BY g2.name
+                            FOR XML PATH(''), TYPE
+                        ).value('.', 'NVARCHAR(MAX)'), 1, 2, '') as genres
+                    FROM cine.PersonalRecommendation pr
+                    INNER JOIN cine.Movie m ON pr.movieId = m.movieId
+                    LEFT JOIN cine.Rating r ON m.movieId = r.movieId
+                    WHERE pr.userId = :user_id 
+                        AND pr.algo = 'hybrid'
+                        AND pr.expiresAt > GETUTCDATE()
+                    GROUP BY pr.movieId, pr.score, pr.rank, 
+                             m.title, m.releaseYear, m.posterUrl, m.country
+                    ORDER BY pr.rank
+                """), {"user_id": user_id, "limit": limit}).mappings().all()
+                
+                if existing_recs:
+                    # Trả về recommendations từ database (nhanh hơn nhiều)
+                    recommendations = [
+                        {
+                            "movieId": row["movieId"],
+                            "title": row["title"],
+                            "poster": row["posterUrl"] if row["posterUrl"] and row["posterUrl"] != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={row['title'][:20].replace(' ', '+')}",
+                            "releaseYear": row["releaseYear"],
+                            "country": row["country"],
+                            "genres": row["genres"] or "",
+                            "recommendationScore": round(float(row["score"]), 4),
+                            "avgRating": round(float(row["avgRating"] or 0), 2),
+                            "ratingCount": int(row["ratingCount"] or 0),
+                            "reason": "Dựa trên kết hợp Collaborative Filtering và Content-Based (Hybrid)"
+                        }
+                        for row in existing_recs
+                    ]
+                    return jsonify({
+                        "success": True,
+                        "recommendations": recommendations,
+                        "cached": True
+                    })
+        
+        # Chỉ tính toán lại nếu force_refresh hoặc không có recommendations trong database
         # Initialize recommenders if not already done
-        global content_recommender, collaborative_recommender
-        if collaborative_recommender is None:
+        global content_recommender, enhanced_cf_recommender
+        if enhanced_cf_recommender is None:
             init_recommenders()
         
         recommendations = []
         
-        if collaborative_recommender and collaborative_recommender.is_model_loaded():
-            current_app.logger.info(f"Getting personalized recommendations for user {user_id}")
+        # ✅ THAY ĐỔI: Luôn sử dụng Hybrid thay vì CF
+        # Lấy công tắc kiểm thử alpha từ query parameter (nếu có)
+        alpha = request.args.get('alpha', type=float)
+        if alpha is not None:
+            alpha = max(0.0, min(1.0, alpha))  # Clamp về 0-1
+            current_app.logger.info(f"Using test switch alpha={alpha} for personalized recommendations")
+        
+        current_app.logger.info(f"Generating new hybrid recommendations for user {user_id}")
+        
+        # Lấy CF recommendations
+        cf_recommendations = []
+        if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded():
+            try:
+                cf_recommendations = enhanced_cf_recommender.get_user_recommendations(user_id, limit=limit * 2)
+            except Exception as e:
+                current_app.logger.warning(f"CF recommendations failed for user {user_id}: {e}")
             
-            # Lấy recommendations từ CF model
-            cf_recommendations = collaborative_recommender.get_user_recommendations(user_id, limit=limit)
+        # Lấy CB recommendations
+        cb_recommendations = []
+        if content_recommender:
+            try:
+                cb_recommendations = content_recommender.get_user_recommendations(user_id, limit=limit * 2)
+            except Exception as e:
+                current_app.logger.warning(f"CB recommendations failed for user {user_id}: {e}")
+        
+        # Generate hybrid recommendations với công tắc alpha (nếu có)
+        if cf_recommendations or cb_recommendations:
+            if alpha is not None:
+                hybrid_recs = hybrid_recommendations(
+                    cf_recommendations=cf_recommendations,
+                    cb_recommendations=cb_recommendations,
+                    alpha=alpha,  # Công tắc kiểm thử
+                    limit=limit
+                )
+            else:
+                hybrid_recs = hybrid_recommendations(
+                    cf_recommendations=cf_recommendations,
+                    cb_recommendations=cb_recommendations,
+                    cf_weight=0.6,
+                    cb_weight=0.4,
+                    limit=limit
+                )
             
-            if cf_recommendations:
-                # Lưu vào bảng PersonalRecommendation nếu force_refresh
-                if force_refresh:
-                    with current_app.db_engine.connect() as conn:
-                        # Xóa recommendations cũ
+            if hybrid_recs:
+                # ✅ TỐI ƯU: Luôn lưu vào database để dùng cho lần sau
+                with current_app.db_engine.begin() as conn:
+                    # Xóa recommendations cũ (chỉ hybrid)
+                    conn.execute(text("""
+                        DELETE FROM cine.PersonalRecommendation 
+                        WHERE userId = :user_id AND algo = 'hybrid'
+                    """), {"user_id": user_id})
+                    
+                    # Lưu hybrid recommendations mới
+                    max_rec_id = conn.execute(text("""
+                        SELECT ISNULL(MAX(recId), 0) FROM cine.PersonalRecommendation
+                    """)).scalar() or 0
+                    
+                    for rank, rec in enumerate(hybrid_recs, 1):
+                        rec_id = max_rec_id + rank
+                        movie_id = rec.get('movieId') or rec.get('id')
+                        if not movie_id:
+                            continue
+                        
+                        score = rec.get('hybrid_score') or rec.get('score') or rec.get('similarity', 0)
                         conn.execute(text("""
-                            DELETE FROM cine.PersonalRecommendation 
-                            WHERE userId = :user_id
-                        """), {"user_id": user_id})
-                        
-                        # Lưu recommendations mới
-                        for rank, rec in enumerate(cf_recommendations, 1):
-                            conn.execute(text("""
-                                INSERT INTO cine.PersonalRecommendation 
-                                (userId, movieId, score, rank, algo, generatedAt, expiresAt)
-                                VALUES (:user_id, :movie_id, :score, :rank, 'collaborative', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
-                            """), {
-                                "user_id": user_id,
-                                "movie_id": rec["movieId"],
-                                "score": rec.get("recommendation_score", 0),
-                                "rank": rank
-                            })
-                        
-                        conn.commit()
-                        print(f"Saved {len(cf_recommendations)} personalized recommendations to database")
+                            INSERT INTO cine.PersonalRecommendation 
+                            (recId, userId, movieId, score, rank, algo, generatedAt, expiresAt)
+                            VALUES (:rec_id, :user_id, :movie_id, :score, :rank, 'hybrid', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
+                        """), {
+                            "rec_id": rec_id,
+                            "user_id": user_id,
+                            "movie_id": movie_id,
+                            "score": score,
+                            "rank": rank
+                        })
+                current_app.logger.info(f"Saved {len(hybrid_recs)} hybrid recommendations to database")
                 
                 # Format recommendations
                 recommendations = [
                     {
-                        "movieId": rec["movieId"],
-                        "title": rec["title"],
-                        "poster": rec.get("posterUrl") if rec.get("posterUrl") and rec.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={rec['title'][:20].replace(' ', '+')}",
+                        "movieId": rec.get("movieId") or rec.get("id"),
+                        "title": rec.get("title"),
+                        "poster": rec.get("posterUrl") if rec.get("posterUrl") and rec.get("posterUrl") != "1" else f"https://dummyimage.com/300x450/2c3e50/ecf0f1&text={rec.get('title', '')[:20].replace(' ', '+')}",
                         "releaseYear": rec.get("releaseYear"),
                         "country": rec.get("country"),
                         "genres": rec.get("genres", ""),
-                        "recommendationScore": round(rec.get("recommendation_score", 0), 4),
+                        "recommendationScore": round(rec.get('hybrid_score') or rec.get('score') or rec.get('similarity', 0), 4),
                         "avgRating": round(rec.get("avgRating", 0), 2),
-                        "ratingCount": rec.get("ratingCount", 0),  # Tổng số rating của phim
-                        "reason": "Dựa trên sở thích của bạn và người dùng tương tự"
+                        "ratingCount": rec.get("ratingCount", 0),
+                        "reason": "Dựa trên kết hợp Collaborative Filtering và Content-Based (Hybrid)"
                     }
-                    for rec in cf_recommendations
+                    for rec in hybrid_recs
                 ]
                 
             return jsonify({
                 "success": True,
-                "message": f"Đã tạo {len(recommendations)} gợi ý cá nhân hóa",
+                    "message": f"Đã tạo {len(recommendations)} gợi ý cá nhân hóa (Hybrid)",
                 "recommendations": recommendations,
-                "algorithm": "Collaborative Filtering",
-                "userInModel": True
-            })
+                    "algorithm": "Hybrid (CF + CB)",
+                    "userInModel": True,
+                    "cf_count": len(cf_recommendations),
+                    "cb_count": len(cb_recommendations)
+                })
         
-            # no cf_recommendations
+        # Không có recommendations
             return jsonify({
                 "success": False,
                 "message": "Không tìm thấy gợi ý cá nhân hóa. Hãy đánh giá thêm phim để có gợi ý tốt hơn.",
                 "recommendations": [],
-                "algorithm": "Collaborative Filtering",
-                "userInModel": False
-            })
-        
-        # model not loaded
-        return jsonify({
-            "success": False,
-            "message": "Hệ thống gợi ý chưa sẵn sàng. Vui lòng thử lại sau.",
-            "recommendations": [],
-            "algorithm": "None",
+            "algorithm": "Hybrid (CF + CB)",
             "userInModel": False
         })
             
@@ -5481,7 +6113,7 @@ def get_cold_start_recommendations_api():
                         m.title, m.posterUrl, m.releaseYear, m.country,
                         AVG(CAST(r.value AS FLOAT)) AS avgRating,
                         COUNT(r.movieId) AS ratingCount,
-                        STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+                        CAST(STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) AS NVARCHAR(MAX)) as genres
                     FROM cine.ColdStartRecommendations csr
                     INNER JOIN cine.Movie m ON csr.movieId = m.movieId
                     LEFT JOIN cine.Rating r ON m.movieId = r.movieId
@@ -5817,7 +6449,7 @@ def generate_preference_based_recommendations(user_id, conn):
                     m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
                     AVG(CAST(r.value AS FLOAT)) AS avgRating,
                     COUNT(r.movieId) AS ratingCount,
-                    STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+                    CAST(STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) AS NVARCHAR(MAX)) as genres
                 FROM cine.Movie m
                 INNER JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
                 LEFT JOIN cine.Rating r ON m.movieId = r.movieId
@@ -5850,13 +6482,20 @@ def generate_preference_based_recommendations(user_id, conn):
                 DELETE FROM cine.ColdStartRecommendations WHERE userId = :user_id
             """), {"user_id": user_id})
             
+            # Lấy max recId để tạo recId mới
+            max_rec_id_result = conn.execute(text("""
+                SELECT ISNULL(MAX(recId), 0) FROM cine.ColdStartRecommendations
+            """)).scalar()
+            rec_id = max_rec_id_result + 1 if max_rec_id_result else 1
+            
             # Lưu recommendations mới
             for rec in recommendations:
                 conn.execute(text("""
                     INSERT INTO cine.ColdStartRecommendations 
-                    (userId, movieId, score, rank, source, generatedAt, expiresAt, reason)
-                    VALUES (:user_id, :movie_id, :score, :rank, :source, GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()), :reason)
+                    (recId, userId, movieId, score, rank, source, generatedAt, expiresAt, reason)
+                    VALUES (:rec_id, :user_id, :movie_id, :score, :rank, :source, GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()), :reason)
                 """), {
+                    "rec_id": rec_id,
                     "user_id": user_id,
                     "movie_id": rec["id"],
                     "score": rec["score"],
@@ -5864,6 +6503,7 @@ def generate_preference_based_recommendations(user_id, conn):
                     "source": rec["source"],
                     "reason": f"Recommendation based on your genre preferences"
                 })
+                rec_id += 1
             
             print(f"Generated {len(recommendations)} preference-based recommendations for user {user_id}")
         
@@ -5942,6 +6582,33 @@ def get_user_interaction_status():
 @admin_required
 @login_required
 def retrain_cf_model():
+    """Retrain Collaborative Filtering model - requires admin authentication"""
+    return _retrain_cf_model_internal()
+
+@main_bp.route("/api/retrain_cf_model_internal", methods=["POST"])
+def retrain_cf_model_internal():
+    """Internal endpoint for background worker - no auth required but checks secret"""
+    try:
+        # Kiểm tra secret key từ request để tránh unauthorized access
+        secret = request.headers.get('X-Internal-Secret') or request.json.get('secret') if request.is_json else None
+        expected_secret = os.environ.get('INTERNAL_RETRAIN_SECRET', 'internal-retrain-secret-key-change-in-production')
+        
+        if secret != expected_secret:
+            current_app.logger.warning("Unauthorized retrain attempt - invalid secret")
+            return jsonify({
+                "success": False,
+                "message": "Unauthorized"
+            }), 401
+        
+        return _retrain_cf_model_internal()
+    except Exception as e:
+        current_app.logger.error(f"Error in retrain_cf_model_internal: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": f"Internal error: {str(e)}"
+        }), 500
+
+def _retrain_cf_model_internal():
     """Retrain Collaborative Filtering model"""
     try:
         import subprocess
@@ -5949,7 +6616,8 @@ def retrain_cf_model():
         import sys
         
         # Chạy script retrain model
-        script_path = os.path.join(os.path.dirname(__file__), '..', 'model_collaborative', 'train_collaborative_fast.py')
+        script_path = os.path.join(os.path.dirname(__file__), '..', 'model_collaborative', 'train_model.py')
+        script_path = os.path.abspath(script_path)  # Convert to absolute path
         
         # Debug: Log đường dẫn và kiểm tra file tồn tại
         current_app.logger.info(f"Script path: {script_path}")
@@ -5965,36 +6633,66 @@ def retrain_cf_model():
         python_exec = sys.executable or 'python'
         current_app.logger.info(f"Using Python: {python_exec}")
         
+        # Set working directory to project root để import config đúng
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(script_path)))
+        current_app.logger.info(f"Project root: {project_root}")
+        current_app.logger.info(f"Working directory will be: {project_root}")
+        
         # Chạy với timeout để tránh treo
+        current_app.logger.info(f"Starting retrain process with timeout 300 seconds...")
         result = subprocess.run(
             [python_exec, script_path], 
             capture_output=True, 
-            text=True, 
-            cwd=os.path.dirname(script_path),
+            text=True,
+            encoding='utf-8',
+            errors='replace',  # Replace encoding errors instead of failing
+            cwd=project_root,  # Set working directory to project root
             timeout=300  # 5 phút timeout
         )
         
-        current_app.logger.info(f"Return code: {result.returncode}")
-        current_app.logger.info(f"Stdout: {result.stdout}")
-        current_app.logger.info(f"Stderr: {result.stderr}")
+        current_app.logger.info(f"Retrain process completed. Return code: {result.returncode}")
+        if result.stdout:
+            current_app.logger.info(f"Stdout (last 500 chars): {result.stdout[-500:]}")
+        if result.stderr:
+            current_app.logger.warning(f"Stderr (last 500 chars): {result.stderr[-500:]}")
         
         if result.returncode == 0:
             # Reload model sau khi retrain
-            global collaborative_recommender
-            if collaborative_recommender:
-                collaborative_recommender.load_model()
+            try:
+                global enhanced_cf_recommender
+                if enhanced_cf_recommender:
+                    current_app.logger.info("Reloading CF model...")
+                    enhanced_cf_recommender.reload_model()
+                    current_app.logger.info("CF model reloaded successfully")
+                else:
+                    # Nếu chưa có, khởi tạo lại
+                    current_app.logger.info("Initializing recommenders...")
+                    from app.routes import init_recommenders
+                    init_recommenders()
+                    current_app.logger.info("Recommenders initialized")
+            except Exception as reload_error:
+                current_app.logger.error(f"Error reloading model: {reload_error}", exc_info=True)
+                # Vẫn return success vì model đã được train, chỉ là reload failed
+                return jsonify({
+                    "success": True,
+                    "message": "Model CF đã được retrain thành công, nhưng reload model thất bại. Vui lòng restart server.",
+                    "output": result.stdout,
+                    "warning": f"Reload error: {str(reload_error)}"
+                })
             
             return jsonify({
                 "success": True,
                 "message": "Model CF đã được retrain thành công",
-                "output": result.stdout
+                "output": result.stdout[-1000:] if result.stdout else ""  # Chỉ trả về 1000 ký tự cuối
             })
         else:
+            error_msg = result.stderr if result.stderr else "Unknown error"
+            current_app.logger.error(f"Retrain failed with code {result.returncode}: {error_msg}")
             return jsonify({
                 "success": False,
                 "message": f"Lỗi khi retrain model (code: {result.returncode})",
-                "output": result.stdout,
-                "error": result.stderr
+                "output": result.stdout[-1000:] if result.stdout else "",
+                "error": error_msg[-1000:] if error_msg else ""
             })
             
     except subprocess.TimeoutExpired:
@@ -6018,8 +6716,8 @@ def create_sample_recommendations():
         if not user_id:
             return jsonify({"success": False, "message": "Chưa đăng nhập"})
         
+        # Lấy 12 phim ngẫu nhiên (read-only)
         with current_app.db_engine.connect() as conn:
-            # Lấy 12 phim ngẫu nhiên
             movies = conn.execute(text("""
                 SELECT TOP 12 
                     m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
@@ -6031,27 +6729,36 @@ def create_sample_recommendations():
                 ORDER BY NEWID()
             """)).mappings().all()
             
+        # Lưu recommendations mẫu (write operations - cần transaction)
+        # Sử dụng begin() để tự động quản lý transaction
+        with current_app.db_engine.begin() as conn:
             # Xóa recommendations cũ
             conn.execute(text("""
                 DELETE FROM cine.PersonalRecommendation WHERE userId = :user_id
             """), {"user_id": user_id})
             
             # Tạo recommendations mẫu
+            # Tính recId bắt đầu từ MAX + 1
+            max_rec_id = conn.execute(text("""
+                SELECT ISNULL(MAX(recId), 0) FROM cine.PersonalRecommendation
+            """)).scalar() or 0
+            
             for rank, movie in enumerate(movies, 1):
                 score = round(0.5 + (rank * 0.1), 2)  # Score từ 0.6 đến 1.7
+                rec_id = max_rec_id + rank
                 
                 conn.execute(text("""
                     INSERT INTO cine.PersonalRecommendation 
-                    (userId, movieId, score, rank, algo, generatedAt, expiresAt)
-                    VALUES (:user_id, :movie_id, :score, :rank, 'sample', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
+                    (recId, userId, movieId, score, rank, algo, generatedAt, expiresAt)
+                    VALUES (:rec_id, :user_id, :movie_id, :score, :rank, 'sample', GETUTCDATE(), DATEADD(day, 7, GETUTCDATE()))
                 """), {
+                    "rec_id": rec_id,
                     "user_id": user_id,
                     "movie_id": movie["movieId"],
                     "score": score,
                     "rank": rank
                 })
-            
-            conn.commit()
+            # begin() tự động commit khi exit context thành công
             
             return jsonify({
                 "success": True,

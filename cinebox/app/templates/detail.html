@@ -997,6 +997,11 @@ function updateFavoriteButton(isFavorite) {
   const favoriteText = document.getElementById('favoriteText');
   const favoriteBtn = document.getElementById('favoriteBtn');
   
+  if (!favoriteIcon || !favoriteText || !favoriteBtn) {
+    console.warn('Favorite button elements not found');
+    return;
+  }
+  
   if (isFavorite) {
     favoriteIcon.textContent = '❤️';
     favoriteText.textContent = 'Đã yêu thích';
@@ -1052,6 +1057,11 @@ function updateWatchlistButton(isWatchlist) {
   const watchlistIcon = document.getElementById('watchlistIcon');
   const watchlistText = document.getElementById('watchlistText');
   const watchlistBtn = document.getElementById('watchlistBtn');
+  
+  if (!watchlistIcon || !watchlistText || !watchlistBtn) {
+    console.warn('Watchlist button elements not found');
+    return;
+  }
   
   if (isWatchlist) {
     watchlistIcon.textContent = '✅';

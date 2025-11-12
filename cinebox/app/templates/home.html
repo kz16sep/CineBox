@@ -187,18 +187,106 @@
 
 <!-- 3. Phim được đề xuất cho bạn (Collaborative Filtering) -->
 {% if not genre_filter %}
-<section>
+<section class="personalized-section">
   <div class="section-header">
     <h3>🎯 Gợi ý cá nhân cho bạn</h3>
-    <div class="model-status" id="modelStatus" style="font-size: 0.8rem; color: #666; margin-top: 5px;">
+    <!-- ✅ Ẩn model status bar -->
+    <div class="model-status" id="modelStatus" style="display: none;">
       <span id="modelInfo">Đang tải thông tin model...</span>
+      <span id="hybridStatus" style="margin-left: 10px; padding: 2px 8px; border-radius: 4px; background: rgba(76, 175, 80, 0.1); color: #4CAF50; font-weight: bold; display: none;">
+        🔀 Hybrid Active
+      </span>
     </div>
   </div>
+  {% if recommended|length > 0 %}
+  <div class="personalized-cards-wrapper">
+    <button class="scroll-btn scroll-btn-left" id="personalizedScrollLeft" onclick="scrollPersonalizedCards('left')" aria-label="Cuộn trái">
+      ‹
+    </button>
+    <div class="personalized-cards" id="personalizedCards">
+      {% for m in recommended %}
+      <div class="card">
+        <a href="{{ url_for('main.detail', movie_id=m.id) }}" class="card-link">
+          <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
+          <div class="card-content">
+            <div class="card-title">{{ m.title }}</div>
+            <div class="card-meta">
+              {% if m.releaseYear %}<span class="year">{{ m.releaseYear }}</span>{% endif %}
+              {% if m.country %}<span class="country">{{ m.country }}</span>{% endif %}
+            </div>
+            {% if m.genres %}<div class="card-genres">{{ m.genres }}</div>{% endif %}
+            <div class="recommendation-info">
+              <!-- <div class="rec-score">Điểm: {{ "%.3f"|format(m.score) if m.score else "N/A" }}</div> -->
+              <!-- Rank đã được xóa: {% if m.rank %}<div class="rec-rank">#{{ m.rank }}</div>{% endif %} -->
+                <div class="debug-info" style="font-size: 0.7rem; color: #666; margin-top: 4px; background: rgba(0,0,0,0.1); padding: 8px; border-radius: 4px;">
+                  <div><strong>Hybrid Score:</strong> {{ "%.3f"|format(m.hybrid_score if m.hybrid_score is defined and m.hybrid_score is not none else (m.score if m.score is defined and m.score is not none else 0.0)) }}</div>
+                  <!-- {% if m.reason %}<div style="margin-top: 4px; color: #FF9800;"><strong>💡 Lý do:</strong> {{ m.reason }}</div>{% endif %} -->
+                  {% if m.generatedAt %}<div style="margin-top: 2px; font-size: 0.6rem; color: #999;">🕒 {{ m.generatedAt.strftime('%d/%m/%Y %H:%M') if m.generatedAt else 'N/A' }}</div>{% endif %}
+                </div>
+            </div>
+            <div class="movie-rating" data-movie-id="{{ m.id }}">
+              <span class="rating-stars">
+                {% if m.avgRating and m.avgRating > 0 %}
+                  ⭐ {{ "%.1f"|format(m.avgRating) }}
+                {% else %}
+                  ⭐ 0.0
+                {% endif %}
+              </span>
+              <!-- rating count hidden per request -->
+            </div>
+          </div>
+        </a>
+        <div class="action-buttons">
+          <button class="watchlist-btn" onclick="toggleWatchlist({{ m.id }}, event)" data-movie-id="{{ m.id }}">
+            <span class="watchlist-icon">📋</span>
+          </button>
+          <button class="favorite-btn" onclick="toggleFavorite({{ m.id }}, event)" data-movie-id="{{ m.id }}">
+            <span class="favorite-icon">🤍</span>
+          </button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    <button class="scroll-btn scroll-btn-right" id="personalizedScrollRight" onclick="scrollPersonalizedCards('right')" aria-label="Cuộn phải">
+      ›
+    </button>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">🎬</div>
+    <h4>Chưa có gợi ý cá nhân</h4>
+    <p>Hãy đánh giá một số phim để nhận gợi ý cá nhân dựa trên sở thích của bạn!</p>
+    <button class="btn btn-primary" onclick="generateRecommendations()">
+      Tạo gợi ý ngay
+    </button>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- 2.5. Phim xem gần đây -->
+{% if not genre_filter and recent_watched %}
+<section>
+  <div class="section-header">
+    <h3>📺 Xem gần đây</h3>
+    <p class="section-subtitle">Tiếp tục xem phim của bạn</p>
+  </div>
   <div class="cards">
-    {% for m in recommended %}
+    {% for m in recent_watched %}
     <div class="card">
       <a href="{{ url_for('main.detail', movie_id=m.id) }}" class="card-link">
-        <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
+        <div class="poster" style="background-image:url('{{ m.poster }}')">
+          <!-- Badge hiển thị trạng thái hoàn thành -->
+          {% if m.isCompleted %}
+          <div class="completed-badge" style="position: absolute; top: 8px; right: 8px; background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%); color: white; padding: 4px 8px; border-radius: 12px; font-size: 0.7rem; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">
+            ✅ Hoàn thành
+          </div>
+          {% elif m.progressPercent > 0 %}
+          <div class="progress-badge" style="position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.7); color: white; padding: 4px 8px; border-radius: 12px; font-size: 0.7rem; font-weight: bold;">
+            {{ "%.0f"|format(m.progressPercent) }}%
+          </div>
+          {% endif %}
+        </div>
         <div class="card-content">
           <div class="card-title">{{ m.title }}</div>
           <div class="card-meta">
@@ -206,36 +294,21 @@
             {% if m.country %}<span class="country">{{ m.country }}</span>{% endif %}
           </div>
           {% if m.genres %}<div class="card-genres">{{ m.genres }}</div>{% endif %}
-          <div class="recommendation-info">
-            <!-- <div class="rec-score">Điểm: {{ "%.3f"|format(m.score) if m.score else "N/A" }}</div> -->
-            {% if m.rank %}<div class="rec-rank">#{{ m.rank }}</div>{% endif %}
-              <div class="debug-info" style="font-size: 0.7rem; color: #666; margin-top: 4px; background: rgba(0,0,0,0.1); padding: 8px; border-radius: 4px;">
-                <!-- <div style="font-weight: bold; color: #4CAF50; margin-bottom: 4px;">📊 Chỉ số tính toán Score:</div> -->
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2px;">
-                  <div><strong>Score:</strong> {{ "%.3f"|format(m.score) if m.score else "N/A" }}</div>
-                  <!-- <div><strong>Algorithm:</strong> {{ m.algo or "N/A" }}</div> -->
-                </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2px;">
-                  <div>Ratings: {{ m.ratingCount or 0 }}</div>
-                  <div>Views: {{ m.viewHistoryCount or 0 }}</div>
-                  <div>Watchlist: {{ m.watchlistCount or 0 }}</div>
-                  <div>Favorites: {{ m.favoriteCount or 0 }}</div>
-                  <div>Comments: {{ m.commentCount or 0 }}</div>
-                  <div>AvgRating: {{ "%.1f"|format(m.avgRating) if m.avgRating else "N/A" }}</div>
-                </div>
-                <!-- {% if m.reason %}<div style="margin-top: 4px; color: #FF9800;"><strong>💡 Lý do:</strong> {{ m.reason }}</div>{% endif %} -->
-                {% if m.generatedAt %}<div style="margin-top: 2px; font-size: 0.6rem; color: #999;">🕒 {{ m.generatedAt.strftime('%d/%m/%Y %H:%M') if m.generatedAt else 'N/A' }}</div>{% endif %}
+          <div class="watch-info" style="margin-top: 8px; padding: 8px; background: rgba(0,0,0,0.1); border-radius: 4px; font-size: 0.75rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <strong>📊 Đã xem:</strong> 
+                <span style="color: #4CAF50; font-weight: bold;">{{ m.watchCount }} lần</span>
               </div>
-          </div>
-          <div class="movie-rating" data-movie-id="{{ m.id }}">
-            <span class="rating-stars">
-              {% if m.avgRating and m.avgRating > 0 %}
-                ⭐ {{ "%.1f"|format(m.avgRating) }}
-              {% else %}
-                ⭐ 0.0
+              {% if m.progressPercent > 0 and not m.isCompleted %}
+              <span style="color: #FF9800;">⏳ {{ "%.0f"|format(m.progressPercent) }}%</span>
               {% endif %}
-            </span>
-            <!-- rating count hidden per request -->
+            </div>
+            {% if m.lastWatchedAt %}
+            <div style="margin-top: 4px; color: #999; font-size: 0.7rem;">
+              🕒 Xem lần cuối: {{ m.lastWatchedAt.strftime('%d/%m/%Y %H:%M') if m.lastWatchedAt else 'N/A' }}
+            </div>
+            {% endif %}
           </div>
         </div>
       </a>
@@ -250,16 +323,6 @@
     </div>
     {% endfor %}
   </div>
-  {% if recommended|length == 0 %}
-  <div class="empty-state">
-    <div class="empty-icon">🎬</div>
-    <h4>Chưa có gợi ý cá nhân</h4>
-    <p>Hãy đánh giá một số phim để nhận gợi ý cá nhân dựa trên sở thích của bạn!</p>
-    <button class="btn btn-primary" onclick="generateRecommendations()">
-      Tạo gợi ý ngay
-    </button>
-  </div>
-  {% endif %}
 </section>
 {% endif %}
 
@@ -1325,6 +1388,142 @@ html {
   margin: 20px 0;
 }
 
+/* Personalized Recommendations Horizontal Scroll */
+.personalized-section {
+  margin: 40px 0;
+}
+
+.personalized-cards-wrapper {
+  position: relative;
+  margin: 20px 0;
+}
+
+.personalized-cards {
+  display: flex;
+  gap: 20px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-behavior: smooth;
+  padding: 10px 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+  -ms-overflow-style: -ms-autohiding-scrollbar;
+}
+
+.personalized-cards::-webkit-scrollbar {
+  height: 8px;
+}
+
+.personalized-cards::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.personalized-cards::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
+}
+
+.personalized-cards::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.personalized-cards .card {
+  flex: 0 0 200px;
+  min-width: 200px;
+  max-width: 200px;
+}
+
+.scroll-btn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(0, 0, 0, 0.7);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  color: white;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  font-size: 24px;
+  font-weight: bold;
+  cursor: pointer;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+}
+
+.scroll-btn:hover {
+  background: rgba(0, 0, 0, 0.9);
+  border-color: rgba(255, 255, 255, 0.6);
+  transform: translateY(-50%) scale(1.1);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+
+.scroll-btn:active {
+  transform: translateY(-50%) scale(0.95);
+}
+
+.scroll-btn-left {
+  left: -25px;
+}
+
+.scroll-btn-right {
+  right: -25px;
+}
+
+.scroll-btn.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Responsive for personalized cards */
+@media (max-width: 768px) {
+  .personalized-cards .card {
+    flex: 0 0 150px;
+    min-width: 150px;
+    max-width: 150px;
+  }
+  
+  .scroll-btn {
+    width: 40px;
+    height: 40px;
+    font-size: 20px;
+  }
+  
+  .scroll-btn-left {
+    left: -20px;
+  }
+  
+  .scroll-btn-right {
+    right: -20px;
+  }
+}
+
+@media (max-width: 480px) {
+  .personalized-cards .card {
+    flex: 0 0 120px;
+    min-width: 120px;
+    max-width: 120px;
+  }
+  
+  .scroll-btn {
+    width: 35px;
+    height: 35px;
+    font-size: 18px;
+  }
+  
+  .scroll-btn-left {
+    left: -15px;
+  }
+  
+  .scroll-btn-right {
+    right: -15px;
+  }
+}
+
 /* Responsive Grid */
 @media (max-width: 768px) {
   .cards, .movies-grid {
@@ -1816,7 +2015,16 @@ function toggleWatchlist(movieId, event) {
 
 function updateFavoriteButton(movieId, isFavorite) {
     const favoriteBtn = document.querySelector(`.favorite-btn[data-movie-id="${movieId}"]`);
+    if (!favoriteBtn) {
+        console.warn(`Favorite button not found for movie ${movieId}`);
+        return;
+    }
+    
     const favoriteIcon = favoriteBtn.querySelector('.favorite-icon');
+    if (!favoriteIcon) {
+        console.warn(`Favorite icon not found for movie ${movieId}`);
+        return;
+    }
     
     if (isFavorite) {
         favoriteIcon.textContent = '❤️';
@@ -1829,7 +2037,16 @@ function updateFavoriteButton(movieId, isFavorite) {
 
 function updateWatchlistButton(movieId, isWatchlist) {
     const watchlistBtn = document.querySelector(`.watchlist-btn[data-movie-id="${movieId}"]`);
+    if (!watchlistBtn) {
+        console.warn(`Watchlist button not found for movie ${movieId}`);
+        return;
+    }
+    
     const watchlistIcon = watchlistBtn.querySelector('.watchlist-icon');
+    if (!watchlistIcon) {
+        console.warn(`Watchlist icon not found for movie ${movieId}`);
+        return;
+    }
     
     if (isWatchlist) {
         watchlistIcon.textContent = '✅';
@@ -2336,6 +2553,9 @@ function loadModelStatus() {
                     modelInfo.style.color = '#ff6b6b';
                 }
             }
+            
+            // Load hybrid status
+            loadHybridStatus();
         })
         .catch(error => {
             console.error('Error loading model status:', error);
@@ -2344,6 +2564,100 @@ function loadModelStatus() {
                 modelInfo.innerHTML = '❌ Lỗi tải thông tin model';
                 modelInfo.style.color = '#ff6b6b';
             }
+            // Still try to load hybrid status
+            loadHybridStatus();
+        });
+}
+
+// Load hybrid recommendations status
+function loadHybridStatus() {
+    fetch('/api/hybrid_status')
+        .then(response => response.json())
+        .then(data => {
+            const hybridStatus = document.getElementById('hybridStatus');
+            if (!hybridStatus) return;
+            
+            if (data.success) {
+                if (data.hybrid_active) {
+                    // Hiển thị badge hybrid active
+                    hybridStatus.style.display = 'inline-block';
+                    hybridStatus.innerHTML = '🔀 Hybrid Active (' + data.recommendations.hybrid + ' recommendations)';
+                    hybridStatus.style.background = 'rgba(76, 175, 80, 0.2)';
+                    hybridStatus.style.color = '#4CAF50';
+                    
+                    // Log thông tin chi tiết
+                    console.log('🔀 Hybrid Recommendations Status:', {
+                        active: data.hybrid_active,
+                        total: data.recommendations.total,
+                        hybrid: data.recommendations.hybrid,
+                        cf: data.recommendations.cf,
+                        cold_start: data.recommendations.cold_start,
+                        last_generated: data.recommendations.last_generated,
+                        expires_at: data.recommendations.expires_at,
+                        score_stats: data.recommendations.score_stats,
+                        user_info: data.user_info,
+                        models: data.models,
+                        health_check: data.health_check
+                    });
+                    
+                    // Hiển thị thông tin chi tiết trong console để debug
+                    if (data.health_check) {
+                        console.log('📊 Hybrid Health Check:', {
+                            'CF Model': data.health_check.cf_model_ok ? '✅ OK' : '❌ Failed',
+                            'CB Model': data.health_check.cb_model_ok ? '✅ OK' : '❌ Failed',
+                            'Hybrid Working': data.health_check.hybrid_working ? '✅ Active' : '❌ Not Active',
+                            'Overall Status': data.health_check.overall_status === 'healthy' ? '✅ Healthy' : 
+                                             (data.health_check.overall_status === 'partial' ? '⚠️ Partial' : '❌ Unhealthy')
+                        });
+                    }
+                    
+                    // Hiển thị thông tin user
+                    if (data.user_info) {
+                        console.log('👤 User Info:', {
+                            'Total Interactions': data.user_info.total_interactions,
+                            'Cold Start Weight': data.user_info.cold_start_weight + '%',
+                            'CF/CB Weight': data.user_info.cf_cb_weight + '%'
+                        });
+                    }
+                    
+                    // Hiển thị score stats
+                    if (data.recommendations.score_stats) {
+                        console.log('📈 Score Statistics:', {
+                            'Average': data.recommendations.score_stats.avg,
+                            'Min': data.recommendations.score_stats.min,
+                            'Max': data.recommendations.score_stats.max
+                        });
+                    }
+                    
+                    // Hiển thị top hybrid recommendations
+                    if (data.recommendations.hybrid_details && data.recommendations.hybrid_details.length > 0) {
+                        console.log('🎬 Top Hybrid Recommendations:', data.recommendations.hybrid_details);
+                    }
+                    
+                    // Hiển thị CF/CB test results
+                    if (data.models.cf_test_details && data.models.cf_test_details.length > 0) {
+                        console.log('🤝 CF Test Results:', data.models.cf_test_details);
+                    }
+                    if (data.models.cb_test_details && data.models.cb_test_details.length > 0) {
+                        console.log('📝 CB Test Results:', data.models.cb_test_details);
+                    }
+                } else if (data.can_generate_hybrid) {
+                    // Có thể generate hybrid nhưng chưa có
+                    hybridStatus.style.display = 'inline-block';
+                    hybridStatus.innerHTML = '⚡ Hybrid Ready (CF: ' + data.models.cf_test_count + ', CB: ' + data.models.cb_test_count + ')';
+                    hybridStatus.style.background = 'rgba(255, 193, 7, 0.2)';
+                    hybridStatus.style.color = '#FFC107';
+                } else {
+                    // Không thể generate hybrid
+                    hybridStatus.style.display = 'none';
+                }
+            } else {
+                hybridStatus.style.display = 'none';
+                console.warn('Hybrid status check failed:', data.message);
+            }
+        })
+        .catch(error => {
+            console.error('Error loading hybrid status:', error);
         });
 }
 
@@ -2484,6 +2798,76 @@ function displayColdStartRecommendations(recommendations) {
     </div>
   `).join('');
 }
+
+// Personalized Recommendations Horizontal Scroll Functions
+function scrollPersonalizedCards(direction) {
+  const container = document.getElementById('personalizedCards');
+  if (!container) return;
+  
+  const scrollAmount = 600; // Scroll 600px mỗi lần
+  const currentScroll = container.scrollLeft;
+  
+  if (direction === 'left') {
+    container.scrollTo({
+      left: currentScroll - scrollAmount,
+      behavior: 'smooth'
+    });
+  } else if (direction === 'right') {
+    container.scrollTo({
+      left: currentScroll + scrollAmount,
+      behavior: 'smooth'
+    });
+  }
+  
+  // Cập nhật trạng thái nút sau khi scroll
+  setTimeout(() => {
+    updateScrollButtons();
+  }, 300);
+}
+
+function updateScrollButtons() {
+  const container = document.getElementById('personalizedCards');
+  const leftBtn = document.getElementById('personalizedScrollLeft');
+  const rightBtn = document.getElementById('personalizedScrollRight');
+  
+  if (!container || !leftBtn || !rightBtn) return;
+  
+  const { scrollLeft, scrollWidth, clientWidth } = container;
+  const isAtStart = scrollLeft <= 10;
+  const isAtEnd = scrollLeft >= scrollWidth - clientWidth - 10;
+  
+  // Ẩn/hiện nút dựa trên vị trí scroll
+  if (isAtStart) {
+    leftBtn.classList.add('hidden');
+  } else {
+    leftBtn.classList.remove('hidden');
+  }
+  
+  if (isAtEnd) {
+    rightBtn.classList.add('hidden');
+  } else {
+    rightBtn.classList.remove('hidden');
+  }
+}
+
+// Khởi tạo scroll buttons khi trang load
+document.addEventListener('DOMContentLoaded', function() {
+  // Cập nhật trạng thái nút ban đầu
+  setTimeout(() => {
+    updateScrollButtons();
+  }, 500);
+  
+  // Lắng nghe sự kiện scroll để cập nhật nút
+  const container = document.getElementById('personalizedCards');
+  if (container) {
+    container.addEventListener('scroll', updateScrollButtons);
+    
+    // Cập nhật khi resize window
+    window.addEventListener('resize', () => {
+      setTimeout(updateScrollButtons, 100);
+    });
+  }
+});
 </script>
 {% endblock %}
 
