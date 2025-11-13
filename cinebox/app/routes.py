@@ -337,7 +337,7 @@ def get_cold_start_recommendations(user_id, conn):
         
         recommendations = []
         
-        # 1. Phim trending (được xem nhiều nhất)
+        # 1. Phim trending (được xem nhiều nhất) - loại bỏ phim đã xem
         trending_movies = conn.execute(text("""
             SELECT TOP 4
                 m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
@@ -354,9 +354,13 @@ def get_cold_start_recommendations(user_id, conn):
             FROM cine.Movie m
             LEFT JOIN cine.Rating r ON m.movieId = r.movieId
             WHERE m.viewCount > 0
+                AND NOT EXISTS (
+                    SELECT 1 FROM cine.ViewHistory vh 
+                    WHERE vh.movieId = m.movieId AND vh.userId = :user_id
+                )
             GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, m.country, m.viewCount
             ORDER BY m.viewCount DESC, avgRating DESC
-        """)).mappings().all()
+        """), {"user_id": user_id}).mappings().all()
         
         for movie in trending_movies:
             recommendations.append({
@@ -373,7 +377,7 @@ def get_cold_start_recommendations(user_id, conn):
                 "source": "trending"
             })
         
-        # 2. Phim mới nhất
+        # 2. Phim mới nhất - loại bỏ phim đã xem
         latest_movies = conn.execute(text("""
             SELECT TOP 4
                 m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
@@ -390,9 +394,13 @@ def get_cold_start_recommendations(user_id, conn):
             FROM cine.Movie m
             LEFT JOIN cine.Rating r ON m.movieId = r.movieId
             WHERE m.releaseYear >= YEAR(GETDATE()) - 2
+                AND NOT EXISTS (
+                    SELECT 1 FROM cine.ViewHistory vh 
+                    WHERE vh.movieId = m.movieId AND vh.userId = :user_id
+                )
             GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, m.country
             ORDER BY m.releaseYear DESC, avgRating DESC
-        """)).mappings().all()
+        """), {"user_id": user_id}).mappings().all()
         
         for movie in latest_movies:
             if movie["movieId"] not in [r["id"] for r in recommendations]:
@@ -410,7 +418,7 @@ def get_cold_start_recommendations(user_id, conn):
                     "source": "latest"
                 })
         
-        # 3. Phim có rating cao nhất
+        # 3. Phim có rating cao nhất - loại bỏ phim đã xem
         high_rated_movies = conn.execute(text("""
             SELECT TOP 4
                 m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
@@ -426,10 +434,14 @@ def get_cold_start_recommendations(user_id, conn):
                 ).value('.', 'NVARCHAR(MAX)'), 1, 2, '') as genres
             FROM cine.Movie m
             INNER JOIN cine.Rating r ON m.movieId = r.movieId
+            WHERE NOT EXISTS (
+                SELECT 1 FROM cine.ViewHistory vh 
+                WHERE vh.movieId = m.movieId AND vh.userId = :user_id
+            )
             GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, m.country
             HAVING COUNT(r.movieId) >= 10  -- Ít nhất 10 ratings
             ORDER BY avgRating DESC, ratingCount DESC
-        """)).mappings().all()
+        """), {"user_id": user_id}).mappings().all()
         
         for movie in high_rated_movies:
             if movie["movieId"] not in [r["id"] for r in recommendations]:
@@ -1008,13 +1020,19 @@ def home():
                 if cf_cb_weight > 0:
                     # ✅ TỐI ƯU: Chỉ lấy từ database, không generate mỗi request
                     # Ưu tiên hybrid recommendations, nếu không có thì lấy CF
+                    # ✅ LỌC: Loại bỏ phim đã xem khỏi recommendations
                     personal_rows = conn.execute(text("""
                         SELECT TOP 10 
                             m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
                             pr.score, pr.rank, pr.generatedAt, pr.algo
                         FROM cine.PersonalRecommendation pr
                         JOIN cine.Movie m ON m.movieId = pr.movieId
-                        WHERE pr.userId = :user_id AND pr.expiresAt > GETUTCDATE()
+                        WHERE pr.userId = :user_id 
+                            AND pr.expiresAt > GETUTCDATE()
+                            AND NOT EXISTS (
+                                SELECT 1 FROM cine.ViewHistory vh 
+                                WHERE vh.movieId = pr.movieId AND vh.userId = :user_id
+                            )
                         ORDER BY 
                             CASE WHEN pr.algo = 'hybrid' THEN 0 ELSE 1 END,  -- Ưu tiên hybrid trước
                             pr.rank
@@ -2058,6 +2076,19 @@ def watch(movie_id: int):
                     conn.execute(text("""
                         UPDATE cine.[User] SET lastLoginAt = GETDATE() WHERE userId = :user_id
                     """), {"user_id": user_id})
+                    
+                    # Xóa phim này khỏi recommendations đã lưu (nếu có)
+                    # Để đảm bảo phim đã xem không còn trong gợi ý
+                    conn.execute(text("""
+                        DELETE FROM cine.PersonalRecommendation 
+                        WHERE userId = :user_id AND movieId = :movie_id
+                    """), {"user_id": user_id, "movie_id": movie_id})
+                    
+                    # Cũng xóa khỏi ColdStartRecommendations nếu có
+                    conn.execute(text("""
+                        DELETE FROM cine.ColdStartRecommendations 
+                        WHERE userId = :user_id AND movieId = :movie_id
+                    """), {"user_id": user_id, "movie_id": movie_id})
                     
                 except Exception as e:
                     print(f"Error saving view history: {e}")
@@ -5300,6 +5331,19 @@ def model_status():
 
 # ==================== COLLABORATIVE FILTERING ENDPOINTS ====================
 
+def get_watched_movie_ids(user_id, conn):
+    """Lấy danh sách movieId của các phim đã xem bởi user"""
+    try:
+        result = conn.execute(text("""
+            SELECT DISTINCT movieId 
+            FROM cine.ViewHistory 
+            WHERE userId = :user_id
+        """), {"user_id": user_id})
+        return {row[0] for row in result}
+    except Exception as e:
+        current_app.logger.warning(f"Error getting watched movies for user {user_id}: {e}")
+        return set()
+
 @main_bp.route("/api/generate_recommendations", methods=["POST"])
 @login_required
 def generate_recommendations():
@@ -5334,6 +5378,21 @@ def generate_recommendations():
         # Kết hợp thành hybrid recommendations
         if not cf_recommendations and not cb_recommendations:
             return jsonify({"success": False, "message": "Không tìm thấy recommendations cho user này"})
+        
+        # Lấy danh sách phim đã xem để loại bỏ khỏi gợi ý
+        with current_app.db_engine.connect() as conn:
+            watched_movie_ids = get_watched_movie_ids(user_id, conn)
+        
+        # Lọc phim đã xem khỏi CF và CB recommendations
+        if watched_movie_ids:
+            cf_recommendations = [
+                rec for rec in cf_recommendations 
+                if (rec.get('movieId') or rec.get('id')) not in watched_movie_ids
+            ]
+            cb_recommendations = [
+                rec for rec in cb_recommendations 
+                if (rec.get('movieId') or rec.get('id')) not in watched_movie_ids
+            ]
         
         # Sử dụng hybrid recommendations với công tắc alpha (nếu có)
         if alpha is not None:
@@ -5456,10 +5515,11 @@ def get_recommendations():
                 FROM [cine].[PersonalRecommendation] pr
                 INNER JOIN [cine].[Movie] m ON pr.movieId = m.movieId
                 LEFT JOIN [cine].[Rating] r ON m.movieId = r.movieId
-                LEFT JOIN [cine].[MovieGenre] mg ON m.movieId = mg.movieId
+                LEFT JOIN [cine].[MovieGenre] mg ON pr.movieId = mg.movieId
                 LEFT JOIN [cine].[Genre] g ON mg.genreId = g.genreId
                 WHERE pr.userId = :user_id 
                     AND pr.expiresAt > GETDATE()
+                    AND pr.movieId NOT IN (SELECT DISTINCT movieId FROM cine.ViewHistory WHERE userId = :user_id)
                 GROUP BY pr.movieId, pr.score, pr.rank, pr.generatedAt, 
                          m.title, m.releaseYear, m.posterUrl, m.country
                 ORDER BY pr.rank
@@ -5886,6 +5946,47 @@ def user_data_status():
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
 
+@main_bp.route("/api/cleanup_watched_recommendations", methods=["POST"])
+@login_required
+def cleanup_watched_recommendations():
+    """Dọn dẹp recommendations chứa phim đã xem"""
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"success": False, "message": "Chưa đăng nhập"})
+        
+        with current_app.db_engine.begin() as conn:
+            # Xóa phim đã xem khỏi PersonalRecommendation
+            deleted_pr = conn.execute(text("""
+                DELETE FROM cine.PersonalRecommendation 
+                WHERE userId = :user_id 
+                    AND movieId IN (
+                        SELECT DISTINCT movieId 
+                        FROM cine.ViewHistory 
+                        WHERE userId = :user_id
+                    )
+            """), {"user_id": user_id}).rowcount
+            
+            # Xóa phim đã xem khỏi ColdStartRecommendations
+            deleted_csr = conn.execute(text("""
+                DELETE FROM cine.ColdStartRecommendations 
+                WHERE userId = :user_id 
+                    AND movieId IN (
+                        SELECT DISTINCT movieId 
+                        FROM cine.ViewHistory 
+                        WHERE userId = :user_id
+                    )
+            """), {"user_id": user_id}).rowcount
+        
+        return jsonify({
+            "success": True,
+            "message": f"Đã xóa {deleted_pr} recommendations cá nhân và {deleted_csr} cold start recommendations chứa phim đã xem"
+        })
+        
+    except Exception as e:
+        current_app.logger.error(f"Error cleaning up watched recommendations: {e}", exc_info=True)
+        return jsonify({"success": False, "message": f"Có lỗi xảy ra: {str(e)}"})
+
 @main_bp.route("/api/personalized_recommendations")
 @login_required
 def get_personalized_recommendations():
@@ -5921,6 +6022,7 @@ def get_personalized_recommendations():
                     WHERE pr.userId = :user_id 
                         AND pr.algo = 'hybrid'
                         AND pr.expiresAt > GETUTCDATE()
+                        AND pr.movieId NOT IN (SELECT DISTINCT movieId FROM cine.ViewHistory WHERE userId = :user_id)
                     GROUP BY pr.movieId, pr.score, pr.rank, 
                              m.title, m.releaseYear, m.posterUrl, m.country
                     ORDER BY pr.rank
@@ -5966,6 +6068,10 @@ def get_personalized_recommendations():
         
         current_app.logger.info(f"Generating new hybrid recommendations for user {user_id}")
         
+        # Lấy danh sách phim đã xem để loại bỏ khỏi gợi ý
+        with current_app.db_engine.connect() as conn:
+            watched_movie_ids = get_watched_movie_ids(user_id, conn)
+        
         # Lấy CF recommendations
         cf_recommendations = []
         if enhanced_cf_recommender and enhanced_cf_recommender.is_model_loaded():
@@ -5981,6 +6087,17 @@ def get_personalized_recommendations():
                 cb_recommendations = content_recommender.get_user_recommendations(user_id, limit=limit * 2)
             except Exception as e:
                 current_app.logger.warning(f"CB recommendations failed for user {user_id}: {e}")
+        
+        # Lọc phim đã xem khỏi CF và CB recommendations
+        if watched_movie_ids:
+            cf_recommendations = [
+                rec for rec in cf_recommendations 
+                if (rec.get('movieId') or rec.get('id')) not in watched_movie_ids
+            ]
+            cb_recommendations = [
+                rec for rec in cb_recommendations 
+                if (rec.get('movieId') or rec.get('id')) not in watched_movie_ids
+            ]
         
         # Generate hybrid recommendations với công tắc alpha (nếu có)
         if cf_recommendations or cb_recommendations:
@@ -6119,7 +6236,9 @@ def get_cold_start_recommendations_api():
                     LEFT JOIN cine.Rating r ON m.movieId = r.movieId
                     LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
                     LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
-                    WHERE csr.userId = :user_id AND csr.expiresAt > GETUTCDATE()
+                    WHERE csr.userId = :user_id 
+                        AND csr.expiresAt > GETUTCDATE()
+                        AND csr.movieId NOT IN (SELECT DISTINCT movieId FROM cine.ViewHistory WHERE userId = :user_id)
                     GROUP BY csr.movieId, csr.score, csr.rank, csr.source, csr.reason,
                              m.title, m.posterUrl, m.releaseYear, m.country
                     ORDER BY csr.rank
