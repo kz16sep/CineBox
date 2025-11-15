@@ -142,7 +142,9 @@
     <div class="pagination-controls">
       {% if pagination.has_prev %}
         <a href="{{ url_for('main.admin_users', page=pagination.prev_num, q=search_query) }}" 
-           class="btn btn-secondary">‹ Trước</a>
+           class="btn-pagination">← Trang trước</a>
+      {% else %}
+        <span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">← Trang trước</span>
       {% endif %}
       
       <span class="page-info">
@@ -151,7 +153,9 @@
       
       {% if pagination.has_next %}
         <a href="{{ url_for('main.admin_users', page=pagination.next_num, q=search_query) }}" 
-           class="btn btn-secondary">Tiếp ›</a>
+           class="btn-pagination">Trang sau →</a>
+      {% else %}
+        <span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">Trang sau →</span>
       {% endif %}
     </div>
   </div>

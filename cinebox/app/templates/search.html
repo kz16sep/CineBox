@@ -84,42 +84,21 @@
           
           <div class="pagination-controls">
             {% if pagination.has_prev %}
-              <a href="{{ url_for('main.search', q=query, page=pagination.prev_num) }}" class="btn btn-pagination">
+              <a href="{{ url_for('main.search', q=query, page=pagination.prev_num) }}" class="btn-pagination">
                 ← Trang trước
               </a>
+            {% else %}
+              <span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">← Trang trước</span>
             {% endif %}
             
-            <div class="page-numbers">
-              {% set start_page = [1, pagination.page - 2]|max %}
-              {% set end_page = [pagination.pages, pagination.page + 2]|min %}
-              
-              {% if start_page > 1 %}
-                <a href="{{ url_for('main.search', q=query, page=1) }}" class="page-number">1</a>
-                {% if start_page > 2 %}
-                  <span class="page-ellipsis">...</span>
-                {% endif %}
-              {% endif %}
-              
-              {% for page_num in range(start_page, end_page + 1) %}
-                {% if page_num == pagination.page %}
-                  <span class="page-number current">{{ page_num }}</span>
-                {% else %}
-                  <a href="{{ url_for('main.search', q=query, page=page_num) }}" class="page-number">{{ page_num }}</a>
-                {% endif %}
-              {% endfor %}
-              
-              {% if end_page < pagination.pages %}
-                {% if end_page < pagination.pages - 1 %}
-                  <span class="page-ellipsis">...</span>
-                {% endif %}
-                <a href="{{ url_for('main.search', q=query, page=pagination.pages) }}" class="page-number">{{ pagination.pages }}</a>
-              {% endif %}
-            </div>
+            <span class="page-info">Trang {{ pagination.page }} / {{ pagination.pages }}</span>
             
             {% if pagination.has_next %}
-              <a href="{{ url_for('main.search', q=query, page=pagination.next_num) }}" class="btn btn-pagination">
+              <a href="{{ url_for('main.search', q=query, page=pagination.next_num) }}" class="btn-pagination">
                 Trang sau →
               </a>
+            {% else %}
+              <span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">Trang sau →</span>
             {% endif %}
           </div>
         </div>

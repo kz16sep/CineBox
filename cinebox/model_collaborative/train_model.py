@@ -306,8 +306,21 @@ class CollaborativeFilteringTrainer:
             return False
     
     def train_full_pipeline(self, sample_size=None, n_factors=50, iterations=15, 
-                           min_interactions=1, model_path=None):
-        """Complete training pipeline"""
+                           min_interactions=1, model_path=None, evaluate=True, 
+                           eval_k=10, eval_sample_users=100):
+        """
+        Complete training pipeline
+        
+        Args:
+            sample_size: Kích thước sample (None = all data)
+            n_factors: Số latent factors
+            iterations: Số iterations
+            min_interactions: Số interactions tối thiểu
+            model_path: Đường dẫn lưu model
+            evaluate: Có đánh giá mô hình sau khi train không
+            eval_k: K cho Precision/Recall
+            eval_sample_users: Số users để đánh giá
+        """
         try:
             logger.info("="*60)
             logger.info("Starting Collaborative Filtering Training Pipeline")
@@ -318,6 +331,7 @@ class CollaborativeFilteringTrainer:
             logger.info(f"  - Iterations: {iterations}")
             logger.info(f"  - Min interactions: {min_interactions}")
             logger.info(f"  - Interaction weights: {self.interaction_weights}")
+            logger.info(f"  - Evaluate after training: {evaluate}")
             logger.info("="*60)
             
             # Load data
@@ -337,12 +351,36 @@ class CollaborativeFilteringTrainer:
             if model_data is None:
                 return False
             
+            # Store model data for evaluation
+            self.user_factors = model_data['user_factors']
+            self.item_factors = model_data['item_factors']
+            self.user_mapping = model_data['user_mapping']
+            self.item_mapping = model_data['item_mapping']
+            self.reverse_user_mapping = model_data['reverse_user_mapping']
+            self.reverse_item_mapping = model_data['reverse_item_mapping']
+            
             # Save model
             if self.save_model(model_data, model_path):
                 logger.info("="*60)
                 logger.info("Training completed successfully!")
                 logger.info(f"Model saved to: {model_path if model_path else 'enhanced_cf_model.pkl'}")
                 logger.info("="*60)
+                
+                # Evaluate model if requested
+                if evaluate:
+                    try:
+                        eval_results = self.evaluate_model(
+                            test_size=0.2,
+                            k=eval_k,
+                            sample_users=eval_sample_users
+                        )
+                        if eval_results:
+                            logger.info("\nModel Evaluation Summary:")
+                            for metric, value in eval_results.items():
+                                logger.info(f"  {metric}: {value:.4f}")
+                    except Exception as e:
+                        logger.warning(f"Evaluation failed: {e}")
+                
                 return True
             else:
                 return False
@@ -353,6 +391,75 @@ class CollaborativeFilteringTrainer:
             import traceback
             traceback.print_exc()
             return False
+    
+    def evaluate_model(self, test_size: float = 0.2, k: int = 10, sample_users: int = 100):
+        """
+        Đánh giá hiệu suất mô hình sau khi training
+        
+        Args:
+            test_size: Tỷ lệ dữ liệu test (0.0 - 1.0)
+            k: Số lượng recommendations cho Precision/Recall
+            sample_users: Số lượng users để tính Precision/Recall
+            
+        Returns:
+            Dict[str, float]: Dictionary chứa các metrics
+        """
+        try:
+            # Import evaluator
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            cinebox_dir = os.path.dirname(script_dir)
+            project_dir = os.path.dirname(cinebox_dir)
+            
+            for dir_path in [project_dir, cinebox_dir]:
+                if dir_path not in sys.path:
+                    sys.path.insert(0, dir_path)
+            
+            try:
+                # Try different import paths
+                try:
+                    from cinebox.model_evaluation import ModelEvaluator
+                except ImportError:
+                    try:
+                        from model_evaluation import ModelEvaluator
+                    except ImportError:
+                        # Last resort: direct import
+                        import importlib.util
+                        eval_path = os.path.join(cinebox_dir, 'model_evaluation', 'evaluate_model.py')
+                        spec = importlib.util.spec_from_file_location("evaluate_model", eval_path)
+                        eval_module = importlib.util.module_from_spec(spec)
+                        spec.loader.exec_module(eval_module)
+                        ModelEvaluator = eval_module.ModelEvaluator
+            except ImportError as e:
+                logger.warning(f"Model evaluation module not found: {e}, skipping evaluation")
+                return {}
+            
+            logger.info("="*60)
+            logger.info("EVALUATING MODEL PERFORMANCE")
+            logger.info("="*60)
+            
+            # Initialize evaluator
+            evaluator = ModelEvaluator(self.db_engine, model_path=None)
+            
+            # Load model data vào evaluator
+            evaluator.user_factors = self.user_factors
+            evaluator.item_factors = self.item_factors
+            evaluator.user_mapping = self.user_mapping
+            evaluator.item_mapping = self.item_mapping
+            evaluator.reverse_user_mapping = self.reverse_user_mapping
+            evaluator.reverse_item_mapping = self.reverse_item_mapping
+            
+            # Evaluate
+            results = evaluator.evaluate_all_metrics(
+                test_data=None,
+                k=k,
+                sample_users=sample_users
+            )
+            
+            return results
+            
+        except Exception as e:
+            logger.warning(f"Error evaluating model: {e}")
+            return {}
 
 
 def main():

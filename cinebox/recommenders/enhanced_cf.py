@@ -14,6 +14,8 @@ import logging
 from datetime import datetime
 import pickle
 from typing import List, Dict, Tuple, Optional
+import threading
+import time
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -24,7 +26,7 @@ class EnhancedCFRecommender:
     Sử dụng tất cả dữ liệu tương tác với trọng số và time decay
     """
     
-    def __init__(self, db_engine, model_path: str = None):
+    def __init__(self, db_engine, model_path: str = None, lazy_load: bool = True, background_load: bool = True):
         self.db_engine = db_engine
         
         if model_path is None:
@@ -55,6 +57,13 @@ class EnhancedCFRecommender:
         self.user_item_matrix = None
         self.model_loaded = False
         
+        # Loading state management
+        self._loading = False
+        self._load_lock = threading.Lock()
+        self._load_error = None
+        self._lazy_load = lazy_load
+        self._background_load = background_load
+        
         # Interaction weights for scoring (Updated weights)
         self.interaction_weights = {
             'view_history': 1.0,   # Completed View ≥70% - Tín hiệu mạnh nhất
@@ -65,23 +74,93 @@ class EnhancedCFRecommender:
             'cold_start': 0.05
         }
         
-        # Load model if exists
-        self.load_model()
+        # Load model based on strategy
+        if not lazy_load:
+            # Immediate loading (blocking)
+            self.load_model()
+        elif background_load:
+            # Background loading (non-blocking)
+            self._start_background_load()
+        # else: lazy_load=True and background_load=False -> load on first use
+    
+    def _start_background_load(self):
+        """Start loading model in background thread"""
+        def background_loader():
+            try:
+                logger.info("Starting background model loading...")
+                self.load_model()
+                logger.info("Background model loading completed")
+            except Exception as e:
+                logger.error(f"Background model loading failed: {e}")
+        
+        thread = threading.Thread(target=background_loader, daemon=True)
+        thread.start()
+        logger.info("Background model loading thread started")
+    
+    def _ensure_model_loaded(self) -> bool:
+        """Ensure model is loaded (lazy loading)"""
+        if self.model_loaded:
+            return True
+        
+        # Check if loading in progress
+        with self._load_lock:
+            if self._loading:
+                # Wait for loading to complete (with timeout)
+                timeout = 30  # 30 seconds timeout
+                start_time = time.time()
+                while self._loading and (time.time() - start_time) < timeout:
+                    time.sleep(0.1)
+                return self.model_loaded
+            
+            # Start loading if not already loading
+            if not self.model_loaded:
+                self._loading = True
+                try:
+                    return self.load_model()
+                finally:
+                    self._loading = False
+        
+        return self.model_loaded
     
     def load_model(self) -> bool:
-        """Load collaborative filtering model"""
+        """Load collaborative filtering model (thread-safe)"""
+        # Thread-safe check
+        with self._load_lock:
+            if self.model_loaded:
+                logger.debug("Model already loaded, skipping")
+                return True
+            
+            if self._loading:
+                logger.warning("Model loading already in progress")
+                return False
+            
+            self._loading = True
+            self._load_error = None
+        
         try:
-            print(f"Looking for model at: {self.model_path}")
-            print(f"Current working directory: {os.getcwd()}")
-            print(f"Model exists: {os.path.exists(self.model_path)}")
+            start_time = time.time()
+            logger.info(f"Loading CF model from: {self.model_path}")
             
             if not os.path.exists(self.model_path):
                 logger.warning(f"Model file not found: {self.model_path}")
+                self._load_error = "Model file not found"
                 return False
             
+            # Get file size for logging
+            file_size = os.path.getsize(self.model_path)
+            file_size_mb = file_size / (1024 * 1024)
+            logger.info(f"Model file size: {file_size_mb:.2f} MB")
+            
+            # Load model with optimized pickle protocol
+            logger.info("Reading model file...")
             with open(self.model_path, 'rb') as f:
                 model_data = pickle.load(f)
             
+            load_time = time.time() - start_time
+            logger.info(f"Model file read in {load_time:.2f} seconds")
+            
+            # Extract model data
+            logger.info("Extracting model data...")
             self.user_factors = model_data['user_factors']
             self.item_factors = model_data['item_factors']
             self.user_similarity_matrix = model_data.get('user_similarity_matrix', None)
@@ -95,13 +174,43 @@ class EnhancedCFRecommender:
             if 'interaction_weights' in model_data:
                 self.interaction_weights = model_data['interaction_weights']
             
+            total_time = time.time() - start_time
+            logger.info(f"Collaborative filtering model loaded successfully in {total_time:.2f} seconds")
+            logger.info(f"Model stats: {len(self.user_mapping)} users, {len(self.item_mapping)} items")
+            
             self.model_loaded = True
-            logger.info(f"Collaborative filtering model loaded successfully from {self.model_path}")
+            self._load_error = None
             return True
             
         except Exception as e:
-            logger.error(f"Error loading collaborative model: {e}")
+            error_msg = f"Error loading collaborative model: {e}"
+            logger.error(error_msg, exc_info=True)
+            self._load_error = str(e)
+            self.model_loaded = False
             return False
+        finally:
+            with self._load_lock:
+                self._loading = False
+    
+    def reload_model(self) -> bool:
+        """Reload model from disk (useful when model file is updated)"""
+        logger.info("Reloading CF model...")
+        with self._load_lock:
+            # Reset state
+            self.model_loaded = False
+            self.user_factors = None
+            self.item_factors = None
+            self.user_similarity_matrix = None
+            self.item_similarity_matrix = None
+            self.user_mapping = {}
+            self.item_mapping = {}
+            self.reverse_user_mapping = {}
+            self.reverse_item_mapping = {}
+            self.user_item_matrix = None
+            self._load_error = None
+        
+        # Load model
+        return self.load_model()
     
     def calculate_time_decay(self, timestamp, half_life_days=30):
         """
@@ -179,8 +288,23 @@ class EnhancedCFRecommender:
     
     def get_model_info(self):
         """Get model information"""
-        if not self.is_model_loaded():
-            return {"status": "Not loaded", "message": "Model not loaded"}
+        # Try to load model if not loaded
+        if not self.model_loaded:
+            if self._loading:
+                return {
+                    "status": "Loading",
+                    "message": "Model is currently being loaded in background"
+                }
+            elif self._load_error:
+                return {
+                    "status": "Error",
+                    "message": f"Model loading failed: {self._load_error}"
+                }
+            else:
+                return {
+                    "status": "Not loaded",
+                    "message": "Model not loaded (lazy loading enabled)"
+                }
         
         try:
             info = {
@@ -210,9 +334,11 @@ class EnhancedCFRecommender:
         
         Lấy danh sách phim được recommend cho user với time decay
         """
+        # Lazy load model if needed
         if not self.model_loaded:
-            logger.error("Model not loaded")
-            return []
+            if not self._ensure_model_loaded():
+                logger.error(f"Model not loaded and failed to load: {self._load_error}")
+                return []
         
         # Kiểm tra model data có sẵn không
         if self.user_factors is None or self.item_factors is None:
@@ -454,9 +580,11 @@ class EnhancedCFRecommender:
         Returns:
             List[Dict]: Danh sách similar users với thông tin chi tiết
         """
+        # Lazy load model if needed
         if not self.model_loaded:
-            logger.error("Model not loaded")
-            return []
+            if not self._ensure_model_loaded():
+                logger.error(f"Model not loaded and failed to load: {self._load_error}")
+                return []
         
         try:
             if user_id not in self.user_mapping:
@@ -514,9 +642,11 @@ class EnhancedCFRecommender:
         Returns:
             List[Dict]: Danh sách similar movies với thông tin chi tiết
         """
+        # Lazy load model if needed
         if not self.model_loaded:
-            logger.error("Model not loaded")
-            return []
+            if not self._ensure_model_loaded():
+                logger.error(f"Model not loaded and failed to load: {self._load_error}")
+                return []
         
         try:
             if movie_id not in self.item_mapping:
@@ -778,4 +908,14 @@ class EnhancedCFRecommender:
     def is_model_loaded(self) -> bool:
         """Kiểm tra xem model đã được load chưa"""
         return self.model_loaded
+    
+    def get_loading_status(self) -> Dict:
+        """Get detailed loading status"""
+        return {
+            "loaded": self.model_loaded,
+            "loading": self._loading,
+            "error": self._load_error,
+            "model_path": self.model_path,
+            "model_exists": os.path.exists(self.model_path) if self.model_path else False
+        }
 

@@ -123,44 +123,48 @@
 {% if not genre_filter %}
 <section>
   <h3>🆕 Phim mới nhất</h3>
-  <div class="cards">
-    {% for m in latest_movies %}
-    <div class="card">
-      <a href="{{ url_for('main.detail', movie_id=m.id) }}" class="card-link">
-        <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
-        <div class="card-content">
-          <div class="card-title">{{ m.title }}</div>
-          <div class="card-meta">
-            {% if m.releaseYear %}<span class="year">{{ m.releaseYear }}</span>{% endif %}
-            {% if m.country %}<span class="country">{{ m.country }}</span>{% endif %}
-          </div>
-          {% if m.genres %}<div class="card-genres">{{ m.genres }}</div>{% endif %}
-          <div class="movie-rating" data-movie-id="{{ m.id }}">
-            <span class="rating-stars">
-              {% if m.avgRating and m.avgRating > 0 %}
-                ⭐ {{ "%.1f"|format(m.avgRating) }}
-              {% else %}
-                ⭐ 0.0
+  <div class="horizontal-scroll-wrapper">
+    <button class="scroll-btn scroll-btn-left" onclick="scrollHorizontal('latestMovies', 'left')" aria-label="Cuộn trái">‹</button>
+    <div class="horizontal-scroll-cards" id="latestMovies">
+      {% for m in latest_movies %}
+      <div class="card">
+        <a href="{{ url_for('main.detail', movie_id=m.id) }}" class="card-link">
+          <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
+          <div class="card-content">
+            <div class="card-title">{{ m.title }}</div>
+            <div class="card-meta">
+              {% if m.releaseYear %}<span class="year">{{ m.releaseYear }}</span>{% endif %}
+              {% if m.country %}<span class="country">{{ m.country }}</span>{% endif %}
+            </div>
+            {% if m.genres %}<div class="card-genres">{{ m.genres }}</div>{% endif %}
+            <div class="movie-rating" data-movie-id="{{ m.id }}">
+              <span class="rating-stars">
+                {% if m.avgRating and m.avgRating > 0 %}
+                  ⭐ {{ "%.1f"|format(m.avgRating) }}
+                {% else %}
+                  ⭐ 0.0
+                {% endif %}
+              </span>
+              {% if m.viewCount and m.viewCount > 0 %}
+              <span class="view-count" style="margin-left: 8px; color: #888; font-size: 0.9em;">
+                👁️ {{ m.viewCount }}
+              </span>
               {% endif %}
-            </span>
-            {% if m.viewCount and m.viewCount > 0 %}
-            <span class="view-count" style="margin-left: 8px; color: #888; font-size: 0.9em;">
-              👁️ {{ m.viewCount }}
-            </span>
-            {% endif %}
+            </div>
           </div>
+        </a>
+        <div class="action-buttons">
+          <button class="watchlist-btn" onclick="toggleWatchlist({{ m.id }}, event)" data-movie-id="{{ m.id }}">
+            <span class="watchlist-icon">📋</span>
+          </button>
+          <button class="favorite-btn" onclick="toggleFavorite({{ m.id }}, event)" data-movie-id="{{ m.id }}">
+            <span class="favorite-icon">🤍</span>
+          </button>
         </div>
-      </a>
-      <div class="action-buttons">
-        <button class="watchlist-btn" onclick="toggleWatchlist({{ m.id }}, event)" data-movie-id="{{ m.id }}">
-          <span class="watchlist-icon">📋</span>
-        </button>
-        <button class="favorite-btn" onclick="toggleFavorite({{ m.id }}, event)" data-movie-id="{{ m.id }}">
-          <span class="favorite-icon">🤍</span>
-        </button>
       </div>
+      {% endfor %}
     </div>
-    {% endfor %}
+    <button class="scroll-btn scroll-btn-right" onclick="scrollHorizontal('latestMovies', 'right')" aria-label="Cuộn phải">›</button>
   </div>
 </section>
 {% endif %}
@@ -175,8 +179,12 @@
       <span class="interaction-count" id="interactionCount">Đang kiểm tra...</span>
     </div>
   </div>
-  <div class="cards" id="coldStartRecommendations">
-    <!-- Cold Start recommendations sẽ được load bằng JavaScript -->
+  <div class="horizontal-scroll-wrapper">
+    <button class="scroll-btn scroll-btn-left" onclick="scrollHorizontal('coldStartRecommendations', 'left')" aria-label="Cuộn trái">‹</button>
+    <div class="horizontal-scroll-cards" id="coldStartRecommendations">
+      <!-- Cold Start recommendations sẽ được load bằng JavaScript -->
+    </div>
+    <button class="scroll-btn scroll-btn-right" onclick="scrollHorizontal('coldStartRecommendations', 'right')" aria-label="Cuộn phải">›</button>
   </div>
   <div class="cold-start-loading" id="coldStartLoading" style="text-align: center; padding: 20px; display: none;">
     <div class="loading-spinner">⏳</div>
@@ -271,57 +279,61 @@
     <h3>📺 Xem gần đây</h3>
     <p class="section-subtitle">Tiếp tục xem phim của bạn</p>
   </div>
-  <div class="cards">
-    {% for m in recent_watched %}
-    <div class="card">
-      <a href="{{ url_for('main.detail', movie_id=m.id) }}" class="card-link">
-        <div class="poster" style="background-image:url('{{ m.poster }}')">
-          <!-- Badge hiển thị trạng thái hoàn thành -->
-          {% if m.isCompleted %}
-          <div class="completed-badge" style="position: absolute; top: 8px; right: 8px; background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%); color: white; padding: 4px 8px; border-radius: 12px; font-size: 0.7rem; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">
-            ✅ Hoàn thành
-          </div>
-          {% elif m.progressPercent > 0 %}
-          <div class="progress-badge" style="position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.7); color: white; padding: 4px 8px; border-radius: 12px; font-size: 0.7rem; font-weight: bold;">
-            {{ "%.0f"|format(m.progressPercent) }}%
-          </div>
-          {% endif %}
-        </div>
-        <div class="card-content">
-          <div class="card-title">{{ m.title }}</div>
-          <div class="card-meta">
-            {% if m.releaseYear %}<span class="year">{{ m.releaseYear }}</span>{% endif %}
-            {% if m.country %}<span class="country">{{ m.country }}</span>{% endif %}
-          </div>
-          {% if m.genres %}<div class="card-genres">{{ m.genres }}</div>{% endif %}
-          <div class="watch-info" style="margin-top: 8px; padding: 8px; background: rgba(0,0,0,0.1); border-radius: 4px; font-size: 0.75rem;">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <div>
-                <strong>📊 Đã xem:</strong> 
-                <span style="color: #4CAF50; font-weight: bold;">{{ m.watchCount }} lần</span>
-              </div>
-              {% if m.progressPercent > 0 and not m.isCompleted %}
-              <span style="color: #FF9800;">⏳ {{ "%.0f"|format(m.progressPercent) }}%</span>
-              {% endif %}
+  <div class="horizontal-scroll-wrapper">
+    <button class="scroll-btn scroll-btn-left" onclick="scrollHorizontal('recentWatched', 'left')" aria-label="Cuộn trái">‹</button>
+    <div class="horizontal-scroll-cards" id="recentWatched">
+      {% for m in recent_watched %}
+      <div class="card">
+        <a href="{{ url_for('main.detail', movie_id=m.id) }}" class="card-link">
+          <div class="poster" style="background-image:url('{{ m.poster }}')">
+            <!-- Badge hiển thị trạng thái hoàn thành -->
+            {% if m.isCompleted %}
+            <div class="completed-badge" style="position: absolute; top: 8px; right: 8px; background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%); color: white; padding: 4px 8px; border-radius: 12px; font-size: 0.7rem; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">
+              ✅ Hoàn thành
             </div>
-            {% if m.lastWatchedAt %}
-            <div style="margin-top: 4px; color: #999; font-size: 0.7rem;">
-              🕒 Xem lần cuối: {{ m.lastWatchedAt.strftime('%d/%m/%Y %H:%M') if m.lastWatchedAt else 'N/A' }}
+            {% elif m.progressPercent > 0 %}
+            <div class="progress-badge" style="position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.7); color: white; padding: 4px 8px; border-radius: 12px; font-size: 0.7rem; font-weight: bold;">
+              {{ "%.0f"|format(m.progressPercent) }}%
             </div>
             {% endif %}
           </div>
+          <div class="card-content">
+            <div class="card-title">{{ m.title }}</div>
+            <div class="card-meta">
+              {% if m.releaseYear %}<span class="year">{{ m.releaseYear }}</span>{% endif %}
+              {% if m.country %}<span class="country">{{ m.country }}</span>{% endif %}
+            </div>
+            {% if m.genres %}<div class="card-genres">{{ m.genres }}</div>{% endif %}
+            <div class="watch-info" style="margin-top: 8px; padding: 8px; background: rgba(0,0,0,0.1); border-radius: 4px; font-size: 0.75rem;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <strong>📊 Đã xem:</strong> 
+                  <span style="color: #4CAF50; font-weight: bold;">{{ m.watchCount }} lần</span>
+                </div>
+                {% if m.progressPercent > 0 and not m.isCompleted %}
+                <span style="color: #FF9800;">⏳ {{ "%.0f"|format(m.progressPercent) }}%</span>
+                {% endif %}
+              </div>
+              {% if m.lastWatchedAt %}
+              <div style="margin-top: 4px; color: #999; font-size: 0.7rem;">
+                🕒 Xem lần cuối: {{ m.lastWatchedAt.strftime('%d/%m/%Y %H:%M') if m.lastWatchedAt else 'N/A' }}
+              </div>
+              {% endif %}
+            </div>
+          </div>
+        </a>
+        <div class="action-buttons">
+          <button class="watchlist-btn" onclick="toggleWatchlist({{ m.id }}, event)" data-movie-id="{{ m.id }}">
+            <span class="watchlist-icon">📋</span>
+          </button>
+          <button class="favorite-btn" onclick="toggleFavorite({{ m.id }}, event)" data-movie-id="{{ m.id }}">
+            <span class="favorite-icon">🤍</span>
+          </button>
         </div>
-      </a>
-      <div class="action-buttons">
-        <button class="watchlist-btn" onclick="toggleWatchlist({{ m.id }}, event)" data-movie-id="{{ m.id }}">
-          <span class="watchlist-icon">📋</span>
-        </button>
-        <button class="favorite-btn" onclick="toggleFavorite({{ m.id }}, event)" data-movie-id="{{ m.id }}">
-          <span class="favorite-icon">🤍</span>
-        </button>
       </div>
+      {% endfor %}
     </div>
-    {% endfor %}
+    <button class="scroll-btn scroll-btn-right" onclick="scrollHorizontal('recentWatched', 'right')" aria-label="Cuộn phải">›</button>
   </div>
 </section>
 {% endif %}
@@ -333,44 +345,48 @@
     <h3>🔥 Phim đang thịnh hành</h3>
     <p class="section-subtitle">Những bộ phim được đánh giá nhiều nhất</p>
   </div>
-  <div class="cards">
-    {% for m in trending_movies %}
-    <div class="card">
-      <a href="{{ url_for('main.detail', movie_id=m.id) }}" class="card-link">
-        <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
-        <div class="card-content">
-          <div class="card-title">{{ m.title }}</div>
-          <div class="card-meta">
-            {% if m.releaseYear %}<span class="year">{{ m.releaseYear }}</span>{% endif %}
-            {% if m.country %}<span class="country">{{ m.country }}</span>{% endif %}
-          </div>
-          {% if m.genres %}<div class="card-genres">{{ m.genres }}</div>{% endif %}
-          <div class="movie-rating" data-movie-id="{{ m.id }}">
-            <span class="rating-stars">
-              {% if m.avgRating and m.avgRating > 0 %}
-                ⭐ {{ "%.1f"|format(m.avgRating) }}
-              {% else %}
-                ⭐ 0.0
+  <div class="horizontal-scroll-wrapper">
+    <button class="scroll-btn scroll-btn-left" onclick="scrollHorizontal('trendingMovies', 'left')" aria-label="Cuộn trái">‹</button>
+    <div class="horizontal-scroll-cards" id="trendingMovies">
+      {% for m in trending_movies %}
+      <div class="card">
+        <a href="{{ url_for('main.detail', movie_id=m.id) }}" class="card-link">
+          <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
+          <div class="card-content">
+            <div class="card-title">{{ m.title }}</div>
+            <div class="card-meta">
+              {% if m.releaseYear %}<span class="year">{{ m.releaseYear }}</span>{% endif %}
+              {% if m.country %}<span class="country">{{ m.country }}</span>{% endif %}
+            </div>
+            {% if m.genres %}<div class="card-genres">{{ m.genres }}</div>{% endif %}
+            <div class="movie-rating" data-movie-id="{{ m.id }}">
+              <span class="rating-stars">
+                {% if m.avgRating and m.avgRating > 0 %}
+                  ⭐ {{ "%.1f"|format(m.avgRating) }}
+                {% else %}
+                  ⭐ 0.0
+                {% endif %}
+              </span>
+              {% if m.viewCount and m.viewCount > 0 %}
+              <span class="view-count" style="margin-left: 8px; color: #888; font-size: 0.9em;">
+                👁️ {{ m.viewCount }}
+              </span>
               {% endif %}
-            </span>
-            {% if m.viewCount and m.viewCount > 0 %}
-            <span class="view-count" style="margin-left: 8px; color: #888; font-size: 0.9em;">
-              👁️ {{ m.viewCount }}
-            </span>
-            {% endif %}
+            </div>
           </div>
+        </a>
+        <div class="action-buttons">
+          <button class="watchlist-btn" onclick="toggleWatchlist({{ m.id }}, event)" data-movie-id="{{ m.id }}">
+            <span class="watchlist-icon">📋</span>
+          </button>
+          <button class="favorite-btn" onclick="toggleFavorite({{ m.id }}, event)" data-movie-id="{{ m.id }}">
+            <span class="favorite-icon">🤍</span>
+          </button>
         </div>
-      </a>
-      <div class="action-buttons">
-        <button class="watchlist-btn" onclick="toggleWatchlist({{ m.id }}, event)" data-movie-id="{{ m.id }}">
-          <span class="watchlist-icon">📋</span>
-        </button>
-        <button class="favorite-btn" onclick="toggleFavorite({{ m.id }}, event)" data-movie-id="{{ m.id }}">
-          <span class="favorite-icon">🤍</span>
-        </button>
       </div>
+      {% endfor %}
     </div>
-    {% endfor %}
+    <button class="scroll-btn scroll-btn-right" onclick="scrollHorizontal('trendingMovies', 'right')" aria-label="Cuộn phải">›</button>
   </div>
 </section>
 {% endif %}
@@ -384,7 +400,12 @@
     {% elif genre_filter %}
       <h3>🎬 Phim {{ genre_filter }}</h3>
     {% else %}
-      <h3>🎬 Tất cả phim</h3>
+      <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+        <h3>🎬 Tất cả phim</h3>
+        <a href="{{ url_for('main.all_movies') }}" class="btn-view-all">
+          Xem tất cả →
+        </a>
+      </div>
     {% endif %}
   </div>
   
@@ -438,49 +459,28 @@
   <!-- Pagination -->
   {% if pagination and pagination.pages > 1 %}
   <div class="pagination">
-    <div class="pagination-info page-info">
+    <div class="pagination-info">
       <span>Trang {{ pagination.page }} / {{ pagination.pages }}</span>
       <span>({{ pagination.total }} phim)</span>
     </div>
     
     <div class="pagination-controls">
       {% if pagination.has_prev %}
-        <a href="{{ url_for('main.home', page=pagination.prev_num, q=search_query, genre=genre_filter) }}" class="btn btn-pagination">
+        <a href="{{ url_for('main.home', page=pagination.prev_num, q=search_query, genre=genre_filter) }}" class="btn-pagination">
           ← Trang trước
         </a>
+      {% else %}
+        <span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">← Trang trước</span>
       {% endif %}
       
-      <div class="page-numbers">
-        {% set start_page = [1, pagination.page - 2]|max %}
-        {% set end_page = [pagination.pages, pagination.page + 2]|min %}
-        
-        {% if start_page > 1 %}
-          <a href="{{ url_for('main.home', page=1, q=search_query, genre=genre_filter) }}" class="page-number">1</a>
-          {% if start_page > 2 %}
-            <span class="page-ellipsis">...</span>
-          {% endif %}
-        {% endif %}
-        
-        {% for page_num in range(start_page, end_page + 1) %}
-          {% if page_num == pagination.page %}
-            <span class="page-number current">{{ page_num }}</span>
-          {% else %}
-            <a href="{{ url_for('main.home', page=page_num, q=search_query, genre=genre_filter) }}" class="page-number">{{ page_num }}</a>
-          {% endif %}
-        {% endfor %}
-        
-        {% if end_page < pagination.pages %}
-          {% if end_page < pagination.pages - 1 %}
-            <span class="page-ellipsis">...</span>
-          {% endif %}
-          <a href="{{ url_for('main.home', page=pagination.pages, q=search_query, genre=genre_filter) }}" class="page-number">{{ pagination.pages }}</a>
-        {% endif %}
-      </div>
+      <span class="page-info">Trang {{ pagination.page }} / {{ pagination.pages }}</span>
       
       {% if pagination.has_next %}
-        <a href="{{ url_for('main.home', page=pagination.next_num, q=search_query, genre=genre_filter) }}" class="btn btn-pagination">
+        <a href="{{ url_for('main.home', page=pagination.next_num, q=search_query, genre=genre_filter) }}" class="btn-pagination">
           Trang sau →
         </a>
+      {% else %}
+        <span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">Trang sau →</span>
       {% endif %}
     </div>
   </div>
@@ -1100,6 +1100,28 @@
   font-size: 0.8rem;
 }
 
+/* View All Button */
+.btn-view-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: linear-gradient(135deg, var(--primary), var(--primary-2));
+  color: #fff;
+  text-decoration: none;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+}
+
+.btn-view-all:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.5);
+  background: linear-gradient(135deg, var(--primary-2), var(--primary));
+}
+
 /* Pagination Styles */
 .pagination {
   margin-top: 30px;
@@ -1428,6 +1450,47 @@ html {
 }
 
 .personalized-cards .card {
+  flex: 0 0 200px;
+  min-width: 200px;
+  max-width: 200px;
+}
+
+/* Horizontal Scroll Wrapper - Dùng cho tất cả các phần */
+.horizontal-scroll-wrapper {
+  position: relative;
+  margin: 20px 0;
+}
+
+.horizontal-scroll-cards {
+  display: flex;
+  gap: 20px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-behavior: smooth;
+  padding: 10px 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+  -ms-overflow-style: -ms-autohiding-scrollbar;
+}
+
+.horizontal-scroll-cards::-webkit-scrollbar {
+  height: 8px;
+}
+
+.horizontal-scroll-cards::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.horizontal-scroll-cards::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
+}
+
+.horizontal-scroll-cards::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.horizontal-scroll-cards .card {
   flex: 0 0 200px;
   min-width: 200px;
   max-width: 200px;
@@ -2797,6 +2860,11 @@ function displayColdStartRecommendations(recommendations) {
       </div>
     </div>
   `).join('');
+  
+  // Cập nhật scroll buttons sau khi load content
+  setTimeout(() => {
+    updateHorizontalScrollButtons('coldStartRecommendations');
+  }, 100);
 }
 
 // Personalized Recommendations Horizontal Scroll Functions
@@ -2850,14 +2918,70 @@ function updateScrollButtons() {
   }
 }
 
+// Generic Horizontal Scroll Function - Dùng cho tất cả các phần
+function scrollHorizontal(containerId, direction) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  
+  const scrollAmount = 600; // Scroll 600px mỗi lần
+  const currentScroll = container.scrollLeft;
+  
+  if (direction === 'left') {
+    container.scrollTo({
+      left: currentScroll - scrollAmount,
+      behavior: 'smooth'
+    });
+  } else if (direction === 'right') {
+    container.scrollTo({
+      left: currentScroll + scrollAmount,
+      behavior: 'smooth'
+    });
+  }
+  
+  // Cập nhật trạng thái nút sau khi scroll
+  setTimeout(() => {
+    updateHorizontalScrollButtons(containerId);
+  }, 300);
+}
+
+function updateHorizontalScrollButtons(containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  
+  const wrapper = container.closest('.horizontal-scroll-wrapper');
+  if (!wrapper) return;
+  
+  const leftBtn = wrapper.querySelector('.scroll-btn-left');
+  const rightBtn = wrapper.querySelector('.scroll-btn-right');
+  
+  if (!leftBtn || !rightBtn) return;
+  
+  const { scrollLeft, scrollWidth, clientWidth } = container;
+  const isAtStart = scrollLeft <= 10;
+  const isAtEnd = scrollLeft >= scrollWidth - clientWidth - 10;
+  
+  // Ẩn/hiện nút dựa trên vị trí scroll
+  if (isAtStart) {
+    leftBtn.classList.add('hidden');
+  } else {
+    leftBtn.classList.remove('hidden');
+  }
+  
+  if (isAtEnd) {
+    rightBtn.classList.add('hidden');
+  } else {
+    rightBtn.classList.remove('hidden');
+  }
+}
+
 // Khởi tạo scroll buttons khi trang load
 document.addEventListener('DOMContentLoaded', function() {
-  // Cập nhật trạng thái nút ban đầu
+  // Cập nhật trạng thái nút ban đầu cho personalized cards
   setTimeout(() => {
     updateScrollButtons();
   }, 500);
   
-  // Lắng nghe sự kiện scroll để cập nhật nút
+  // Lắng nghe sự kiện scroll để cập nhật nút cho personalized cards
   const container = document.getElementById('personalizedCards');
   if (container) {
     container.addEventListener('scroll', updateScrollButtons);
@@ -2867,6 +2991,28 @@ document.addEventListener('DOMContentLoaded', function() {
       setTimeout(updateScrollButtons, 100);
     });
   }
+  
+  // Khởi tạo cho tất cả các horizontal scroll containers
+  const horizontalContainers = ['latestMovies', 'coldStartRecommendations', 'recentWatched', 'trendingMovies'];
+  horizontalContainers.forEach(containerId => {
+    const container = document.getElementById(containerId);
+    if (container) {
+      // Cập nhật trạng thái nút ban đầu
+      setTimeout(() => {
+        updateHorizontalScrollButtons(containerId);
+      }, 500);
+      
+      // Lắng nghe sự kiện scroll
+      container.addEventListener('scroll', () => {
+        updateHorizontalScrollButtons(containerId);
+      });
+      
+      // Cập nhật khi resize window
+      window.addEventListener('resize', () => {
+        setTimeout(() => updateHorizontalScrollButtons(containerId), 100);
+      });
+    }
+  });
 });
 </script>
 {% endblock %}

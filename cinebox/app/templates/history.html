@@ -428,23 +428,17 @@
                 </div>
                 <div class="pagination-controls">
                     {% if pagination.has_prev %}
-                        <a href="{{ url_for('main.account_history', page=pagination.prev_num, q=search_query) }}" class="btn-pagination">‹ Trước</a>
+                        <a href="{{ url_for('main.account_history', page=pagination.prev_num, q=search_query) }}" class="btn-pagination">← Trang trước</a>
+                    {% else %}
+                        <span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">← Trang trước</span>
                     {% endif %}
                     
-                    <div class="page-numbers">
-                        {% for page_num in range(1, pagination.pages + 1) %}
-                            {% if page_num == pagination.page %}
-                                <span class="page-number current">{{ page_num }}</span>
-                            {% elif page_num <= 3 or page_num > pagination.pages - 3 or (page_num >= pagination.page - 1 and page_num <= pagination.page + 1) %}
-                                <a href="{{ url_for('main.account_history', page=page_num, q=search_query) }}" class="page-number">{{ page_num }}</a>
-                            {% elif page_num == 4 or page_num == pagination.pages - 3 %}
-                                <span class="page-ellipsis">...</span>
-                            {% endif %}
-                        {% endfor %}
-                    </div>
+                    <span class="page-info">Trang {{ pagination.page }} / {{ pagination.pages }}</span>
                     
                     {% if pagination.has_next %}
-                        <a href="{{ url_for('main.account_history', page=pagination.next_num, q=search_query) }}" class="btn-pagination">Tiếp ›</a>
+                        <a href="{{ url_for('main.account_history', page=pagination.next_num, q=search_query) }}" class="btn-pagination">Trang sau →</a>
+                    {% else %}
+                        <span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">Trang sau →</span>
                     {% endif %}
                 </div>
             </div>

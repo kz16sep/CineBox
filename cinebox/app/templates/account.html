@@ -1332,25 +1332,19 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Previous button
         if (pagination.has_prev) {
-            paginationHTML += `<button class="btn-pagination" onclick="loadPage('${type}', ${pagination.prev_num}, '${query}')">‹ Trước</button>`;
+            paginationHTML += `<button class="btn-pagination" onclick="loadPage('${type}', ${pagination.prev_num}, '${query}')">← Trang trước</button>`;
+        } else {
+            paginationHTML += `<span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">← Trang trước</span>`;
         }
         
-        // Page numbers
-        paginationHTML += '<div class="page-numbers">';
-        for (let i = 1; i <= pagination.pages; i++) {
-            if (i === pagination.page) {
-                paginationHTML += `<span class="page-number current">${i}</span>`;
-            } else if (i <= 3 || i > pagination.pages - 3 || (i >= pagination.page - 1 && i <= pagination.page + 1)) {
-                paginationHTML += `<button class="page-number" onclick="loadPage('${type}', ${i}, '${query}')">${i}</button>`;
-            } else if (i === 4 || i === pagination.pages - 3) {
-                paginationHTML += '<span class="page-ellipsis">...</span>';
-            }
-        }
-        paginationHTML += '</div>';
+        // Page info
+        paginationHTML += `<span class="page-info">Trang ${pagination.page} / ${pagination.pages}</span>`;
         
         // Next button
         if (pagination.has_next) {
-            paginationHTML += `<button class="btn-pagination" onclick="loadPage('${type}', ${pagination.next_num}, '${query}')">Tiếp ›</button>`;
+            paginationHTML += `<button class="btn-pagination" onclick="loadPage('${type}', ${pagination.next_num}, '${query}')">Trang sau →</button>`;
+        } else {
+            paginationHTML += `<span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">Trang sau →</span>`;
         }
         
         paginationHTML += '</div>';
@@ -1462,6 +1456,9 @@ document.addEventListener('DOMContentLoaded', function() {
     max-width: 1200px;
     margin: 0 auto;
     padding: 20px;
+    width: 100%;
+    box-sizing: border-box;
+    overflow-x: hidden;
 }
 
 .account-header {
@@ -1491,6 +1488,9 @@ document.addEventListener('DOMContentLoaded', function() {
     border-radius: 12px;
     padding: 25px;
     border: 1px solid #333;
+    width: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
 }
 
 .section-header {
@@ -1523,6 +1523,8 @@ document.addEventListener('DOMContentLoaded', function() {
     border: 1px solid #333;
     position: relative;
     overflow: hidden;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 .user-info-section::before {
@@ -1546,6 +1548,9 @@ document.addEventListener('DOMContentLoaded', function() {
     gap: 40px;
     align-items: flex-start;
     padding: 20px 0;
+    width: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
 }
 
 .user-avatar-container {
@@ -1608,8 +1613,10 @@ document.addEventListener('DOMContentLoaded', function() {
     gap: 20px;
     align-items: start;
     text-align: left;
-    overflow: visible;
+    overflow: hidden;
     position: relative;
+    min-width: 0;
+    box-sizing: border-box;
 }
 
 .info-column {
@@ -1617,6 +1624,8 @@ document.addEventListener('DOMContentLoaded', function() {
     display: flex;
     flex-direction: column;
     gap: 15px;
+    min-width: 0;
+    box-sizing: border-box;
 }
 
 .info-item {
@@ -1629,11 +1638,14 @@ document.addEventListener('DOMContentLoaded', function() {
     border-radius: 12px;
     transition: all 0.3s ease;
     position: relative;
-    overflow: visible;
+    overflow: hidden;
     cursor: pointer;
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
     text-align: left;
     justify-content: flex-start;
+    width: 100%;
+    box-sizing: border-box;
+    min-width: 0;
 }
 
 .info-item::before {
@@ -1693,12 +1705,16 @@ document.addEventListener('DOMContentLoaded', function() {
 .info-label {
     font-weight: 600;
     color: #cbd5e1;
-    min-width: 140px;
+    min-width: 120px;
+    max-width: 140px;
     font-size: 0.95rem;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     flex-shrink: 0;
     text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .info-value {
@@ -1707,6 +1723,10 @@ document.addEventListener('DOMContentLoaded', function() {
     font-weight: 500;
     font-size: 1rem;
     text-align: left;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .edit-icon {

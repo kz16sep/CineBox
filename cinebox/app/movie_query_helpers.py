@@ -260,10 +260,18 @@ def get_movies_genres(movie_ids: List[int], db_engine=None) -> Dict[int, str]:
         placeholders = ','.join([f':id{i}' for i in range(len(movie_ids))])
         params = {f'id{i}': int(movie_id) for i, movie_id in enumerate(movie_ids)}
         
+        # ✅ TỐI ƯU: Sử dụng STUFF với FOR XML PATH để tương thích với SQL Server cũ hơn
         query = text(f"""
             SELECT 
                 mg.movieId,
-                STRING_AGG(g.name, ', ') WITHIN GROUP (ORDER BY g.name) as genres
+                STUFF((
+                    SELECT ', ' + g2.name
+                    FROM cine.MovieGenre mg2
+                    JOIN cine.Genre g2 ON mg2.genreId = g2.genreId
+                    WHERE mg2.movieId = mg.movieId
+                    ORDER BY g2.name
+                    FOR XML PATH('')
+                ), 1, 2, '') as genres
             FROM cine.MovieGenre mg
             JOIN cine.Genre g ON mg.genreId = g.genreId
             WHERE mg.movieId IN ({placeholders})
