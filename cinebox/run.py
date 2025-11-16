@@ -19,7 +19,7 @@ def background_retrain_worker(app):
         while True:
             try:
                 # Lazy import inside app context
-                from app.routes import get_cf_state, clear_cf_dirty_and_set_last
+                from app.routes.common import get_cf_state, clear_cf_dirty_and_set_last
                 from flask import current_app
                 state = get_cf_state()
                 dirty = (state.get('cf_dirty') == 'true')

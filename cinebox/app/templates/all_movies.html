@@ -360,8 +360,8 @@
             <label for="year">Năm phát hành</label>
             <select name="year" id="year" class="filter-select" onchange="document.getElementById('filterForm').submit()">
               <option value="">Tất cả năm</option>
-              {% for year in years %}
-              <option value="{{ year }}" {% if year_filter == year %}selected{% endif %}>{{ year }}</option>
+              {% for year in year_list %}
+              <option value="{{ year }}" {% if year_filter|string == year|string %}selected{% endif %}>{{ year }}</option>
               {% endfor %}
             </select>
           </div>
@@ -370,7 +370,7 @@
             <label for="genre">Thể loại</label>
             <select name="genre" id="genre" class="filter-select" onchange="document.getElementById('filterForm').submit()">
               <option value="">Tất cả thể loại</option>
-              {% for genre in genres %}
+              {% for genre in genre_list %}
               <option value="{{ genre }}" {% if genre_filter == genre %}selected{% endif %}>{{ genre }}</option>
               {% endfor %}
             </select>

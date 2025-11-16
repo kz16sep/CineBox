@@ -1094,11 +1094,33 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // Search functionality with AJAX
 document.addEventListener('DOMContentLoaded', function() {
-    // Watchlist search
+    // Watchlist search - tìm element chính xác hơn
     const watchlistSearchInput = document.getElementById('watchlist-search-input');
-    const watchlistMovieGrid = document.querySelector('.account-section:nth-of-type(2) .movie-grid');
-    const watchlistPagination = document.querySelector('.account-section:nth-of-type(2) .pagination');
-    const watchlistCountBadge = document.querySelector('.account-section:nth-of-type(2) .count-badge');
+    // Tìm section chứa "Danh sách xem sau"
+    let watchlistSection = null;
+    const allSections = document.querySelectorAll('.account-section');
+    for (let section of allSections) {
+        const h2 = section.querySelector('h2');
+        if (h2 && h2.textContent.includes('Danh sách xem sau')) {
+            watchlistSection = section;
+            break;
+        }
+    }
+    // Fallback: dùng index nếu không tìm thấy
+    if (!watchlistSection && allSections.length > 1) {
+        watchlistSection = allSections[1];
+    }
+    const watchlistMovieGrid = watchlistSection ? watchlistSection.querySelector('.movie-grid') : null;
+    const watchlistPagination = watchlistSection ? watchlistSection.querySelector('.pagination') : null;
+    const watchlistCountBadge = watchlistSection ? watchlistSection.querySelector('.count-badge') : null;
+    
+    // Debug
+    console.log('Watchlist elements:', {
+        section: watchlistSection,
+        grid: watchlistMovieGrid,
+        pagination: watchlistPagination,
+        badge: watchlistCountBadge
+    });
     
     if (watchlistSearchInput) {
         let watchlistSearchTimeout;
@@ -1140,11 +1162,33 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // Favorites search
+    // Favorites search - tìm element chính xác hơn
     const favoritesSearchInput = document.getElementById('favorites-search-input');
-    const favoritesMovieGrid = document.querySelector('.account-section:nth-of-type(3) .movie-grid');
-    const favoritesPagination = document.querySelector('.account-section:nth-of-type(3) .pagination');
-    const favoritesCountBadge = document.querySelector('.account-section:nth-of-type(3) .count-badge');
+    // Tìm section chứa "Danh sách yêu thích"
+    let favoritesSection = null;
+    const allSections2 = document.querySelectorAll('.account-section');
+    for (let section of allSections2) {
+        const h2 = section.querySelector('h2');
+        if (h2 && h2.textContent.includes('Danh sách yêu thích')) {
+            favoritesSection = section;
+            break;
+        }
+    }
+    // Fallback: dùng index nếu không tìm thấy
+    if (!favoritesSection && allSections2.length > 2) {
+        favoritesSection = allSections2[2];
+    }
+    const favoritesMovieGrid = favoritesSection ? favoritesSection.querySelector('.movie-grid') : null;
+    const favoritesPagination = favoritesSection ? favoritesSection.querySelector('.pagination') : null;
+    const favoritesCountBadge = favoritesSection ? favoritesSection.querySelector('.count-badge') : null;
+    
+    // Debug
+    console.log('Favorites elements:', {
+        section: favoritesSection,
+        grid: favoritesMovieGrid,
+        pagination: favoritesPagination,
+        badge: favoritesCountBadge
+    });
     
     if (favoritesSearchInput) {
         let favoritesSearchTimeout;
@@ -1316,7 +1360,15 @@ document.addEventListener('DOMContentLoaded', function() {
     function updatePagination(paginationElement, pagination, type, query) {
         if (!paginationElement || !pagination) return;
         
-        if (pagination.pages <= 1) {
+        // Hỗ trợ cả hai format: current_page/total_pages và page/pages
+        const currentPage = pagination.current_page || pagination.page || 1;
+        const totalPages = pagination.total_pages || pagination.pages || 1;
+        const hasPrev = pagination.has_prev !== undefined ? pagination.has_prev : (currentPage > 1);
+        const hasNext = pagination.has_next !== undefined ? pagination.has_next : (currentPage < totalPages);
+        const prevNum = pagination.prev_num || (currentPage > 1 ? currentPage - 1 : null);
+        const nextNum = pagination.next_num || (currentPage < totalPages ? currentPage + 1 : null);
+        
+        if (totalPages <= 1) {
             paginationElement.style.display = 'none';
             return;
         }
@@ -1325,24 +1377,34 @@ document.addEventListener('DOMContentLoaded', function() {
         
         let paginationHTML = `
             <div class="pagination-info">
-                <span>Trang ${pagination.page} / ${pagination.pages}</span>
+                <span>Trang ${currentPage} / ${totalPages}</span>
             </div>
             <div class="pagination-controls">
         `;
         
         // Previous button
-        if (pagination.has_prev) {
-            paginationHTML += `<button class="btn-pagination" onclick="loadPage('${type}', ${pagination.prev_num}, '${query}')">← Trang trước</button>`;
+        if (hasPrev && prevNum) {
+            paginationHTML += `<button class="btn-pagination" onclick="loadPage('${type}', ${prevNum}, '${query}')">← Trang trước</button>`;
         } else {
             paginationHTML += `<span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">← Trang trước</span>`;
         }
         
-        // Page info
-        paginationHTML += `<span class="page-info">Trang ${pagination.page} / ${pagination.pages}</span>`;
+        // Page numbers
+        paginationHTML += '<div class="page-numbers">';
+        for (let i = 1; i <= totalPages; i++) {
+            if (i === currentPage) {
+                paginationHTML += `<span class="page-number current">${i}</span>`;
+            } else if (i <= 3 || i > totalPages - 3 || (i >= currentPage - 1 && i <= currentPage + 1)) {
+                paginationHTML += `<button class="page-number" onclick="loadPage('${type}', ${i}, '${query}')">${i}</button>`;
+            } else if (i === 4 || i === totalPages - 3) {
+                paginationHTML += `<span class="page-ellipsis">...</span>`;
+            }
+        }
+        paginationHTML += '</div>';
         
         // Next button
-        if (pagination.has_next) {
-            paginationHTML += `<button class="btn-pagination" onclick="loadPage('${type}', ${pagination.next_num}, '${query}')">Trang sau →</button>`;
+        if (hasNext && nextNum) {
+            paginationHTML += `<button class="btn-pagination" onclick="loadPage('${type}', ${nextNum}, '${query}')">Trang sau →</button>`;
         } else {
             paginationHTML += `<span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">Trang sau →</span>`;
         }
