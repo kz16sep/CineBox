@@ -701,7 +701,7 @@ def detail(movie_id: int):
     
     with current_app.db_engine.connect() as conn:
         r = conn.execute(text(
-            "SELECT movieId, title, releaseYear, posterUrl, backdropUrl, overview FROM cine.Movie WHERE movieId=:id"
+            "SELECT movieId, title, releaseYear, posterUrl, backdropUrl, overview, director, cast, viewCount FROM cine.Movie WHERE movieId=:id"
         ), {"id": movie_id}).mappings().first()
         
     if not r:
@@ -718,6 +718,21 @@ def detail(movie_id: int):
         genres_result = conn.execute(genres_query, {"movie_id": movie_id}).fetchall()
         genres = [{"name": genre[0], "slug": genre[0].lower().replace(' ', '-')} for genre in genres_result]
     
+    # Parse director and cast (có thể là string hoặc list)
+    director = r.get("director")
+    if director and director != '1' and director.strip():
+        director = director.strip()
+    else:
+        director = None
+    
+    cast = r.get("cast")
+    if cast and cast != '1' and cast.strip():
+        # Cast có thể là string phân cách bởi dấu phẩy
+        cast_list = [c.strip() for c in cast.split(',') if c.strip()]
+        cast = cast_list if cast_list else None
+    else:
+        cast = None
+    
     movie = {
         "id": r["movieId"],
         "title": r["title"],
@@ -728,6 +743,9 @@ def detail(movie_id: int):
         "poster": get_poster_or_dummy(r.get("posterUrl"), r["title"]),
         "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
         "description": r.get("overview") or "",
+        "director": director,
+        "cast": cast,
+        "viewCount": r.get("viewCount", 0) or 0,
     }
     
     # Get related movies

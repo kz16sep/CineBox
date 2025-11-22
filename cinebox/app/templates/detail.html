@@ -13,43 +13,83 @@
   <div class="detail-hero">
     <div class="hero-backdrop" style="background-image: url('{{ movie.backdrop }}')"></div>
     <div class="hero-content">
-      <div class="movie-poster">
-        <!-- Back Button -->
-        <button class="back-button" onclick="history.back()" title="Quay về trang trước">
-          <span class="back-icon">←</span>
-          <span class="back-text">Quay lại</span>
-        </button>
-        <img src="{{ movie.poster }}" alt="{{ movie.title }}" class="poster-img">
-      </div>
-      <div class="movie-info">
-        <h1 class="movie-title">{{ movie.title }}</h1>
-        
-        <div class="movie-meta">
-          {% if movie.year %}<span class="meta-item">📅 {{ movie.year }}</span>{% endif %}
-          {% if movie.duration %}<span class="meta-item">⏱️ {{ movie.duration }}</span>{% endif %}
-          {% if movie.genres %}<span class="meta-item">🎭 {{ ', '.join(movie.genres|map(attribute='name')) }}</span>{% endif %}
-          <span class="meta-item">
-            <span id="avg-rating-display">⭐ 0.0</span>
-            <span id="rating-count">(0 đánh giá)</span>
-          </span>
+      <!-- Back Button -->
+      <button class="back-button" onclick="history.back()" title="Quay về trang trước">
+        <span class="back-icon">←</span>
+        <span class="back-text">Quay lại</span>
+      </button>
+      
+      <div class="hero-main-content">
+        <!-- Left: Poster + Actions -->
+        <div class="poster-section">
+          <div class="movie-poster">
+            <img src="{{ movie.poster }}" alt="{{ movie.title }}" class="poster-img">
+          </div>
+          
+          <!-- Action Buttons - Vertical below poster -->
+          <div class="movie-actions-vertical">
+            <a class="btn btn-primary btn-watch" href="{{ url_for('main.watch', movie_id=movie.id) }}">
+              ▶ Xem phim
+            </a>
+            <a class="btn btn-secondary btn-trailer" href="{{ url_for('main.trailer', movie_id=movie.id) }}">
+              🎬 Xem trailer
+            </a>
+            <button id="favoriteBtn" class="btn btn-secondary btn-favorite" onclick="toggleFavorite({{ movie.id }})">
+              <span id="favoriteIcon">🤍</span>
+              <span id="favoriteText">Yêu thích</span>
+            </button>
+            <button id="watchlistBtn" class="btn btn-secondary btn-watchlist" onclick="toggleWatchlist({{ movie.id }})">
+              <span id="watchlistIcon">📋</span>
+              <span id="watchlistText">Xem sau</span>
+            </button>
+          </div>
         </div>
         
-        <div class="movie-actions">
-          <a class="btn btn-primary btn-watch" href="{{ url_for('main.watch', movie_id=movie.id) }}">
-            ▶ Xem phim
-          </a>
-          <a class="btn btn-secondary btn-trailer" href="{{ url_for('main.trailer', movie_id=movie.id) }}">
-            🎬 Xem trailer
-          </a>
-          <button id="watchlistBtn" class="btn btn-secondary" onclick="toggleWatchlist({{ movie.id }})">
-            <span id="watchlistIcon">📋</span>
-            <span id="watchlistText">Xem sau</span>
-          </button>
-          <button id="favoriteBtn" class="btn btn-secondary" onclick="toggleFavorite({{ movie.id }})">
-            <span id="favoriteIcon">🤍</span>
-            <span id="favoriteText">Yêu thích</span>
-          </button>
-        </div>
+        <!-- Right: Movie Info -->
+        <div class="movie-info">
+          <h1 class="movie-title">{{ movie.title }}</h1>
+          
+          <div class="movie-meta">
+            {% if movie.genres %}<span class="meta-item">🎭 {{ ', '.join(movie.genres|map(attribute='name')) }}</span>{% endif %}
+            {% if movie.year %}<span class="meta-item">📅 {{ movie.year }}</span>{% endif %}
+            {% if movie.duration %}<span class="meta-item">⏱️ {{ movie.duration }}</span>{% endif %}
+          </div>
+          
+          <div class="movie-stats">
+            <span class="stat-item">
+              <span id="avg-rating-display">⭐ 0.0</span>
+              <span id="rating-count">(0 đánh giá)</span>
+            </span>
+            <span class="stat-divider">•</span>
+            <span class="stat-item">
+              <span class="view-icon">👁️</span>
+              <span class="view-count-text">{{ "{:,}".format(movie.viewCount) }} lượt xem</span>
+            </span>
+          </div>
+          
+          <!-- Director and Cast Section - In Info Section -->
+          {% if movie.director or movie.cast %}
+          <div class="movie-crew">
+            {% if movie.director %}
+            <div class="crew-item">
+              <span class="crew-icon">🎬</span>
+              <div class="crew-info">
+                <span class="crew-label">Đạo diễn</span>
+                <span class="crew-value">{{ movie.director }}</span>
+              </div>
+            </div>
+            {% endif %}
+            {% if movie.cast %}
+            <div class="crew-item">
+              <span class="crew-icon">👥</span>
+              <div class="crew-info">
+                <span class="crew-label">Diễn viên</span>
+                <span class="crew-value">{{ movie.cast|join(', ') }}</span>
+              </div>
+            </div>
+            {% endif %}
+          </div>
+          {% endif %}
         
         <!-- Rating Section -->
         <div class="rating-section">
@@ -87,7 +127,16 @@
         {% if movie.description %}
         <div class="movie-description">
           <h3>Nội dung phim</h3>
-          <p>{{ movie.description }}</p>
+          <div class="description-content">
+            <p id="overview-text" class="overview-text {% if movie.description|length > 300 %}overview-truncated{% endif %}">
+              {{ movie.description }}
+            </p>
+            {% if movie.description|length > 300 %}
+            <button id="toggle-overview" class="btn-toggle-overview" onclick="toggleOverview()">
+              <span id="toggle-text">Xem thêm</span>
+            </button>
+            {% endif %}
+          </div>
         </div>
         {% endif %}
       </div>
@@ -258,92 +307,181 @@
 .hero-content {
   position: relative;
   z-index: 2;
-  display: flex;
-  align-items: center;
-  gap: 30px;
   padding: 40px;
   min-height: 60vh;
 }
 
-.movie-poster {
+.hero-main-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 40px;
+  margin-top: 50px;
+}
+
+.poster-section {
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 280px;
+}
+
+.movie-poster {
+  position: relative;
 }
 
 .poster-img {
-  width: 300px;
+  width: 100%;
   height: 450px;
   object-fit: cover;
-  border-radius: 12px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  border-radius: 16px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  transition: transform 0.3s ease;
+}
+
+.poster-img:hover {
+  transform: scale(1.02);
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.7);
 }
 
 .movie-info {
   flex: 1;
   color: white;
+  min-width: 0;
 }
 
 .movie-title {
-  font-size: 3rem;
-  font-weight: bold;
-  margin-bottom: 20px;
-  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.7);
+  font-size: 3.2rem;
+  font-weight: 800;
+  margin-bottom: 25px;
+  text-shadow: 2px 2px 8px rgba(0, 0, 0, 0.8);
+  background: linear-gradient(135deg, #fff, #e2e8f0);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  line-height: 1.2;
 }
 
 .movie-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 20px;
+  gap: 12px;
+  margin-bottom: 20px;
+  font-size: 1rem;
+}
+
+.movie-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   margin-bottom: 30px;
+  font-size: 1.05rem;
+  color: #e2e8f0;
+}
+
+.stat-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stat-divider {
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 1.2rem;
+}
+
+.view-icon {
   font-size: 1.1rem;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+}
+
+.view-count-text {
+  font-weight: 600;
+  color: #93c5fd;
 }
 
 .meta-item {
-  background: rgba(255, 255, 255, 0.1);
-  padding: 8px 16px;
-  border-radius: 20px;
-  backdrop-filter: blur(10px);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0.1));
+  padding: 10px 18px;
+  border-radius: 25px;
+  backdrop-filter: blur(15px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  font-weight: 600;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
 }
 
-.movie-actions {
+.meta-item:hover {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.25), rgba(255, 255, 255, 0.15));
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.movie-actions-vertical {
   display: flex;
-  gap: 15px;
-  margin-bottom: 30px;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.movie-actions-vertical .btn {
+  width: 100%;
+  justify-content: center;
 }
 
 .btn-watch {
-  font-size: 1.2rem;
-  padding: 15px 30px;
-  background: #e50914;
+  font-size: 1.15rem;
+  padding: 16px 32px;
+  background: linear-gradient(135deg, #e50914, #f40612);
   border: none;
-  border-radius: 8px;
+  border-radius: 12px;
   color: white;
   text-decoration: none;
-  font-weight: bold;
+  font-weight: 700;
   transition: all 0.3s ease;
+  box-shadow: 0 6px 20px rgba(229, 9, 20, 0.4);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .btn-watch:hover {
-  background: #f40612;
-  transform: translateY(-2px);
-  box-shadow: 0 8px 25px rgba(229, 9, 20, 0.4);
+  background: linear-gradient(135deg, #f40612, #ff0a1a);
+  transform: translateY(-3px);
+  box-shadow: 0 10px 30px rgba(229, 9, 20, 0.6);
 }
 
 .btn-secondary {
-  font-size: 1.1rem;
-  padding: 15px 25px;
-  background: rgba(255, 255, 255, 0.1);
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-radius: 8px;
+  font-size: 1rem;
+  padding: 14px 24px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-radius: 12px;
   color: white;
   text-decoration: none;
-  font-weight: bold;
+  font-weight: 600;
   transition: all 0.3s ease;
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(15px);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  border: none;
 }
 
 .btn-secondary:hover {
   background: rgba(255, 255, 255, 0.2);
-  border-color: rgba(255, 255, 255, 0.5);
+  border-color: rgba(255, 255, 255, 0.4);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+.btn-secondary.btn-favorite,
+.btn-secondary.btn-watchlist {
+  width: 100%;
+  justify-content: center;
 }
 
 .btn-secondary.favorited {
@@ -374,20 +512,144 @@
   transform: translateY(-2px);
 }
 
+/* Movie Crew Section (Director and Cast) - In Info Section */
+.movie-crew {
+  margin-top: 25px;
+  padding: 20px;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(147, 51, 234, 0.1));
+  border-radius: 16px;
+  backdrop-filter: blur(15px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.crew-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 15px;
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.3s ease;
+}
+
+.crew-item:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.crew-item:hover {
+  transform: translateX(5px);
+  border-bottom-color: rgba(59, 130, 246, 0.3);
+}
+
+.crew-icon {
+  font-size: 1.8rem;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(147, 51, 234, 0.2));
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.crew-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.crew-label {
+  font-weight: 700;
+  color: #93c5fd;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.crew-value {
+  color: #fff;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  font-weight: 500;
+}
+
 .movie-description {
-  max-width: 800px;
+  max-width: 900px;
+  margin-top: 40px;
+  padding: 25px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 16px;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .movie-description h3 {
-  font-size: 1.5rem;
-  margin-bottom: 15px;
+  font-size: 1.6rem;
+  margin-bottom: 20px;
   color: #fff;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-.movie-description p {
+.movie-description h3::before {
+  content: '📖';
+  font-size: 1.4rem;
+}
+
+.description-content {
+  position: relative;
+}
+
+.overview-text {
   font-size: 1.1rem;
-  line-height: 1.6;
+  line-height: 1.8;
   color: #ccc;
+  transition: all 0.3s ease;
+}
+
+.overview-truncated {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.overview-text.expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+.btn-toggle-overview {
+  margin-top: 15px;
+  background: rgba(59, 130, 246, 0.2);
+  border: 1px solid rgba(59, 130, 246, 0.5);
+  color: #60a5fa;
+  padding: 10px 20px;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-toggle-overview:hover {
+  background: rgba(59, 130, 246, 0.3);
+  border-color: #3b82f6;
+  color: #93c5fd;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
 }
 
 /* Related Movies Styles */
@@ -565,9 +827,40 @@
 /* Responsive */
 @media (max-width: 768px) {
   .hero-content {
-    flex-direction: column;
-    text-align: center;
     padding: 20px;
+  }
+  
+  .hero-main-content {
+    flex-direction: column;
+    gap: 30px;
+    margin-top: 20px;
+  }
+  
+  .poster-section {
+    width: 100%;
+    max-width: 280px;
+    margin: 0 auto;
+  }
+  
+  .movie-info {
+    text-align: center;
+  }
+  
+  .movie-title {
+    font-size: 2rem;
+  }
+  
+  .movie-crew {
+    margin-top: 20px;
+  }
+  
+  .movie-actions-vertical {
+    max-width: 100%;
+  }
+  
+  .movie-stats {
+    flex-wrap: wrap;
+    justify-content: center;
   }
   
   .poster-img {
@@ -1004,7 +1297,7 @@ function updateFavoriteButton(isFavorite) {
   
   if (isFavorite) {
     favoriteIcon.textContent = '❤️';
-    favoriteText.textContent = 'Đã yêu thích';
+    favoriteText.textContent = 'Đã thêm';
     favoriteBtn.classList.add('favorited');
   } else {
     favoriteIcon.textContent = '🤍';
@@ -1341,6 +1634,26 @@ function loadMovieRating(movieId, element) {
   });
 }
 
+// Toggle overview expand/collapse
+function toggleOverview() {
+  const overviewText = document.getElementById('overview-text');
+  const toggleBtn = document.getElementById('toggle-overview');
+  const toggleText = document.getElementById('toggle-text');
+  
+  if (overviewText && toggleBtn && toggleText) {
+    if (overviewText.classList.contains('overview-truncated')) {
+      // Expand
+      overviewText.classList.remove('overview-truncated');
+      overviewText.classList.add('expanded');
+      toggleText.textContent = 'Thu gọn';
+    } else {
+      // Collapse
+      overviewText.classList.remove('expanded');
+      overviewText.classList.add('overview-truncated');
+      toggleText.textContent = 'Xem thêm';
+    }
+  }
+}
 </script>
 {% endblock %}
 
