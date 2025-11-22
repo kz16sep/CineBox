@@ -38,7 +38,7 @@
           <a class="btn btn-primary btn-watch" href="{{ url_for('main.watch', movie_id=movie.id) }}">
             ▶ Xem phim
           </a>
-          <a class="btn btn-secondary btn-trailer" href="{{ url_for('main.watch', movie_id=movie.id) }}?type=trailer">
+          <a class="btn btn-secondary btn-trailer" href="{{ url_for('main.trailer', movie_id=movie.id) }}">
             🎬 Xem trailer
           </a>
           <button id="watchlistBtn" class="btn btn-secondary" onclick="toggleWatchlist({{ movie.id }})">

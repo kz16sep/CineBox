@@ -5,6 +5,8 @@ Movie browsing routes: home, detail, watch, search, genre, all movies
 import time
 import random
 import threading
+import re
+import requests
 from flask import render_template, request, redirect, url_for, session, current_app, jsonify
 from sqlalchemy import text
 from . import main_bp
@@ -32,6 +34,120 @@ if _cinebox_dir not in sys.path:
 from app.movie_query_helpers import get_movie_rating_stats, get_movies_genres
 from app.recommendation_helpers import hybrid_recommendations
 from app.sql_helpers import validate_limit, safe_top_clause
+
+# TMDB API configuration
+TMDB_API_KEY = "410065906e9552ec1e24efe8c5393791"
+TMDB_BASE_URL = "https://api.themoviedb.org/3"
+
+def extract_tmdb_id_from_url(url):
+    """Extract TMDB movie ID from TMDB URL"""
+    if not url:
+        return None
+    # Pattern: https://www.themoviedb.org/movie/{id}
+    match = re.search(r'themoviedb\.org/movie/(\d+)', url)
+    if match:
+        return int(match.group(1))
+    return None
+
+def extract_video_key_from_url(url):
+    """Extract video key from YouTube/Vimeo URL for embedding"""
+    if not url:
+        return None, None
+    
+    # YouTube patterns
+    youtube_patterns = [
+        r'youtube\.com/watch\?v=([a-zA-Z0-9_-]+)',
+        r'youtu\.be/([a-zA-Z0-9_-]+)',
+        r'youtube\.com/embed/([a-zA-Z0-9_-]+)'
+    ]
+    
+    for pattern in youtube_patterns:
+        match = re.search(pattern, url)
+        if match:
+            return 'youtube', match.group(1)
+    
+    # Vimeo patterns
+    vimeo_patterns = [
+        r'vimeo\.com/(\d+)',
+        r'player\.vimeo\.com/video/(\d+)'
+    ]
+    
+    for pattern in vimeo_patterns:
+        match = re.search(pattern, url)
+        if match:
+            return 'vimeo', match.group(1)
+    
+    return None, None
+
+def get_tmdb_videos(tmdb_id, is_trailer=False):
+    """Get videos from TMDB API for a movie"""
+    try:
+        url = f"{TMDB_BASE_URL}/movie/{tmdb_id}/videos"
+        params = {'api_key': TMDB_API_KEY, 'language': 'en-US'}
+        response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get('results', [])
+            
+            # Chỉ lấy video từ YouTube hoặc Vimeo
+            youtube_videos = [v for v in results if v.get('site') == 'YouTube']
+            vimeo_videos = [v for v in results if v.get('site') == 'Vimeo']
+            all_videos = youtube_videos + vimeo_videos
+            
+            if not all_videos:
+                return None
+            
+            if is_trailer:
+                # Khi xem trailer: Ưu tiên Trailer > Teaser > Other
+                trailers = [v for v in all_videos if v.get('type') == 'Trailer']
+                teasers = [v for v in all_videos if v.get('type') == 'Teaser']
+                others = [v for v in all_videos if v.get('type') not in ['Trailer', 'Teaser']]
+                
+                # Ưu tiên YouTube
+                youtube_trailers = [v for v in trailers if v.get('site') == 'YouTube']
+                youtube_teasers = [v for v in teasers if v.get('site') == 'YouTube']
+                youtube_others = [v for v in others if v.get('site') == 'YouTube']
+                
+                if youtube_trailers:
+                    return youtube_trailers[0]
+                elif youtube_teasers:
+                    return youtube_teasers[0]
+                elif youtube_others:
+                    return youtube_others[0]
+                elif trailers:
+                    return trailers[0]
+                elif teasers:
+                    return teasers[0]
+                elif others:
+                    return others[0]
+            else:
+                # Khi xem phim: Ưu tiên video chính (không phải Trailer/Teaser) > Trailer > Teaser
+                main_videos = [v for v in all_videos if v.get('type') not in ['Trailer', 'Teaser']]
+                trailers = [v for v in all_videos if v.get('type') == 'Trailer']
+                teasers = [v for v in all_videos if v.get('type') == 'Teaser']
+                
+                # Ưu tiên YouTube
+                youtube_main = [v for v in main_videos if v.get('site') == 'YouTube']
+                youtube_trailers = [v for v in trailers if v.get('site') == 'YouTube']
+                youtube_teasers = [v for v in teasers if v.get('site') == 'YouTube']
+                
+                if youtube_main:
+                    return youtube_main[0]
+                elif youtube_trailers:
+                    return youtube_trailers[0]
+                elif youtube_teasers:
+                    return youtube_teasers[0]
+                elif main_videos:
+                    return main_videos[0]
+                elif trailers:
+                    return trailers[0]
+                elif teasers:
+                    return teasers[0]
+            
+            return None
+    except Exception as e:
+        current_app.logger.error(f"Error fetching TMDB videos: {e}")
+        return None
 
 
 @main_bp.route("/")
@@ -674,20 +790,45 @@ def detail(movie_id: int):
     return render_template("detail.html", movie=movie, related_movies=related_movies)
 
 
-@main_bp.route("/watch/<int:movie_id>")
-@login_required
-def watch(movie_id: int):
-    """Watch movie page"""
-    is_trailer = request.args.get('type') == 'trailer'
+def _prepare_watch_data(movie_id: int, is_trailer: bool = False):
+    """
+    Helper function để chuẩn bị dữ liệu cho watch/trailer page
+    Returns: (movie dict, related_movies list, tmdb_video_embed) hoặc None nếu không tìm thấy phim
+    """
     
     # Lấy thông tin phim chính
     with current_app.db_engine.connect() as conn:
         r = conn.execute(text(
-            "SELECT movieId, title, posterUrl, backdropUrl, releaseYear, overview, trailerUrl, viewCount FROM cine.Movie WHERE movieId=:id"
+            "SELECT movieId, title, posterUrl, backdropUrl, releaseYear, overview, trailerUrl, viewCount, movieUrl FROM cine.Movie WHERE movieId=:id"
         ), {"id": movie_id}).mappings().first()
         
     if not r:
-        return redirect(url_for("main.home"))
+        return None
+    
+    # Xử lý video source
+    tmdb_video = None
+    movie_url = r.get("movieUrl")
+    trailer_url = r.get("trailerUrl")
+    
+    # Nếu xem trailer: Ưu tiên trailerUrl, nếu không có thì lấy từ TMDB API
+    if is_trailer:
+        if trailer_url and trailer_url != '1' and trailer_url.strip():
+            # Có trailerUrl trực tiếp, không cần lấy từ TMDB
+            pass
+        else:
+            # Không có trailerUrl, thử lấy từ TMDB API
+            if movie_url and movie_url != '1' and movie_url.strip():
+                movie_url = movie_url.strip()
+                tmdb_id = extract_tmdb_id_from_url(movie_url)
+                if tmdb_id:
+                    tmdb_video = get_tmdb_videos(tmdb_id, is_trailer=True)
+    else:
+        # Nếu xem phim: Lấy video chính từ TMDB API
+        if movie_url and movie_url != '1' and movie_url.strip():
+            movie_url = movie_url.strip()
+            tmdb_id = extract_tmdb_id_from_url(movie_url)
+            if tmdb_id:
+                tmdb_video = get_tmdb_videos(tmdb_id, is_trailer=False)
     
     # Tăng view count và lưu lịch sử xem
     if not is_trailer:
@@ -748,9 +889,77 @@ def watch(movie_id: int):
         genres = [{"name": genre[0], "slug": genre[0].lower().replace(' ', '-')} for genre in genres_result]
     
     # Xác định video source
-    if is_trailer and r.get("trailerUrl"):
-        video_sources = [{"label": "Trailer", "url": r.get("trailerUrl")}]
+    video_sources = []
+    tmdb_video_embed = None
+    
+    if is_trailer:
+        # Xem trailer: Ưu tiên trailerUrl, sau đó là video từ TMDB API
+        if trailer_url and trailer_url != '1' and trailer_url.strip():
+            # Có trailerUrl trực tiếp - extract video key để embed
+            video_site, video_key = extract_video_key_from_url(trailer_url.strip())
+            if video_site == 'youtube' and video_key:
+                tmdb_video_embed = {
+                    'type': 'youtube',
+                    'key': video_key,
+                    'name': 'Trailer',
+                    'site': 'YouTube'
+                }
+            elif video_site == 'vimeo' and video_key:
+                tmdb_video_embed = {
+                    'type': 'vimeo',
+                    'key': video_key,
+                    'name': 'Trailer',
+                    'site': 'Vimeo'
+                }
+            else:
+                # Không phải YouTube/Vimeo, dùng URL trực tiếp
+                video_sources = [{"label": "Trailer", "url": trailer_url.strip()}]
+        elif tmdb_video:
+            # Có video từ TMDB API (trailer)
+            video_key = tmdb_video.get('key')
+            video_site = tmdb_video.get('site')
+            if video_site == 'YouTube' and video_key:
+                tmdb_video_embed = {
+                    'type': 'youtube',
+                    'key': video_key,
+                    'name': tmdb_video.get('name', 'Trailer'),
+                    'site': 'YouTube'
+                }
+            elif video_site == 'Vimeo' and video_key:
+                tmdb_video_embed = {
+                    'type': 'vimeo',
+                    'key': video_key,
+                    'name': tmdb_video.get('name', 'Trailer'),
+                    'site': 'Vimeo'
+                }
+        else:
+            # Không có trailer
+            video_sources = [{"label": "Trailer", "url": "https://www.w3schools.com/html/movie.mp4"}]
+    elif tmdb_video:
+        # Có video từ TMDB API
+        video_key = tmdb_video.get('key')
+        video_site = tmdb_video.get('site')
+        if video_site == 'YouTube' and video_key:
+            # Embed YouTube video
+            tmdb_video_embed = {
+                'type': 'youtube',
+                'key': video_key,
+                'name': tmdb_video.get('name', 'Video'),
+                'site': 'YouTube'
+            }
+        elif video_site == 'Vimeo' and video_key:
+            # Embed Vimeo video
+            tmdb_video_embed = {
+                'type': 'vimeo',
+                'key': video_key,
+                'name': tmdb_video.get('name', 'Video'),
+                'site': 'Vimeo'
+            }
+        else:
+            # Fallback: dùng video URL trực tiếp nếu có
+            video_sources = [{"label": "Video", "url": f"https://www.youtube.com/watch?v={video_key}"}]
     else:
+        # Fallback: video mặc định
         video_sources = [{"label": "720p", "url": "https://www.w3schools.com/html/movie.mp4"}]
     
     movie = {
@@ -763,6 +972,8 @@ def watch(movie_id: int):
         "sources": video_sources,
         "genres": genres,
         "viewCount": r.get("viewCount", 0) or 0,
+        "tmdb_video": tmdb_video_embed,  # Thêm video từ TMDB
+        "movie_url": movie_url if (movie_url and movie_url != '1') else None,  # URL gốc để hiển thị link
     }
     
     # Lấy phim liên quan
@@ -820,10 +1031,39 @@ def watch(movie_id: int):
             current_app.logger.error(f"Error getting fallback movies: {e}")
             related_movies = []
     
+    return (movie, related_movies, tmdb_video_embed)
+
+
+@main_bp.route("/watch/<int:movie_id>")
+@login_required
+def watch(movie_id: int):
+    """Watch movie page"""
+    result = _prepare_watch_data(movie_id, is_trailer=False)
+    if result is None:
+        return redirect(url_for("main.home"))
+    
+    movie, related_movies, tmdb_video_embed = result
     return render_template("watch.html", 
                          movie=movie, 
                          related_movies=related_movies,
-                         is_trailer=is_trailer)
+                         is_trailer=False,
+                         tmdb_video=tmdb_video_embed)
+
+
+@main_bp.route("/trailer/<int:movie_id>")
+@login_required
+def trailer(movie_id: int):
+    """Watch trailer page"""
+    result = _prepare_watch_data(movie_id, is_trailer=True)
+    if result is None:
+        return redirect(url_for("main.home"))
+    
+    movie, related_movies, tmdb_video_embed = result
+    return render_template("watch.html", 
+                         movie=movie, 
+                         related_movies=related_movies,
+                         is_trailer=True,
+                         tmdb_video=tmdb_video_embed)
 
 
 @main_bp.route("/search")

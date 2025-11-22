@@ -26,12 +26,50 @@
   
   <!-- Video Player -->
   <div class="video-container">
-    <video class="player" controls poster="{{ movie.backdrop }}">
-      {% for s in movie.sources %}
-      <source src="{{ s.url }}" type="video/mp4" />
-      {% endfor %}
-      Trình duyệt của bạn không hỗ trợ video.
-    </video>
+    {% if tmdb_video %}
+      <!-- Embed video từ TMDB (YouTube/Vimeo) -->
+      <div class="embed-wrapper">
+        {% if tmdb_video.type == 'youtube' %}
+          <iframe 
+            class="player-embed" 
+            src="https://www.youtube.com/embed/{{ tmdb_video.key }}?autoplay=0&rel=0" 
+            frameborder="0" 
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+            allowfullscreen>
+          </iframe>
+        {% elif tmdb_video.type == 'vimeo' %}
+          <iframe 
+            class="player-embed" 
+            src="https://player.vimeo.com/video/{{ tmdb_video.key }}?autoplay=0" 
+            frameborder="0" 
+            allow="autoplay; fullscreen; picture-in-picture" 
+            allowfullscreen>
+          </iframe>
+        {% endif %}
+      </div>
+      {% if movie.movie_url %}
+        <div class="movie-url-link">
+          <a href="{{ movie.movie_url }}" target="_blank" class="btn btn-secondary">
+            🔗 Xem thông tin phim tại trang gốc
+          </a>
+        </div>
+      {% endif %}
+    {% else %}
+      <!-- Video player thông thường -->
+      <video class="player" controls poster="{{ movie.backdrop }}">
+        {% for s in movie.sources %}
+        <source src="{{ s.url }}" type="video/mp4" />
+        {% endfor %}
+        Trình duyệt của bạn không hỗ trợ video.
+      </video>
+      {% if movie.movie_url %}
+        <div class="movie-url-link">
+          <a href="{{ movie.movie_url }}" target="_blank" class="btn btn-secondary">
+            🔗 Xem thông tin phim tại trang gốc
+          </a>
+        </div>
+      {% endif %}
+    {% endif %}
   </div>
 
   <!-- Movie Genres -->
@@ -237,6 +275,31 @@
   min-height: 400px;
   background: #000;
   border-radius: 12px;
+}
+
+.embed-wrapper {
+  position: relative;
+  width: 100%;
+  padding-bottom: 56.25%; /* 16:9 aspect ratio */
+  height: 0;
+  overflow: hidden;
+  background: #000;
+  border-radius: 12px;
+}
+
+.player-embed {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-radius: 12px;
+}
+
+.movie-url-link {
+  margin-top: 15px;
+  text-align: center;
 }
 
 /* Movie Genres - Enhanced */
