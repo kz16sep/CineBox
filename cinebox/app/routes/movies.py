@@ -182,6 +182,8 @@ def home():
     per_page = 10
     genre_filter = request.args.get('genre', '', type=str)
     search_query = request.args.get('q', '', type=str)
+    sort_by = request.args.get('sort', 'newest', type=str)
+    year_filter = request.args.get('year', '', type=str)
     
     # Latest movies với caching
     cache_key = f"latest_{genre_filter}"
@@ -288,20 +290,63 @@ def home():
             
             where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
             
+            # Thêm year filter nếu có
+            if year_filter:
+                where_clauses.append("m.releaseYear = :year")
+                params['year'] = int(year_filter)
+                where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
+            
+            # Xây dựng ORDER BY clause (chỉ khi có genre filter hoặc search)
+            if genre_filter or search_query:
+                if sort_by == 'ratings':
+                    order_by_inner = 'avgRating DESC, ratingCount DESC, m.movieId DESC'
+                    order_by_outer = 'avgRating DESC, ratingCount DESC'
+                else:
+                    order_by_map = {
+                        'newest': 'm.releaseYear DESC, m.movieId DESC',
+                        'oldest': 'm.releaseYear ASC, m.movieId ASC',
+                        'views': 'm.viewCount DESC, m.movieId DESC',
+                        'title_asc': 'm.title ASC',
+                        'title_desc': 'm.title DESC'
+                    }
+                    order_by_inner = order_by_map.get(sort_by, order_by_map['newest'])
+                    order_by_outer = order_by_inner
+            else:
+                order_by_inner = 'm.createdAt DESC, m.movieId DESC'
+                order_by_outer = order_by_inner
+            
             # Count total
             count_query = f"SELECT COUNT(*) FROM cine.Movie m WHERE {where_sql}"
             total_count = conn.execute(text(count_query), params).scalar()
             
             # Get movies
             offset = (page - 1) * per_page
-            movies_query = f"""
-                SELECT m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country, m.viewCount
-                FROM cine.Movie m
-                WHERE {where_sql}
-                ORDER BY m.createdAt DESC, m.movieId DESC
-                OFFSET :offset ROWS
-                FETCH NEXT :per_page ROWS ONLY
-            """
+            
+            if (genre_filter or search_query) and sort_by == 'ratings':
+                # Query với ratings
+                movies_query = f"""
+                    SELECT m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country, m.viewCount,
+                           AVG(CAST(r.value AS FLOAT)) AS avgRating,
+                           COUNT(r.value) AS ratingCount
+                    FROM cine.Movie m
+                    LEFT JOIN cine.Rating r ON m.movieId = r.movieId
+                    WHERE {where_sql}
+                    GROUP BY m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country, m.viewCount
+                    ORDER BY {order_by_outer}
+                    OFFSET :offset ROWS
+                    FETCH NEXT :per_page ROWS ONLY
+                """
+            else:
+                # Query không có ratings hoặc không có filter
+                movies_query = f"""
+                    SELECT m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country, m.viewCount
+                    FROM cine.Movie m
+                    WHERE {where_sql}
+                    ORDER BY {order_by_inner}
+                    OFFSET :offset ROWS
+                    FETCH NEXT :per_page ROWS ONLY
+                """
+            
             params['offset'] = offset
             params['per_page'] = per_page
             
@@ -309,7 +354,17 @@ def home():
             movie_ids = [r["movieId"] for r in rows]
             
             # Batch query ratings và genres
-            rating_stats = get_movie_rating_stats(movie_ids, current_app.db_engine)
+            if (genre_filter or search_query) and sort_by == 'ratings':
+                # Đã có ratings trong query
+                rating_stats = {}
+                for r in rows:
+                    movie_id = r["movieId"]
+                    rating_stats[movie_id] = {
+                        "avgRating": round(float(r.get("avgRating") or 0), 2),
+                        "ratingCount": int(r.get("ratingCount") or 0)
+                    }
+            else:
+                rating_stats = get_movie_rating_stats(movie_ids, current_app.db_engine)
             genres_dict = get_movies_genres(movie_ids, current_app.db_engine)
             
             all_movies = []
@@ -332,6 +387,31 @@ def home():
                     "genres": genres.split(", ") if genres else []
                 })
             
+            # Lấy danh sách năm và thể loại cho filter (chỉ khi có genre filter hoặc search)
+            year_list = []
+            genre_list = []
+            if genre_filter or search_query:
+                try:
+                    years = conn.execute(text("""
+                        SELECT DISTINCT releaseYear 
+                        FROM cine.Movie 
+                        WHERE releaseYear IS NOT NULL 
+                        ORDER BY releaseYear DESC
+                    """)).fetchall()
+                    year_list = [y[0] for y in years]
+                    
+                    genres_list = conn.execute(text("""
+                        SELECT DISTINCT g.name 
+                        FROM cine.Genre g
+                        JOIN cine.MovieGenre mg ON g.genreId = mg.genreId
+                        ORDER BY g.name
+                    """)).fetchall()
+                    genre_list = [g[0] for g in genres_list]
+                except Exception as e:
+                    current_app.logger.error(f"Error loading filter lists: {e}")
+                    year_list = []
+                    genre_list = []
+            
             total_pages = (total_count + per_page - 1) // per_page
             pagination = {
                 "page": page,
@@ -347,6 +427,8 @@ def home():
         current_app.logger.error(f"Error loading all movies: {e}", exc_info=True)
         all_movies = []
         pagination = None
+        year_list = []
+        genre_list = []
     
     # Personal recommendations (gợi ý cá nhân)
     user_id = session.get("user_id")
@@ -689,6 +771,10 @@ def home():
                          pagination=pagination,
                          genre_filter=genre_filter,
                          search_query=search_query,
+                         sort_by=sort_by,
+                         year_filter=year_filter,
+                         year_list=year_list if 'year_list' in locals() else [],
+                         genre_list=genre_list if 'genre_list' in locals() else [],
                          all_genres=all_genres)
 
 
@@ -1193,7 +1279,7 @@ def search():
 @main_bp.route("/the-loai/<string:genre_slug>")
 @login_required
 def genre_page(genre_slug):
-    """Genre page - redirect to home with genre filter"""
+    """Genre page với bộ lọc và sắp xếp giống all-movies"""
     main_genre_mapping = {
         'action': 'Action',
         'adventure': 'Adventure', 
@@ -1219,7 +1305,172 @@ def genre_page(genre_slug):
             current_app.logger.error(f"Error finding genre: {e}")
             return redirect(url_for('main.home'))
     
-    return redirect(url_for('main.home', genre=genre_name))
+    # Lấy các tham số filter (giống all_movies)
+    page = request.args.get('page', 1, type=int)
+    per_page = 20
+    sort_by = request.args.get('sort', 'newest', type=str)
+    year_filter = request.args.get('year', '', type=str)
+    # Genre filter được fix từ slug, nhưng vẫn có thể filter thêm genre khác
+    additional_genre_filter = request.args.get('genre', '', type=str)
+    
+    try:
+        with current_app.db_engine.connect() as conn:
+            # Xây dựng WHERE clause - luôn filter theo genre_name từ slug
+            where_clauses = []
+            params = {}
+            
+            # Luôn filter theo genre chính từ slug
+            where_clauses.append("EXISTS (SELECT 1 FROM cine.MovieGenre mg2 JOIN cine.Genre g2 ON mg2.genreId = g2.genreId WHERE mg2.movieId = m.movieId AND g2.name = :main_genre)")
+            params["main_genre"] = genre_name
+            
+            if year_filter:
+                where_clauses.append("m.releaseYear = :year")
+                params["year"] = int(year_filter)
+            
+            # Có thể filter thêm genre khác (nếu muốn)
+            if additional_genre_filter and additional_genre_filter != genre_name:
+                where_clauses.append("EXISTS (SELECT 1 FROM cine.MovieGenre mg3 JOIN cine.Genre g3 ON mg3.genreId = g3.genreId WHERE mg3.movieId = m.movieId AND g3.name = :additional_genre)")
+                params["additional_genre"] = additional_genre_filter
+            
+            where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+            
+            # Xây dựng ORDER BY clause (giống all_movies)
+            if sort_by == 'ratings':
+                order_by_inner = 'avgRating DESC, ratingCount DESC, m.movieId DESC'
+                order_by_outer = 'avgRating DESC, ratingCount DESC'
+            else:
+                order_by_map = {
+                    'newest': 'm.releaseYear DESC, m.movieId DESC',
+                    'oldest': 'm.releaseYear ASC, m.movieId ASC',
+                    'views': 'm.viewCount DESC, m.movieId DESC',
+                    'title_asc': 'm.title ASC',
+                    'title_desc': 'm.title DESC'
+                }
+                order_by_inner = order_by_map.get(sort_by, order_by_map['newest'])
+                order_by_outer = order_by_inner
+            
+            # Đếm tổng số phim
+            count_query = f"""
+                SELECT COUNT(DISTINCT m.movieId)
+                FROM cine.Movie m
+                {where_sql}
+            """
+            total_count = conn.execute(text(count_query), params).scalar()
+            
+            # Tính toán phân trang
+            total_pages = (total_count + per_page - 1) // per_page
+            offset = (page - 1) * per_page
+            
+            # Lấy danh sách phim
+            if sort_by == 'ratings':
+                query = f"""
+                    SELECT m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country, m.viewCount,
+                           AVG(CAST(r.value AS FLOAT)) AS avgRating,
+                           COUNT(r.value) AS ratingCount
+                    FROM cine.Movie m
+                    LEFT JOIN cine.Rating r ON m.movieId = r.movieId
+                    {where_sql}
+                    GROUP BY m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country, m.viewCount
+                    ORDER BY {order_by_outer}
+                    OFFSET :offset ROWS
+                    FETCH NEXT :per_page ROWS ONLY
+                """
+            else:
+                query = f"""
+                    SELECT m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country, m.viewCount,
+                           AVG(CAST(r.value AS FLOAT)) AS avgRating,
+                           COUNT(r.value) AS ratingCount
+                    FROM cine.Movie m
+                    LEFT JOIN cine.Rating r ON m.movieId = r.movieId
+                    {where_sql}
+                    GROUP BY m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country, m.viewCount
+                    ORDER BY {order_by_inner}
+                    OFFSET :offset ROWS
+                    FETCH NEXT :per_page ROWS ONLY
+                """
+            
+            params["offset"] = offset
+            params["per_page"] = per_page
+            rows = conn.execute(text(query), params).mappings().all()
+            
+            # Lấy genres cho các phim
+            movie_ids = [r["movieId"] for r in rows]
+            genres_dict = get_movies_genres(movie_ids, current_app.db_engine) if movie_ids else {}
+            
+            # Format movies
+            movies = []
+            for r in rows:
+                movie_id = r["movieId"]
+                genres = genres_dict.get(movie_id, "")
+                
+                movies.append({
+                    "id": movie_id,
+                    "title": r["title"],
+                    "poster": get_poster_or_dummy(r.get("posterUrl"), r["title"]),
+                    "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
+                    "description": (r.get("overview") or "")[:160],
+                    "year": r.get("releaseYear"),
+                    "country": r.get("country"),
+                    "avgRating": round(float(r["avgRating"]), 2) if r["avgRating"] else 0.0,
+                    "ratingCount": int(r["ratingCount"]) if r["ratingCount"] else 0,
+                    "viewCount": r.get("viewCount") or 0,
+                    "genres": genres.split(", ") if genres else []
+                })
+            
+            # Lấy danh sách năm và thể loại cho filter
+            years = conn.execute(text("""
+                SELECT DISTINCT releaseYear 
+                FROM cine.Movie 
+                WHERE releaseYear IS NOT NULL 
+                ORDER BY releaseYear DESC
+            """)).fetchall()
+            year_list = [y[0] for y in years]
+            
+            genres_list = conn.execute(text("""
+                SELECT DISTINCT g.name 
+                FROM cine.Genre g
+                JOIN cine.MovieGenre mg ON g.genreId = mg.genreId
+                ORDER BY g.name
+            """)).fetchall()
+            genre_list = [g[0] for g in genres_list]
+            
+            # Pagination
+            pagination = {
+                "page": page,
+                "per_page": per_page,
+                "total": total_count,
+                "pages": total_pages,
+                "has_prev": page > 1,
+                "has_next": page < total_pages,
+                "prev_num": page - 1 if page > 1 else None,
+                "next_num": page + 1 if page < total_pages else None
+            }
+            
+            return render_template("genre_page.html", 
+                                 movies=movies, 
+                                 pagination=pagination,
+                                 sort_by=sort_by,
+                                 year_filter=year_filter,
+                                 genre_filter=genre_name,  # Genre chính từ slug
+                                 additional_genre_filter=additional_genre_filter,  # Genre phụ (nếu có)
+                                 genre_slug=genre_slug,
+                                 genre_name=genre_name,
+                                 year_list=year_list,
+                                 genre_list=genre_list)
+            
+    except Exception as e:
+        current_app.logger.error(f"Error loading genre page: {e}", exc_info=True)
+        return render_template("genre_page.html", 
+                             movies=[], 
+                             pagination=None,
+                             sort_by='newest',
+                             year_filter='',
+                             genre_filter=genre_name,
+                             additional_genre_filter='',
+                             genre_slug=genre_slug,
+                             genre_name=genre_name,
+                             year_list=[],
+                             genre_list=[])
 
 
 @main_bp.route("/onboarding")

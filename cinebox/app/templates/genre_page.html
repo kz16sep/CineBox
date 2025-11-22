@@ -1,0 +1,725 @@
+{% extends 'base.html' %}
+{% block title %}{{ genre_name }} · CineBox{% endblock %}
+{% block content %}
+<style>
+.filter-section {
+  background: #0b1020;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 30px;
+}
+
+.filter-row {
+  display: flex;
+  gap: 15px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 150px;
+}
+
+.filter-group label {
+  color: #e7e9ee;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.filter-select {
+  background: #141a28;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #e7e9ee;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.filter-select:hover {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.filter-select:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.filter-select option {
+  background: #141a28;
+  color: #e7e9ee;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.btn-filter {
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-filter-reset {
+  background: #141a28;
+  color: #e7e9ee;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.btn-filter-reset:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.results-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.results-header h1 {
+  color: #fff;
+  margin: 0;
+  font-size: 1.8rem;
+}
+
+.results-count {
+  color: #9aa3b2;
+  font-size: 0.9rem;
+}
+
+.movies-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 20px;
+  margin: 20px 0;
+}
+
+/* Card Styles - Giống với all_movies.html */
+.card {
+  position: relative;
+  background: #141a28;
+  border-radius: 12px;
+  overflow: hidden;
+  transition: all 0.3s ease;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(10px);
+}
+
+.card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+  border-color: #3b82f6;
+}
+
+.action-buttons {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  gap: 8px;
+  z-index: 10;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.card:hover .action-buttons {
+  opacity: 1;
+}
+
+.favorite-btn, .watchlist-btn {
+  background: rgba(0, 0, 0, 0.8);
+  border: none;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+.favorite-btn:hover, .watchlist-btn:hover {
+  background: rgba(0, 0, 0, 0.9);
+  transform: scale(1.1);
+}
+
+.favorite-btn.favorited {
+  background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+  box-shadow: 0 4px 15px rgba(255, 107, 107, 0.4);
+}
+
+.favorite-btn.favorited:hover {
+  background: linear-gradient(135deg, #ff7b7b, #ff6b24);
+  transform: scale(1.15);
+  box-shadow: 0 6px 20px rgba(255, 107, 107, 0.5);
+}
+
+.watchlist-btn.watchlisted {
+  background: linear-gradient(135deg, #4CAF50, #45a049);
+  box-shadow: 0 4px 15px rgba(76, 175, 80, 0.4);
+}
+
+.watchlist-btn.watchlisted:hover {
+  background: linear-gradient(135deg, #5cbf60, #4CAF50);
+  transform: scale(1.15);
+  box-shadow: 0 6px 20px rgba(76, 175, 80, 0.5);
+}
+
+.favorite-icon, .watchlist-icon {
+  font-size: 18px;
+  transition: all 0.3s ease;
+}
+
+.card-link {
+  text-decoration: none;
+  color: inherit;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.card-link:hover {
+  text-decoration: none;
+  color: inherit;
+}
+
+.poster {
+  width: 100%;
+  height: 280px;
+  background-size: cover;
+  background-position: center;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  transition: transform 0.3s ease;
+}
+
+.card:hover .poster {
+  transform: scale(1.05);
+}
+
+.card-content {
+  padding: 12px;
+}
+
+.card-title {
+  color: #fff;
+  font-weight: bold;
+  margin-bottom: 5px;
+  font-size: 0.9em;
+  line-height: 1.3;
+}
+
+.card-meta {
+  margin: 5px 0;
+  font-size: 0.8rem;
+  padding: 0 10px;
+}
+
+.card-meta .year {
+  background: #333;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #fff;
+}
+
+.card-meta .country {
+  color: #888;
+}
+
+.card-genres {
+  font-size: 0.8rem;
+  color: #aaa;
+  margin: 8px 0;
+  line-height: 1.3;
+  padding: 0 10px;
+}
+
+.movie-rating {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  font-size: 0.9rem;
+  padding: 0 10px;
+}
+
+.rating-stars {
+  color: #ffc107;
+  font-weight: bold;
+}
+
+.rating-count {
+  color: #ccc;
+  font-size: 0.8rem;
+}
+
+.view-count {
+  color: #888;
+  font-size: 0.9em;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  margin: 20px 0;
+}
+
+.empty-icon {
+  font-size: 3rem;
+  margin-bottom: 15px;
+}
+
+.empty-state h4 {
+  color: #fff;
+  margin: 0 0 10px 0;
+  font-size: 1.2rem;
+}
+
+.empty-state p {
+  color: #888;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 30px 0;
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+}
+
+.pagination-info {
+  color: #9aa3b2;
+  font-size: 0.9rem;
+}
+
+.pagination-controls {
+  display: flex;
+  gap: 15px;
+  align-items: center;
+}
+
+.btn-pagination {
+  padding: 10px 20px;
+  background: #141a28;
+  color: #e7e9ee;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+
+.btn-pagination:hover {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: #3b82f6;
+  color: #fff;
+}
+
+.page-info {
+  color: #e7e9ee;
+  font-size: 0.9rem;
+}
+
+@media (max-width: 768px) {
+  .filter-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .filter-group {
+    min-width: 100%;
+  }
+  
+  .filter-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+  
+  .btn-filter {
+    flex: 1;
+  }
+  
+  .movies-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 15px;
+  }
+  
+  .results-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  
+  .pagination {
+    flex-direction: column;
+    gap: 15px;
+  }
+}
+</style>
+
+<div class="container">
+  <div class="main-content">
+    <div class="results-header">
+      <h1>🎬 Phim {{ genre_name }}</h1>
+      <div class="results-count">
+        {% if pagination %}
+          Hiển thị {{ ((pagination.page - 1) * pagination.per_page + 1) }} - 
+          {{ pagination.page * pagination.per_page if pagination.page * pagination.per_page < pagination.total else pagination.total }} 
+          trong tổng số {{ pagination.total }} phim
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Filter Section -->
+    <div class="filter-section">
+      <form method="GET" action="{{ url_for('main.genre_page', genre_slug=genre_slug) }}" id="filterForm">
+        <div class="filter-row">
+          <div class="filter-group">
+            <label for="sort">Sắp xếp theo</label>
+            <select name="sort" id="sort" class="filter-select" onchange="document.getElementById('filterForm').submit()">
+              <option value="newest" {% if sort_by == 'newest' %}selected{% endif %}>Mới nhất</option>
+              <option value="oldest" {% if sort_by == 'oldest' %}selected{% endif %}>Cũ nhất</option>
+              <option value="views" {% if sort_by == 'views' %}selected{% endif %}>Lượt xem nhiều nhất</option>
+              <option value="ratings" {% if sort_by == 'ratings' %}selected{% endif %}>Đánh giá cao nhất</option>
+              <option value="title_asc" {% if sort_by == 'title_asc' %}selected{% endif %}>Tên A-Z</option>
+              <option value="title_desc" {% if sort_by == 'title_desc' %}selected{% endif %}>Tên Z-A</option>
+            </select>
+          </div>
+          
+          <div class="filter-group">
+            <label for="year">Năm phát hành</label>
+            <select name="year" id="year" class="filter-select" onchange="document.getElementById('filterForm').submit()">
+              <option value="">Tất cả năm</option>
+              {% for year in year_list %}
+              <option value="{{ year }}" {% if year_filter|string == year|string %}selected{% endif %}>{{ year }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          
+          <div class="filter-group">
+            <label for="genre">Thể loại bổ sung</label>
+            <select name="genre" id="genre" class="filter-select" onchange="document.getElementById('filterForm').submit()">
+              <option value="">Tất cả thể loại</option>
+              {% for genre in genre_list %}
+              {% if genre != genre_filter %}
+              <option value="{{ genre }}" {% if additional_genre_filter == genre %}selected{% endif %}>{{ genre }}</option>
+              {% endif %}
+              {% endfor %}
+            </select>
+          </div>
+          
+          <div class="filter-actions">
+            <button type="button" class="btn-filter btn-filter-reset" onclick="resetFilters()">
+              🔄 Đặt lại
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+
+    <!-- Movies Grid -->
+    {% if movies %}
+    <div class="movies-grid">
+      {% for movie in movies %}
+      <div class="card">
+        <a href="{{ url_for('main.detail', movie_id=movie.id) }}" class="card-link">
+          <div class="poster" style="background-image:url('{{ movie.poster }}')"></div>
+          <div class="card-content">
+            <div class="card-title">{{ movie.title }}</div>
+            <div class="card-meta">
+              {% if movie.year %}<span class="year">{{ movie.year }}</span>{% endif %}
+              {% if movie.country %}<span class="country">{{ movie.country }}</span>{% endif %}
+            </div>
+            {% if movie.genres %}<div class="card-genres">{{ movie.genres|join(', ') }}</div>{% endif %}
+            <div class="movie-rating" data-movie-id="{{ movie.id }}">
+              <span class="rating-stars">
+                {% if movie.avgRating and movie.avgRating > 0 %}
+                  ⭐ {{ "%.1f"|format(movie.avgRating) }}
+                {% else %}
+                  ⭐ 0.0
+                {% endif %}
+              </span>
+              <span class="rating-count">
+                {% if movie.ratingCount and movie.ratingCount > 0 %}
+                  ({{ movie.ratingCount }})
+                {% else %}
+                  (0)
+                {% endif %}
+              </span>
+              {% if movie.viewCount and movie.viewCount > 0 %}
+              <span class="view-count" style="margin-left: 8px; color: #888; font-size: 0.9em;">
+                👁️ {{ movie.viewCount }}
+              </span>
+              {% endif %}
+            </div>
+          </div>
+        </a>
+        <div class="action-buttons">
+          <button class="watchlist-btn" onclick="toggleWatchlist({{ movie.id }}, event)" data-movie-id="{{ movie.id }}">
+            <span class="watchlist-icon">📋</span>
+          </button>
+          <button class="favorite-btn" onclick="toggleFavorite({{ movie.id }}, event)" data-movie-id="{{ movie.id }}">
+            <span class="favorite-icon">🤍</span>
+          </button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    
+    <!-- Pagination -->
+    {% if pagination and pagination.pages > 1 %}
+    <div class="pagination">
+      <div class="pagination-info">
+        <span>Trang {{ pagination.page }} / {{ pagination.pages }}</span>
+        <span>({{ pagination.total }} phim)</span>
+      </div>
+      
+      <div class="pagination-controls">
+        {% if pagination.has_prev %}
+          <a href="{{ url_for('main.genre_page', genre_slug=genre_slug, page=pagination.prev_num, sort=sort_by, year=year_filter, genre=additional_genre_filter) }}" class="btn-pagination">
+            ← Trang trước
+          </a>
+        {% else %}
+          <span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">← Trang trước</span>
+        {% endif %}
+        
+        <span class="page-info">Trang {{ pagination.page }} / {{ pagination.pages }}</span>
+        
+        {% if pagination.has_next %}
+          <a href="{{ url_for('main.genre_page', genre_slug=genre_slug, page=pagination.next_num, sort=sort_by, year=year_filter, genre=additional_genre_filter) }}" class="btn-pagination">
+            Trang sau →
+          </a>
+        {% else %}
+          <span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">Trang sau →</span>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-icon">🎬</div>
+      <h4>Không tìm thấy phim nào</h4>
+      <p>Hãy thử thay đổi bộ lọc để tìm phim khác.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+function resetFilters() {
+  window.location.href = "{{ url_for('main.genre_page', genre_slug=genre_slug) }}";
+}
+
+// Check favorite and watchlist status for all movies on page load
+document.addEventListener('DOMContentLoaded', function() {
+  checkAllFavoriteStatus();
+  checkAllWatchlistStatus();
+});
+
+// Favorite functionality
+function toggleFavorite(movieId, event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  
+  fetch(`/toggle-favorite/${movieId}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    }
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      updateFavoriteButton(movieId, data.is_favorite);
+      showToast(data.message, 'success');
+    } else {
+      showToast(data.message, 'error');
+    }
+  })
+  .catch(error => {
+    console.error('Error:', error);
+    showToast('Có lỗi xảy ra khi chuyển đổi trạng thái yêu thích', 'error');
+  });
+}
+
+// Watchlist functionality
+function toggleWatchlist(movieId, event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  
+  fetch(`/toggle-watchlist/${movieId}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    }
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      updateWatchlistButton(movieId, data.is_watchlist);
+      showToast(data.message, 'success');
+    } else {
+      showToast(data.message, 'error');
+    }
+  })
+  .catch(error => {
+    console.error('Error:', error);
+    showToast('Có lỗi xảy ra khi chuyển đổi trạng thái xem sau', 'error');
+  });
+}
+
+function updateFavoriteButton(movieId, isFavorite) {
+  const favoriteBtn = document.querySelector(`.favorite-btn[data-movie-id="${movieId}"]`);
+  if (!favoriteBtn) return;
+  
+  const favoriteIcon = favoriteBtn.querySelector('.favorite-icon');
+  if (!favoriteIcon) return;
+  
+  if (isFavorite) {
+    favoriteIcon.textContent = '❤️';
+    favoriteBtn.classList.add('favorited');
+  } else {
+    favoriteIcon.textContent = '🤍';
+    favoriteBtn.classList.remove('favorited');
+  }
+}
+
+function updateWatchlistButton(movieId, isWatchlist) {
+  const watchlistBtn = document.querySelector(`.watchlist-btn[data-movie-id="${movieId}"]`);
+  if (!watchlistBtn) return;
+  
+  const watchlistIcon = watchlistBtn.querySelector('.watchlist-icon');
+  if (!watchlistIcon) return;
+  
+  if (isWatchlist) {
+    watchlistIcon.textContent = '✅';
+    watchlistBtn.classList.add('watchlisted');
+  } else {
+    watchlistIcon.textContent = '📋';
+    watchlistBtn.classList.remove('watchlisted');
+  }
+}
+
+function checkFavoriteStatus(movieId) {
+  fetch(`/check-favorite/${movieId}`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    }
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      updateFavoriteButton(movieId, data.is_favorite);
+    }
+  })
+  .catch(error => {
+    console.error('Error checking favorite status:', error);
+  });
+}
+
+function checkWatchlistStatus(movieId) {
+  fetch(`/check-watchlist/${movieId}`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    }
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      updateWatchlistButton(movieId, data.is_watchlist);
+    }
+  })
+  .catch(error => {
+    console.error('Error checking watchlist status:', error);
+  });
+}
+
+function checkAllFavoriteStatus() {
+  const favoriteBtns = document.querySelectorAll('.favorite-btn');
+  favoriteBtns.forEach(btn => {
+    const movieId = btn.getAttribute('data-movie-id');
+    if (movieId) {
+      checkFavoriteStatus(parseInt(movieId));
+    }
+  });
+}
+
+function checkAllWatchlistStatus() {
+  const watchlistBtns = document.querySelectorAll('.watchlist-btn');
+  watchlistBtns.forEach(btn => {
+    const movieId = btn.getAttribute('data-movie-id');
+    if (movieId) {
+      checkWatchlistStatus(parseInt(movieId));
+    }
+  });
+}
+
+function showToast(message, type = 'success') {
+  let toast = document.getElementById('toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'toast';
+    toast.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #2d3748;
+      color: white;
+      padding: 16px 24px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      z-index: 1000;
+      transform: translateX(400px);
+      transition: transform 0.3s ease-in-out;
+      max-width: 300px;
+      border-left: 4px solid #48bb78;
+    `;
+    document.body.appendChild(toast);
+  }
+  
+  toast.innerHTML = `<div class="toast-content">${message}</div>`;
+  toast.className = `toast ${type}`;
+  if (type === 'error') {
+    toast.style.borderLeftColor = '#f56565';
+  } else {
+    toast.style.borderLeftColor = '#48bb78';
+  }
+  
+  toast.style.transform = 'translateX(0)';
+  
+  setTimeout(() => {
+    toast.style.transform = 'translateX(400px)';
+  }, 3000);
+}
+</script>
+{% endblock %}
+

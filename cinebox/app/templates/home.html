@@ -409,6 +409,47 @@
     {% endif %}
   </div>
   
+  <!-- Filter Section (chỉ hiển thị khi có genre filter hoặc search) -->
+  {% if genre_filter or search_query %}
+  <div class="filter-section" style="background: #0b1020; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px; padding: 20px; margin-bottom: 30px;">
+    <form method="GET" action="{{ url_for('main.home') }}" id="filterForm">
+      <input type="hidden" name="genre" value="{{ genre_filter }}">
+      <input type="hidden" name="q" value="{{ search_query }}">
+      <div class="filter-row" style="display: flex; gap: 15px; flex-wrap: wrap; align-items: center;">
+        <div class="filter-group" style="display: flex; flex-direction: column; gap: 8px; min-width: 150px;">
+          <label for="sort" style="color: #e7e9ee; font-size: 0.85rem; font-weight: 500;">Sắp xếp theo</label>
+          <select name="sort" id="sort" class="filter-select" onchange="document.getElementById('filterForm').submit()" style="background: #141a28; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 10px 12px; color: #e7e9ee; font-size: 0.9rem; cursor: pointer; transition: all 0.2s ease;">
+            <option value="newest" {% if sort_by == 'newest' %}selected{% endif %}>Mới nhất</option>
+            <option value="oldest" {% if sort_by == 'oldest' %}selected{% endif %}>Cũ nhất</option>
+            <option value="views" {% if sort_by == 'views' %}selected{% endif %}>Lượt xem nhiều nhất</option>
+            <option value="ratings" {% if sort_by == 'ratings' %}selected{% endif %}>Đánh giá cao nhất</option>
+            <option value="title_asc" {% if sort_by == 'title_asc' %}selected{% endif %}>Tên A-Z</option>
+            <option value="title_desc" {% if sort_by == 'title_desc' %}selected{% endif %}>Tên Z-A</option>
+          </select>
+        </div>
+        
+        {% if year_list %}
+        <div class="filter-group" style="display: flex; flex-direction: column; gap: 8px; min-width: 150px;">
+          <label for="year" style="color: #e7e9ee; font-size: 0.85rem; font-weight: 500;">Năm phát hành</label>
+          <select name="year" id="year" class="filter-select" onchange="document.getElementById('filterForm').submit()" style="background: #141a28; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 10px 12px; color: #e7e9ee; font-size: 0.9rem; cursor: pointer; transition: all 0.2s ease;">
+            <option value="">Tất cả năm</option>
+            {% for year in year_list %}
+            <option value="{{ year }}" {% if year_filter|string == year|string %}selected{% endif %}>{{ year }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endif %}
+        
+        <div class="filter-actions" style="display: flex; gap: 10px; margin-left: auto;">
+          <button type="button" class="btn-filter btn-filter-reset" onclick="resetFilters()" style="padding: 10px 20px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1); background: #141a28; color: #e7e9ee; font-size: 0.9rem; font-weight: 500; cursor: pointer; transition: all 0.2s ease;">
+            🔄 Đặt lại
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+  
   <div class="cards movies-grid">
     {% for m in all_movies %}
     <div class="card">
@@ -466,7 +507,7 @@
     
     <div class="pagination-controls">
       {% if pagination.has_prev %}
-        <a href="{{ url_for('main.home', page=pagination.prev_num, q=search_query, genre=genre_filter) }}" class="btn-pagination">
+        <a href="{{ url_for('main.home', page=pagination.prev_num, q=search_query, genre=genre_filter, sort=sort_by, year=year_filter) }}" class="btn-pagination">
           ← Trang trước
         </a>
       {% else %}
@@ -476,7 +517,7 @@
       <span class="page-info">Trang {{ pagination.page }} / {{ pagination.pages }}</span>
       
       {% if pagination.has_next %}
-        <a href="{{ url_for('main.home', page=pagination.next_num, q=search_query, genre=genre_filter) }}" class="btn-pagination">
+        <a href="{{ url_for('main.home', page=pagination.next_num, q=search_query, genre=genre_filter, sort=sort_by, year=year_filter) }}" class="btn-pagination">
           Trang sau →
         </a>
       {% else %}
@@ -2021,6 +2062,20 @@ function attachSearchListeners() {
 }
 
 // Favorite functionality
+function resetFilters() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const genre = urlParams.get('genre');
+  const q = urlParams.get('q');
+  
+  if (genre) {
+    window.location.href = "{{ url_for('main.home') }}?genre=" + genre;
+  } else if (q) {
+    window.location.href = "{{ url_for('main.home') }}?q=" + q;
+  } else {
+    window.location.href = "{{ url_for('main.home') }}";
+  }
+}
+
 function toggleFavorite(movieId, event) {
     if (event) {
         event.preventDefault();
