@@ -535,8 +535,7 @@ function resetFilters() {
 
 // Check favorite and watchlist status for all movies on page load
 document.addEventListener('DOMContentLoaded', function() {
-  checkAllFavoriteStatus();
-  checkAllWatchlistStatus();
+  checkAllStatus();
 });
 
 // Favorite functionality
@@ -660,6 +659,57 @@ function checkWatchlistStatus(movieId) {
   })
   .catch(error => {
     console.error('Error checking watchlist status:', error);
+  });
+}
+
+function checkAllStatus() {
+  // Thu thập tất cả movie IDs
+  const movieIds = [];
+  const favoriteBtns = document.querySelectorAll('.favorite-btn');
+  const watchlistBtns = document.querySelectorAll('.watchlist-btn');
+  
+  favoriteBtns.forEach(btn => {
+    const movieId = btn.getAttribute('data-movie-id');
+    if (movieId && !movieIds.includes(parseInt(movieId))) {
+      movieIds.push(parseInt(movieId));
+    }
+  });
+  
+  watchlistBtns.forEach(btn => {
+    const movieId = btn.getAttribute('data-movie-id');
+    if (movieId && !movieIds.includes(parseInt(movieId))) {
+      movieIds.push(parseInt(movieId));
+    }
+  });
+  
+  if (movieIds.length === 0) return;
+  
+  // Gọi batch API
+  fetch('/batch-check-status', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      movie_ids: movieIds
+    })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      // Cập nhật tất cả buttons
+      Object.keys(data.data).forEach(movieId => {
+        const status = data.data[movieId];
+        updateFavoriteButton(parseInt(movieId), status.is_favorite);
+        updateWatchlistButton(parseInt(movieId), status.is_watchlist);
+      });
+    }
+  })
+  .catch(error => {
+    console.error('Error batch checking status:', error);
+    // Fallback to individual checks
+    checkAllFavoriteStatus();
+    checkAllWatchlistStatus();
   });
 }
 

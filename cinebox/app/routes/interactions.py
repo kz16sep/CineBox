@@ -221,6 +221,57 @@ def check_favorite(movie_id):
         return jsonify({"success": False, "is_favorite": False})
 
 
+@main_bp.route("/batch-check-status", methods=["POST"])
+def batch_check_status():
+    """Kiểm tra trạng thái favorite và watchlist cho nhiều phim cùng lúc"""
+    if not session.get("user_id"):
+        return jsonify({"success": False, "data": {}})
+    
+    user_id = session.get("user_id")
+    data = request.get_json()
+    movie_ids = data.get("movie_ids", [])
+    
+    if not movie_ids or len(movie_ids) > 50:  # Giới hạn 50 phim
+        return jsonify({"success": False, "message": "Invalid movie_ids"})
+    
+    try:
+        with current_app.db_engine.connect() as conn:
+            # Tạo placeholder cho IN clause
+            placeholders = ','.join([f':movie_id_{i}' for i in range(len(movie_ids))])
+            params = {f'movie_id_{i}': movie_id for i, movie_id in enumerate(movie_ids)}
+            params['user_id'] = user_id
+            
+            # Check favorites
+            favorites_result = conn.execute(text(f"""
+                SELECT movieId FROM [cine].[Favorite] 
+                WHERE userId = :user_id AND movieId IN ({placeholders})
+            """), params).fetchall()
+            
+            favorite_movie_ids = {row[0] for row in favorites_result}
+            
+            # Check watchlist
+            watchlist_result = conn.execute(text(f"""
+                SELECT movieId FROM [cine].[Watchlist] 
+                WHERE userId = :user_id AND movieId IN ({placeholders})
+            """), params).fetchall()
+            
+            watchlist_movie_ids = {row[0] for row in watchlist_result}
+            
+            # Tạo response data
+            result_data = {}
+            for movie_id in movie_ids:
+                result_data[str(movie_id)] = {
+                    "is_favorite": movie_id in favorite_movie_ids,
+                    "is_watchlist": movie_id in watchlist_movie_ids
+                }
+            
+            return jsonify({"success": True, "data": result_data})
+            
+    except Exception as e:
+        current_app.logger.error(f"Error batch checking status for user {user_id}: {e}", exc_info=True)
+        return jsonify({"success": False, "data": {}})
+
+
 @main_bp.route("/toggle-favorite/<int:movie_id>", methods=["POST"])
 @login_required
 def toggle_favorite(movie_id):

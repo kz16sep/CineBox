@@ -342,8 +342,8 @@ class ContentBasedRecommender:
                 user_movie_ids = [int(row[0]) for row in user_movies_result.fetchall() if row[0] is not None]
                 
                 if not user_movie_ids:
-                    logger.info(f"User {user_id} has no positive interactions, cannot generate content-based recommendations")
-                    return []
+                    logger.info(f"User {user_id} has no positive interactions, using popular movies fallback")
+                    return self._get_popular_movies_fallback(user_id, validated_limit)
                 
                 # Lấy tất cả phim user đã xem/rated để loại bỏ khỏi recommendations
                 # Bao gồm: tất cả rated, tất cả viewed >= 70% hoặc finished
@@ -466,5 +466,58 @@ class ContentBasedRecommender:
                 
         except Exception as e:
             logger.error(f"Error getting content-based recommendations for user {user_id}: {e}")
+            return []
+    
+    def _get_popular_movies_fallback(self, user_id: int, limit: int = 10) -> List[Dict]:
+        """
+        Fallback method: Lấy phim phổ biến khi Content-Based không có gợi ý
+        """
+        try:
+            with self.db_engine.connect() as conn:
+                # Lấy phim phổ biến mà user chưa xem
+                popular_movies = conn.execute(text("""
+                    SELECT TOP (:limit) 
+                        m.movieId, m.title, m.posterUrl, m.releaseYear, 
+                        m.country, m.averageRating, m.totalRatings,
+                        STRING_AGG(g.name, ', ') as genres
+                    FROM [cine].[Movie] m
+                    LEFT JOIN [cine].[MovieGenre] mg ON m.movieId = mg.movieId
+                    LEFT JOIN [cine].[Genre] g ON mg.genreId = g.genreId
+                    WHERE m.averageRating >= 4.0 AND m.totalRatings >= 5
+                        AND m.movieId NOT IN (
+                            SELECT COALESCE(vh.movieId, 0) FROM cine.ViewHistory vh WHERE vh.userId = :user_id
+                        )
+                        AND m.movieId NOT IN (
+                            SELECT COALESCE(r.movieId, 0) FROM cine.Rating r WHERE r.userId = :user_id
+                        )
+                    GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, 
+                             m.country, m.averageRating, m.totalRatings
+                    ORDER BY m.averageRating DESC, m.totalRatings DESC
+                """), {"limit": limit, "user_id": user_id}).mappings().all()
+                
+                recommendations = []
+                for i, movie in enumerate(popular_movies):
+                    recommendations.append({
+                        "movieId": movie["movieId"],
+                        "id": movie["movieId"],
+                        "title": movie["title"],
+                        "poster": movie["posterUrl"],
+                        "posterUrl": movie["posterUrl"],
+                        "releaseYear": movie["releaseYear"],
+                        "country": movie["country"],
+                        "avgRating": float(movie["averageRating"]) if movie["averageRating"] else 0.0,
+                        "ratingCount": movie["totalRatings"] or 0,
+                        "genres": movie["genres"] or "",
+                        "similarity": 0.7 - (i * 0.03),  # Giảm dần similarity
+                        "reason": f"Phim phổ biến (Top {i+1})",
+                        "source": "cb_fallback",
+                        "rank": i + 1
+                    })
+                
+                logger.info(f"CB Fallback: Found {len(recommendations)} popular movies for user {user_id}")
+                return recommendations
+                
+        except Exception as e:
+            logger.error(f"Error in CB fallback for user {user_id}: {e}")
             return []
 

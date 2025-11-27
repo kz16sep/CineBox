@@ -241,6 +241,13 @@ def home():
             current_app.logger.error(f"Error loading latest movies: {e}", exc_info=True)
             latest_movies = []
     
+    # Debug log
+    current_app.logger.info(f"Latest movies count: {len(latest_movies)}")
+    if latest_movies:
+        current_app.logger.info(f"First movie: {latest_movies[0]['title']}")
+    else:
+        current_app.logger.warning("No latest movies found!")
+    
     # Carousel movies
     if (carousel_movies_cache.get('data') and 
         carousel_movies_cache.get('timestamp') and 
@@ -272,6 +279,13 @@ def home():
         except Exception as e:
             current_app.logger.error(f"Error loading carousel movies: {e}")
             carousel_movies = []
+    
+    # Debug log for carousel
+    current_app.logger.info(f"Carousel movies count: {len(carousel_movies)}")
+    if carousel_movies:
+        current_app.logger.info(f"First carousel movie: {carousel_movies[0]['title']}")
+    else:
+        current_app.logger.warning("No carousel movies found!")
     
     # All movies với pagination
     try:

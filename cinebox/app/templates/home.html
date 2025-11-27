@@ -76,7 +76,7 @@
 <!-- Genre Filter Menu -->
 <section class="genre-filter">
   <div class="genre-filter-container">
-    <h3>🎬 Lọc theo thể loại</h3>
+    <h3>🎬 Thể loại</h3>
     <div class="genre-buttons">
       <a href="{{ url_for('main.home') }}" 
          class="genre-btn {{ 'active' if not genre_filter else '' }}"
@@ -198,6 +198,12 @@
 <section class="personalized-section">
   <div class="section-header">
     <h3>🎯 Gợi ý cá nhân cho bạn</h3>
+    <div class="section-actions">
+      <button class="refresh-recommendations-btn" onclick="refreshRecommendations()" id="refreshBtn">
+        <span class="refresh-icon">🔄</span>
+        <span class="refresh-text">Làm mới gợi ý</span>
+      </button>
+    </div>
     <!-- ✅ Ẩn model status bar -->
     <div class="model-status" id="modelStatus" style="display: none;">
       <span id="modelInfo">Đang tải thông tin model...</span>
@@ -206,69 +212,29 @@
       </span>
     </div>
   </div>
-  {% if recommended|length > 0 %}
   <div class="personalized-cards-wrapper">
     <button class="scroll-btn scroll-btn-left" id="personalizedScrollLeft" onclick="scrollPersonalizedCards('left')" aria-label="Cuộn trái">
       ‹
     </button>
     <div class="personalized-cards" id="personalizedCards">
-      {% for m in recommended %}
-      <div class="card">
-        <a href="{{ url_for('main.detail', movie_id=m.id) }}" class="card-link">
-          <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
-          <div class="card-content">
-            <div class="card-title">{{ m.title }}</div>
-            <div class="card-meta">
-              {% if m.releaseYear %}<span class="year">{{ m.releaseYear }}</span>{% endif %}
-              {% if m.country %}<span class="country">{{ m.country }}</span>{% endif %}
-            </div>
-            {% if m.genres %}<div class="card-genres">{{ m.genres }}</div>{% endif %}
-            <div class="recommendation-info">
-              <!-- <div class="rec-score">Điểm: {{ "%.3f"|format(m.score) if m.score else "N/A" }}</div> -->
-              <!-- Rank đã được xóa: {% if m.rank %}<div class="rec-rank">#{{ m.rank }}</div>{% endif %} -->
-                <div class="debug-info" style="font-size: 0.7rem; color: #666; margin-top: 4px; background: rgba(0,0,0,0.1); padding: 8px; border-radius: 4px;">
-                  <div><strong>Hybrid Score:</strong> {{ "%.3f"|format(m.hybrid_score if m.hybrid_score is defined and m.hybrid_score is not none else (m.score if m.score is defined and m.score is not none else 0.0)) }}</div>
-                  <!-- {% if m.reason %}<div style="margin-top: 4px; color: #FF9800;"><strong>💡 Lý do:</strong> {{ m.reason }}</div>{% endif %} -->
-                  {% if m.generatedAt %}<div style="margin-top: 2px; font-size: 0.6rem; color: #999;">🕒 {{ m.generatedAt.strftime('%d/%m/%Y %H:%M') if m.generatedAt else 'N/A' }}</div>{% endif %}
-                </div>
-            </div>
-            <div class="movie-rating" data-movie-id="{{ m.id }}">
-              <span class="rating-stars">
-                {% if m.avgRating and m.avgRating > 0 %}
-                  ⭐ {{ "%.1f"|format(m.avgRating) }}
-                {% else %}
-                  ⭐ 0.0
-                {% endif %}
-              </span>
-              <!-- rating count hidden per request -->
-            </div>
-          </div>
-        </a>
-        <div class="action-buttons">
-          <button class="watchlist-btn" onclick="toggleWatchlist({{ m.id }}, event)" data-movie-id="{{ m.id }}">
-            <span class="watchlist-icon">📋</span>
-          </button>
-          <button class="favorite-btn" onclick="toggleFavorite({{ m.id }}, event)" data-movie-id="{{ m.id }}">
-            <span class="favorite-icon">🤍</span>
-          </button>
-        </div>
-      </div>
-      {% endfor %}
+      <!-- Recommendations sẽ được load bằng JavaScript với cache -->
+    </div>
+    <div class="personalized-loading" id="personalizedLoading" style="text-align: center; padding: 40px; display: none;">
+      <div class="loading-spinner">⏳</div>
+      <p>Đang tạo gợi ý cá nhân hóa...</p>
+    </div>
+    <div class="personalized-empty" id="personalizedEmpty" style="text-align: center; padding: 40px; display: none;">
+      <div class="empty-icon">🎬</div>
+      <h4>Chưa có gợi ý cá nhân</h4>
+      <p>Hãy đánh giá một số phim để nhận gợi ý cá nhân dựa trên sở thích của bạn!</p>
+      <button class="btn btn-primary" onclick="generateRecommendations()">
+        Tạo gợi ý ngay
+      </button>
     </div>
     <button class="scroll-btn scroll-btn-right" id="personalizedScrollRight" onclick="scrollPersonalizedCards('right')" aria-label="Cuộn phải">
       ›
     </button>
   </div>
-  {% else %}
-  <div class="empty-state">
-    <div class="empty-icon">🎬</div>
-    <h4>Chưa có gợi ý cá nhân</h4>
-    <p>Hãy đánh giá một số phim để nhận gợi ý cá nhân dựa trên sở thích của bạn!</p>
-    <button class="btn btn-primary" onclick="generateRecommendations()">
-      Tạo gợi ý ngay
-    </button>
-  </div>
-  {% endif %}
 </section>
 {% endif %}
 
@@ -516,6 +482,160 @@
   --shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
 }
 
+/* Base Container Responsive */
+@media (max-width: 768px) {
+  .container {
+    padding: 0 15px;
+  }
+}
+
+@media (max-width: 480px) {
+  .container {
+    padding: 0 10px;
+  }
+}
+
+/* Refresh Recommendations Button */
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.refresh-recommendations-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 25px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+  position: relative;
+  overflow: hidden;
+}
+
+.refresh-recommendations-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+  background: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%);
+}
+
+.refresh-recommendations-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+}
+
+.refresh-recommendations-btn.loading {
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+.refresh-recommendations-btn.loading .refresh-icon {
+  animation: spin 1s linear infinite;
+}
+
+.refresh-icon {
+  font-size: 1.1rem;
+  transition: transform 0.3s ease;
+}
+
+.refresh-text {
+  font-size: 0.9rem;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Section Header Responsive */
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 15px;
+}
+
+@media (max-width: 768px) {
+  .section-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  
+  .section-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  
+  .refresh-recommendations-btn {
+    padding: 8px 14px;
+    font-size: 0.85rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .refresh-recommendations-btn {
+    width: 100%;
+    justify-content: center;
+    padding: 10px 16px;
+  }
+}
+
+/* Hybrid Badge Styling */
+.hybrid-badge {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.rec-reason {
+  margin-top: 4px;
+  color: #888;
+  font-size: 0.8rem;
+  line-height: 1.2;
+}
+
+/* Loading States */
+.personalized-loading, .personalized-empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 40px 20px;
+}
+
+.loading-spinner {
+  font-size: 2rem;
+  animation: spin 1s linear infinite;
+  margin-bottom: 10px;
+}
+
+.error-state {
+  grid-column: 1 / -1;
+}
+
+.error-icon {
+  font-size: 3rem;
+  margin-bottom: 15px;
+}
+
+.empty-icon {
+  font-size: 3rem;
+  margin-bottom: 15px;
+}
+
 /* Hero Section */
 .hero {
   position: relative;
@@ -524,12 +644,15 @@
   border-radius: 15px;
   overflow: hidden;
   box-shadow: 0 15px 40px rgba(0, 0, 0, 0.3);
+  width: 100%;
+  max-width: 100%;
 }
 
 .hero-carousel {
   position: relative;
   width: 100%;
   height: 100%;
+  overflow: hidden;
 }
 
 .hero-slide {
@@ -798,12 +921,35 @@
 }
 
 /* Responsive Design */
+@media (max-width: 1024px) {
+  .hero {
+    min-height: 60vh;
+  }
+  
+  .hero-content {
+    min-height: 60vh;
+    padding: 25px;
+    gap: 25px;
+  }
+  
+  .hero-poster {
+    width: 200px;
+    height: 300px;
+  }
+}
+
 @media (max-width: 768px) {
+  .hero {
+    min-height: 50vh;
+    margin-bottom: 20px;
+  }
+  
   .hero-content {
     flex-direction: column;
     text-align: center;
     padding: 20px;
     gap: 20px;
+    min-height: 50vh;
   }
   
   .hero-poster {
@@ -817,10 +963,17 @@
   
   .hero-description {
     font-size: 1rem;
+    margin-bottom: 20px;
   }
   
   .hero-actions {
     justify-content: center;
+    margin-bottom: 40px;
+  }
+  
+  .hero-actions .btn {
+    padding: 15px 25px;
+    font-size: 1rem;
   }
   
   .carousel-controls {
@@ -837,6 +990,93 @@
   .dot {
     width: 10px;
     height: 10px;
+  }
+}
+
+@media (max-width: 480px) {
+  .hero {
+    min-height: 45vh;
+    border-radius: 10px;
+  }
+  
+  .hero-content {
+    padding: 15px;
+    gap: 15px;
+    min-height: 45vh;
+  }
+  
+  .hero-poster {
+    width: 150px;
+    height: 225px;
+  }
+  
+  .hero-text h1 {
+    font-size: 2rem;
+    margin-bottom: 10px;
+  }
+  
+  .hero-description {
+    font-size: 0.9rem;
+    margin-bottom: 15px;
+    line-height: 1.4;
+  }
+  
+  .hero-actions {
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 30px;
+  }
+  
+  .hero-actions .btn {
+    padding: 12px 20px;
+    font-size: 0.9rem;
+    width: 100%;
+    max-width: 250px;
+  }
+  
+  .carousel-controls {
+    bottom: 5px;
+    gap: 20px;
+  }
+  
+  .carousel-btn {
+    width: 30px;
+    height: 30px;
+    font-size: 1rem;
+  }
+  
+  .dot {
+    width: 8px;
+    height: 8px;
+  }
+}
+
+@media (max-width: 360px) {
+  .hero {
+    min-height: 40vh;
+  }
+  
+  .hero-content {
+    padding: 10px;
+    min-height: 40vh;
+  }
+  
+  .hero-poster {
+    width: 120px;
+    height: 180px;
+  }
+  
+  .hero-text h1 {
+    font-size: 1.8rem;
+  }
+  
+  .hero-description {
+    font-size: 0.85rem;
+  }
+  
+  .hero-actions .btn {
+    padding: 10px 15px;
+    font-size: 0.85rem;
   }
 }
 
@@ -1228,14 +1468,49 @@
     gap: 10px;
   }
   
+  .pagination {
+    margin: 20px 0;
+  }
+  
+  .pagination-info {
+    margin-bottom: 15px;
+    text-align: center;
+  }
+  
   .pagination-controls {
     flex-direction: column;
-    gap: 10px;
+    gap: 15px;
   }
   
   .page-numbers {
     flex-wrap: wrap;
     justify-content: center;
+    gap: 3px;
+  }
+  
+  .btn-pagination {
+    padding: 8px 16px;
+    font-size: 0.85rem;
+  }
+  
+  .page-number {
+    padding: 8px 10px;
+    font-size: 0.85rem;
+    min-width: 35px;
+  }
+}
+
+@media (max-width: 480px) {
+  .pagination {
+    margin: 15px 0;
+  }
+  
+  .pagination-info {
+    font-size: 0.9rem;
+  }
+  
+  .pagination-controls {
+    gap: 10px;
   }
   
   .btn-pagination {
@@ -1244,9 +1519,14 @@
   }
   
   .page-number {
-    padding: 6px 10px;
+    padding: 6px 8px;
     font-size: 0.8rem;
-    min-width: 35px;
+    min-width: 30px;
+  }
+  
+  .page-ellipsis {
+    font-size: 0.8rem;
+    padding: 6px 2px;
   }
 }
 
@@ -1608,6 +1888,57 @@ html {
   }
 }
 
+/* Genre Filter Responsive */
+@media (max-width: 768px) {
+  .genre-filter {
+    margin: 15px 0 30px 0;
+    padding: 15px 0;
+  }
+  
+  .genre-filter-container {
+    padding: 0 15px;
+  }
+  
+  .genre-filter h3 {
+    font-size: 1.1rem;
+    margin-bottom: 15px;
+  }
+  
+  .genre-buttons {
+    gap: 8px;
+  }
+  
+  .genre-btn {
+    padding: 8px 16px;
+    font-size: 0.85rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .genre-filter {
+    margin: 10px 0 20px 0;
+    padding: 10px 0;
+  }
+  
+  .genre-filter-container {
+    padding: 0 10px;
+  }
+  
+  .genre-filter h3 {
+    font-size: 1rem;
+    margin-bottom: 10px;
+  }
+  
+  .genre-buttons {
+    gap: 6px;
+  }
+  
+  .genre-btn {
+    padding: 6px 12px;
+    font-size: 0.8rem;
+  }
+}
+
 /* Responsive Grid */
 @media (max-width: 768px) {
   .cards, .movies-grid {
@@ -1756,8 +2087,7 @@ document.addEventListener('DOMContentLoaded', function() {
     attachSearchListeners();
     
     // Check favorite and watchlist status for all movies on page load
-    checkAllFavoriteStatus();
-    checkAllWatchlistStatus();
+    checkAllStatus();
     
     // Load ratings for all movies
     // loadAllRatings(); // disabled for consistent server-rendered ratings
@@ -2191,6 +2521,57 @@ function checkWatchlistStatus(movieId) {
     });
 }
 
+function checkAllStatus() {
+    // Thu thập tất cả movie IDs
+    const movieIds = [];
+    const favoriteBtns = document.querySelectorAll('.favorite-btn');
+    const watchlistBtns = document.querySelectorAll('.watchlist-btn');
+    
+    favoriteBtns.forEach(btn => {
+        const movieId = btn.getAttribute('data-movie-id');
+        if (movieId && !movieIds.includes(parseInt(movieId))) {
+            movieIds.push(parseInt(movieId));
+        }
+    });
+    
+    watchlistBtns.forEach(btn => {
+        const movieId = btn.getAttribute('data-movie-id');
+        if (movieId && !movieIds.includes(parseInt(movieId))) {
+            movieIds.push(parseInt(movieId));
+        }
+    });
+    
+    if (movieIds.length === 0) return;
+    
+    // Gọi batch API
+    fetch('/batch-check-status', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            movie_ids: movieIds
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Cập nhật tất cả buttons
+            Object.keys(data.data).forEach(movieId => {
+                const status = data.data[movieId];
+                updateFavoriteButton(parseInt(movieId), status.is_favorite);
+                updateWatchlistButton(parseInt(movieId), status.is_watchlist);
+            });
+        }
+    })
+    .catch(error => {
+        console.error('Error batch checking status:', error);
+        // Fallback to individual checks
+        checkAllFavoriteStatus();
+        checkAllWatchlistStatus();
+    });
+}
+
 function checkAllFavoriteStatus() {
     const favoriteBtns = document.querySelectorAll('.favorite-btn');
     favoriteBtns.forEach(btn => {
@@ -2432,47 +2813,219 @@ function showToast(message, type = 'success') {
   showNotification(message, type);
 }
 
-// Personalized Recommendations Functions
-function loadPersonalizedRecommendations() {
+// Personalized Recommendations Functions với Cache
+const RECOMMENDATIONS_CACHE_KEY = 'cinebox_recommendations';
+const CACHE_EXPIRY_KEY = 'cinebox_recommendations_expiry';
+const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 giờ
+
+function loadPersonalizedRecommendations(forceRefresh = false) {
+  // Kiểm tra cache trước
+  if (!forceRefresh) {
+    const cachedData = getCachedRecommendations();
+    if (cachedData) {
+      console.log('📦 Sử dụng dữ liệu cache');
+      updateRecommendationsDisplay(cachedData.recommendations);
+      return;
+    }
+  }
+
+  // Hiển thị loading
+  showRecommendationsLoading();
+  
+  console.log('🌐 Gọi API để lấy gợi ý mới');
   fetch('/api/personalized_recommendations')
     .then(response => response.json())
     .then(data => {
-      if (data.success) {
+      hideRecommendationsLoading();
+      
+      if (data.success && data.recommendations && data.recommendations.length > 0) {
+        // Lưu vào cache
+        setCachedRecommendations(data);
         updateRecommendationsDisplay(data.recommendations);
       } else {
-        // Show user rating count even when no recommendations
-        if (data.userRatingCount !== undefined) {
-          showUserRatingCount(data.userRatingCount);
-        }
+        // Nếu không có gợi ý từ model, thử cold start
+        console.log('🔄 Không có gợi ý từ model, thử cold start...');
+        loadColdStartFallback();
       }
     })
     .catch(error => {
       console.error('Error loading personalized recommendations:', error);
+      hideRecommendationsLoading();
+      showRecommendationsError();
+    });
+}
+
+function getCachedRecommendations() {
+  try {
+    const cached = localStorage.getItem(RECOMMENDATIONS_CACHE_KEY);
+    const expiry = localStorage.getItem(CACHE_EXPIRY_KEY);
+    
+    if (cached && expiry) {
+      const expiryTime = parseInt(expiry);
+      if (Date.now() < expiryTime) {
+        return JSON.parse(cached);
+      } else {
+        // Cache đã hết hạn
+        clearRecommendationsCache();
+      }
+    }
+  } catch (error) {
+    console.error('Error reading cache:', error);
+    clearRecommendationsCache();
+  }
+  return null;
+}
+
+function setCachedRecommendations(data) {
+  try {
+    const cacheData = {
+      recommendations: data.recommendations,
+      cachedAt: Date.now(),
+      source: data.source || 'api'
+    };
+    
+    localStorage.setItem(RECOMMENDATIONS_CACHE_KEY, JSON.stringify(cacheData));
+    localStorage.setItem(CACHE_EXPIRY_KEY, (Date.now() + CACHE_DURATION).toString());
+    
+    console.log('💾 Đã lưu gợi ý vào cache');
+  } catch (error) {
+    console.error('Error saving to cache:', error);
+  }
+}
+
+function clearRecommendationsCache() {
+  localStorage.removeItem(RECOMMENDATIONS_CACHE_KEY);
+  localStorage.removeItem(CACHE_EXPIRY_KEY);
+  console.log('🗑️ Đã xóa cache');
+}
+
+function refreshRecommendations() {
+  const refreshBtn = document.getElementById('refreshBtn');
+  if (refreshBtn) {
+    refreshBtn.classList.add('loading');
+    refreshBtn.disabled = true;
+  }
+  
+  // Xóa cache và load lại
+  clearRecommendationsCache();
+  loadPersonalizedRecommendations(true);
+  
+  // Reset button sau 3 giây
+  setTimeout(() => {
+    if (refreshBtn) {
+      refreshBtn.classList.remove('loading');
+      refreshBtn.disabled = false;
+    }
+  }, 3000);
+}
+
+function generateRecommendations() {
+  // Alias cho refreshRecommendations - dùng cho nút "Tạo gợi ý ngay"
+  clearRecommendationsCache();
+  loadPersonalizedRecommendations(true);
+}
+
+function loadColdStartFallback() {
+  console.log('🌟 Đang tải cold start recommendations...');
+  
+  fetch('/api/cold_start_recommendations')
+    .then(response => response.json())
+    .then(data => {
+      hideRecommendationsLoading();
+      
+      if (data.success && data.recommendations && data.recommendations.length > 0) {
+        console.log('✅ Tìm thấy cold start recommendations:', data.recommendations.length);
+        updateRecommendationsDisplay(data.recommendations);
+        
+        // Lưu vào cache với flag cold start
+        setCachedRecommendations({
+          recommendations: data.recommendations,
+          source: 'cold_start'
+        });
+      } else {
+        console.log('❌ Không có cold start recommendations, hiển thị empty state');
+        showRecommendationsEmpty();
+      }
     })
-    ;
+    .catch(error => {
+      console.error('❌ Lỗi khi tải cold start recommendations:', error);
+      hideRecommendationsLoading();
+      showRecommendationsEmpty();
+    });
+}
+
+function showRecommendationsLoading() {
+  const loading = document.getElementById('personalizedLoading');
+  const cards = document.getElementById('personalizedCards');
+  const empty = document.getElementById('personalizedEmpty');
+  
+  if (loading) loading.style.display = 'block';
+  if (cards) cards.style.display = 'none';
+  if (empty) empty.style.display = 'none';
+}
+
+function hideRecommendationsLoading() {
+  const loading = document.getElementById('personalizedLoading');
+  if (loading) loading.style.display = 'none';
+}
+
+function showRecommendationsEmpty() {
+  const loading = document.getElementById('personalizedLoading');
+  const cards = document.getElementById('personalizedCards');
+  const empty = document.getElementById('personalizedEmpty');
+  
+  if (loading) loading.style.display = 'none';
+  if (cards) cards.style.display = 'none';
+  if (empty) empty.style.display = 'block';
+}
+
+function showRecommendationsError() {
+  const container = document.getElementById('personalizedCards');
+  if (container) {
+    container.innerHTML = `
+      <div class="error-state" style="text-align: center; padding: 40px; color: #e74c3c;">
+        <div class="error-icon">❌</div>
+        <h4>Có lỗi xảy ra</h4>
+        <p>Không thể tải gợi ý. Vui lòng thử lại sau.</p>
+        <button class="btn btn-primary" onclick="refreshRecommendations()">
+          Thử lại
+        </button>
+      </div>
+    `;
+    container.style.display = 'block';
+  }
 }
 
 function showUserRatingCount(userRatingCount) {
-  const container = document.getElementById('personalizedRecommendations');
-  if (!container) return;
+  const empty = document.getElementById('personalizedEmpty');
+  if (!empty) return;
   
-  container.innerHTML = `
-    <div class="no-recommendations" style="text-align: center; padding: 40px; color: #888;">
-      <h4>Chưa có gợi ý cá nhân hóa</h4>
-      <p>Bạn đã đánh giá <strong>${userRatingCount}</strong> phim</p>
-      <p>Hãy đánh giá thêm phim để có gợi ý tốt hơn!</p>
-    </div>
+  empty.innerHTML = `
+    <div class="empty-icon">🎬</div>
+    <h4>Chưa có gợi ý cá nhân hóa</h4>
+    <p>Bạn đã đánh giá <strong>${userRatingCount}</strong> phim</p>
+    <p>Hãy đánh giá thêm phim để có gợi ý tốt hơn!</p>
+    <button class="btn btn-primary" onclick="generateRecommendations()">
+      Tạo gợi ý ngay
+    </button>
   `;
+  empty.style.display = 'block';
 }
 
 function updateRecommendationsDisplay(recommendations) {
-  const container = document.getElementById('personalizedRecommendations');
+  const container = document.getElementById('personalizedCards');
+  const loading = document.getElementById('personalizedLoading');
+  const empty = document.getElementById('personalizedEmpty');
+  
   if (!container) return;
+  
+  if (loading) loading.style.display = 'none';
+  if (empty) empty.style.display = 'none';
   
   container.innerHTML = recommendations.map(rec => `
     <div class="card">
-      <a href="/detail/${rec.movieId}" class="card-link">
-        <div class="poster" style="background-image:url('${rec.poster}')"></div>
+      <a href="/movie/${rec.movieId || rec.id}" class="card-link">
+        <div class="poster" style="background-image:url('${rec.poster || rec.posterUrl || '/static/img/no-poster.jpg'}')"></div>
         <div class="card-content">
           <div class="card-title">${rec.title}</div>
           <div class="card-meta">
@@ -2481,33 +3034,35 @@ function updateRecommendationsDisplay(recommendations) {
           </div>
           ${rec.genres ? `<div class="card-genres">${rec.genres}</div>` : ''}
           <div class="recommendation-info">
-            <span class="rec-score">Điểm: ${rec.recommendationScore.toFixed(2)}</span>
-            <div class="debug-info" style="font-size: 0.8rem; color: #888;">
-              <div>ID: ${rec.movieId}</div>
-              <div>Score: ${rec.recommendationScore.toFixed(4)}</div>
-              <div>AvgRating: ${(rec.avgRating ?? rec.avg_rating ?? 0).toFixed(2)}</div>
-              <div>UserRatings: ${rec.ratingCount ?? rec.total_ratings ?? 0}</div>
-            </div>
-            <div class="recommendation-reason">
-              <small>${rec.reason}</small>
-            </div>
+            <span class="rec-badge hybrid-badge">
+              ${rec.hybrid_score ? `Hybrid: ${rec.hybrid_score.toFixed(2)}` : 
+                (rec.recommendationScore ? `Điểm: ${rec.recommendationScore.toFixed(2)}` : 'Gợi ý')}
+            </span>
+            ${rec.reason ? `<div class="rec-reason"><small>${rec.reason}</small></div>` : ''}
           </div>
-          <div class="movie-rating" data-movie-id="${rec.movieId}">
+          <div class="movie-rating" data-movie-id="${rec.movieId || rec.id}">
             <span class="rating-stars">⭐ ${(rec.avgRating ?? rec.avg_rating ?? 0).toFixed(1)}</span>
             <span class="rating-count">(${rec.ratingCount ?? rec.total_ratings ?? 0})</span>
           </div>
         </div>
       </a>
-      <div class="card-actions">
-        <button class="btn-icon" onclick="toggleFavorite(${rec.movieId}, event)" title="Yêu thích">
-          <span class="heart-icon">🤍</span>
-        </button>
-        <button class="btn-icon" onclick="toggleWatchlist(${rec.movieId}, event)" title="Thêm vào danh sách">
+      <div class="action-buttons">
+        <button class="watchlist-btn" onclick="toggleWatchlist(${rec.movieId || rec.id}, event)" data-movie-id="${rec.movieId || rec.id}">
           <span class="watchlist-icon">📋</span>
+        </button>
+        <button class="favorite-btn" onclick="toggleFavorite(${rec.movieId || rec.id}, event)" data-movie-id="${rec.movieId || rec.id}">
+          <span class="favorite-icon">🤍</span>
         </button>
       </div>
     </div>
   `).join('');
+  
+  container.style.display = 'flex';
+  
+  // Cập nhật trạng thái favorite/watchlist cho các phim mới
+  setTimeout(() => {
+    checkAllStatus();
+  }, 100);
 }
 
 function showPreferenceAnalysis() {
@@ -2608,9 +3163,9 @@ function displayPreferenceAnalysis(analysis) {
 document.addEventListener('DOMContentLoaded', function() {
   // Load recommendations after a short delay to ensure page is ready
   setTimeout(() => {
-    loadPersonalizedRecommendations();
+    loadPersonalizedRecommendations(); // Sẽ tự động check cache
     loadModelStatus();
-  }, 1000);
+  }, 500); // Giảm delay từ 1000ms xuống 500ms
 });
 
 // Load model status
@@ -2866,7 +3421,7 @@ function displayColdStartRecommendations(recommendations) {
   
   container.innerHTML = recommendations.map(rec => `
     <div class="card">
-      <a href="/detail/${rec.movieId}" class="card-link">
+      <a href="/movie/${rec.movieId}" class="card-link">
         <div class="poster" style="background-image:url('${rec.posterUrl || '/static/img/no-poster.jpg'}')"></div>
         <div class="card-content">
           <div class="card-title">${rec.title}</div>

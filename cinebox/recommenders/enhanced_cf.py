@@ -350,8 +350,9 @@ class EnhancedCFRecommender:
             recommendations = self._get_user_recommendations_internal(user_id, limit * 2)
             
             if not recommendations:
-                logger.warning(f"No recommendations found for user {user_id}")
-                return []
+                logger.warning(f"No CF recommendations found for user {user_id}, trying fallback...")
+                # Fallback: Lấy phim phổ biến chưa xem
+                return self._get_popular_movies_fallback(user_id, limit)
             
             # Apply time decay to scores
             user_interaction_timestamps = self._get_user_interaction_timestamps(user_id)
@@ -918,4 +919,57 @@ class EnhancedCFRecommender:
             "model_path": self.model_path,
             "model_exists": os.path.exists(self.model_path) if self.model_path else False
         }
+    
+    def _get_popular_movies_fallback(self, user_id: int, limit: int = 10) -> List[Dict]:
+        """
+        Fallback method: Lấy phim phổ biến chưa xem khi CF model không có gợi ý
+        """
+        try:
+            with self.db_engine.connect() as conn:
+                # Lấy phim phổ biến mà user chưa xem
+                popular_movies = conn.execute(text("""
+                    SELECT TOP (:limit) 
+                        m.movieId, m.title, m.posterUrl, m.releaseYear, 
+                        m.country, m.averageRating, m.totalRatings,
+                        STRING_AGG(g.name, ', ') as genres
+                    FROM [cine].[Movie] m
+                    LEFT JOIN [cine].[MovieGenre] mg ON m.movieId = mg.movieId
+                    LEFT JOIN [cine].[Genre] g ON mg.genreId = g.genreId
+                    WHERE m.averageRating >= 4.0 AND m.totalRatings >= 10
+                        AND m.movieId NOT IN (
+                            SELECT vh.movieId FROM cine.ViewHistory vh WHERE vh.userId = :user_id
+                        )
+                        AND m.movieId NOT IN (
+                            SELECT r.movieId FROM cine.Rating r WHERE r.userId = :user_id
+                        )
+                    GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, 
+                             m.country, m.averageRating, m.totalRatings
+                    ORDER BY m.averageRating DESC, m.totalRatings DESC
+                """), {"limit": limit, "user_id": user_id}).mappings().all()
+                
+                recommendations = []
+                for i, movie in enumerate(popular_movies):
+                    recommendations.append({
+                        "movieId": movie["movieId"],
+                        "id": movie["movieId"],
+                        "title": movie["title"],
+                        "poster": movie["posterUrl"],
+                        "posterUrl": movie["posterUrl"],
+                        "releaseYear": movie["releaseYear"],
+                        "country": movie["country"],
+                        "avgRating": float(movie["averageRating"]) if movie["averageRating"] else 0.0,
+                        "ratingCount": movie["totalRatings"] or 0,
+                        "genres": movie["genres"] or "",
+                        "score": 0.8 - (i * 0.05),  # Giảm dần score
+                        "reason": "Phim phổ biến với đánh giá cao",
+                        "source": "cf_fallback",
+                        "rank": i + 1
+                    })
+                
+                logger.info(f"CF Fallback: Found {len(recommendations)} popular movies for user {user_id}")
+                return recommendations
+                
+        except Exception as e:
+            logger.error(f"Error in CF fallback for user {user_id}: {e}")
+            return []
 
