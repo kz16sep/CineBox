@@ -973,24 +973,14 @@
 }
 
 .comment-item {
-  background: rgba(255, 255, 255, 0.05);
   margin-bottom: 15px;
-  padding: 20px;
-  border-radius: 12px;
-  border-left: 4px solid #3b82f6;
-  backdrop-filter: blur(10px);
-  transition: all 0.3s ease;
-}
-
-.comment-item:hover {
-  background: rgba(255, 255, 255, 0.08);
-  transform: translateX(5px);
+  padding: 15px 0;
 }
 
 .comment-header {
   display: flex;
   align-items: center;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .comment-avatar {
@@ -1022,25 +1012,189 @@
 .comment-content {
   color: #e5e7eb;
   line-height: 1.6;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   word-wrap: break-word;
 }
 
 .comment-actions {
   display: flex;
-  gap: 10px;
-  margin-top: 10px;
+  align-items: center;
+  gap: 2px;
+  margin-top: 6px;
 }
 
-.btn-reply, .btn-edit, .btn-delete {
-  background: none;
+.btn-like {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.2);
-  color: #9ca3af;
+  color: #fff;
   padding: 6px 12px;
-  border-radius: 15px;
+  border-radius: 20px;
   font-size: 0.85rem;
   cursor: pointer;
   transition: all 0.3s ease;
+  backdrop-filter: blur(10px);
+}
+
+.btn-like:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: translateY(-1px);
+}
+
+.btn-like.liked {
+  background: linear-gradient(135deg, rgba(255, 107, 107, 0.2), rgba(255, 140, 140, 0.2));
+  border-color: rgba(255, 107, 107, 0.4);
+  color: #ff6b6b;
+}
+
+.btn-like.liked:hover {
+  background: linear-gradient(135deg, rgba(255, 107, 107, 0.3), rgba(255, 140, 140, 0.3));
+  border-color: rgba(255, 107, 107, 0.5);
+}
+
+.like-icon {
+  font-size: 1rem;
+  transition: transform 0.2s ease;
+}
+
+.btn-like:hover .like-icon {
+  transform: scale(1.1);
+}
+
+.like-count {
+  font-weight: 600;
+  min-width: 20px;
+  text-align: center;
+}
+
+.replies {
+  margin-left: 35px;
+  margin-top: 8px;
+  padding-left: 15px;
+}
+
+.replies .comment-item {
+  margin-bottom: 12px;
+  padding: 12px 0;
+}
+
+.replies .comment-item:last-child {
+  margin-bottom: 0;
+}
+
+/* Nested replies (cấp 2) */
+.replies .replies {
+  margin-left: 25px;
+  padding-left: 12px;
+}
+
+.replies .replies .comment-item {
+  margin-bottom: 10px;
+  padding: 10px 0;
+}
+
+/* Dropdown menu cho comment actions */
+.comment-menu {
+  position: relative;
+  display: inline-block;
+}
+
+.btn-menu {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  backdrop-filter: blur(10px);
+}
+
+.btn-menu:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: translateY(-1px);
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  background: rgba(30, 30, 30, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  min-width: 120px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(10px);
+  z-index: 1000;
+  display: none;
+  margin-top: 5px;
+}
+
+.dropdown-menu.show {
+  display: block;
+}
+
+.dropdown-item {
+  display: block;
+  width: 100%;
+  padding: 10px 15px;
+  background: none;
+  border: none;
+  color: #fff;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  font-size: 0.85rem;
+}
+
+.dropdown-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.dropdown-item:first-child {
+  border-radius: 8px 8px 0 0;
+}
+
+.dropdown-item:last-child {
+  border-radius: 0 0 8px 8px;
+}
+
+.dropdown-item.delete:hover {
+  background: rgba(220, 38, 38, 0.2);
+  color: #fca5a5;
+}
+
+.reply-to-info {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 6px;
+  color: #93c5fd;
+  font-size: 0.8rem;
+}
+
+.btn-reply, .btn-edit, .btn-delete {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #fff;
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  backdrop-filter: blur(10px);
+}
+
+.btn-reply:hover, .btn-edit:hover, .btn-delete:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: translateY(-1px);
 }
 
 .btn-reply:hover {
@@ -1579,13 +1733,26 @@ function renderComment(comment) {
       </div>
       <div class="comment-content">${escapeHtml(comment.content)}</div>
       <div class="comment-actions">
+        <button class="btn-like ${comment.isLiked ? 'liked' : ''}" onclick="toggleCommentLike(${comment.id})" data-comment-id="${comment.id}" type="button">
+          <span class="like-icon">${comment.isLiked ? '❤️' : '🤍'}</span>
+          <span class="like-text">Thích</span>
+          <span class="like-count">${comment.likeCount || 0}</span>
+        </button>
         <button class="btn-reply" onclick="toggleReplyForm(${comment.id})">Trả lời</button>
         ${comment.userId === currentUserId ? `
-          <button class="btn-edit" onclick="editComment(${comment.id})">Sửa</button>
-          <button class="btn-delete" onclick="deleteComment(${comment.id})">Xóa</button>
+          <div class="comment-menu">
+            <button class="btn-menu" onclick="toggleCommentMenu(${comment.id})">⋯</button>
+            <div class="dropdown-menu" id="menu-${comment.id}">
+              <button class="dropdown-item" onclick="editComment(${comment.id})">✏️ Sửa</button>
+              <button class="dropdown-item delete" onclick="confirmDeleteComment(${comment.id})">🗑️ Xóa</button>
+            </div>
+          </div>
         ` : ''}
       </div>
       <div class="reply-form" id="reply-form-${comment.id}" style="display: none;">
+        <div class="reply-to-info">
+          <small>Đang trả lời <strong>${comment.user_email}</strong></small>
+        </div>
         <textarea placeholder="Viết trả lời..." maxlength="1000"></textarea>
         <div class="reply-actions">
           <button onclick="cancelReply(${comment.id})">Hủy</button>
@@ -1657,6 +1824,10 @@ function cancelReply(commentId) {
 }
 
 function editComment(commentId) {
+  // Đóng menu dropdown
+  const menu = document.getElementById(`menu-${commentId}`);
+  if (menu) menu.classList.remove('show');
+  
   const commentItem = document.querySelector(`[data-comment-id="${commentId}"]`);
   const contentDiv = commentItem.querySelector('.comment-content');
   const currentContent = contentDiv.textContent;
@@ -1736,6 +1907,111 @@ function deleteComment(commentId) {
     });
   }
 }
+
+function toggleCommentLike(commentId) {
+  console.log('toggleCommentLike called with commentId:', commentId);
+  
+  // Kiểm tra user đã đăng nhập chưa - sử dụng cách khác
+  const userIdMeta = document.querySelector('meta[name="user-id"]');
+  const currentUserId = document.getElementById('star-rating')?.dataset?.userId;
+  
+  if (!userIdMeta && !currentUserId) {
+    showToast('Vui lòng đăng nhập để thích bình luận', 'warning');
+    return;
+  }
+
+  const likeBtn = document.querySelector(`[data-comment-id="${commentId}"] .btn-like`);
+  console.log('Found like button:', likeBtn);
+  
+  if (!likeBtn) {
+    console.error('Like button not found for commentId:', commentId);
+    return;
+  }
+
+  // Disable button để tránh spam click
+  likeBtn.disabled = true;
+  console.log('Sending request to /toggle-comment-like/' + commentId);
+
+  fetch(`/toggle-comment-like/${commentId}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    }
+  })
+  .then(response => {
+    console.log('Response status:', response.status);
+    return response.json();
+  })
+  .then(data => {
+    console.log('Response data:', data);
+    
+    if (data.success) {
+      // Cập nhật UI ngay lập tức
+      const likeIcon = likeBtn.querySelector('.like-icon');
+      const likeCount = likeBtn.querySelector('.like-count');
+      
+      if (data.is_liked) {
+        likeBtn.classList.add('liked');
+        likeIcon.textContent = '❤️';
+      } else {
+        likeBtn.classList.remove('liked');
+        likeIcon.textContent = '🤍';
+      }
+      
+      likeCount.textContent = data.new_like_count || 0;
+      
+      // Hiển thị thông báo
+      showToast(data.message, 'success');
+    } else {
+      console.error('API error:', data.message);
+      showToast(data.message || 'Có lỗi xảy ra', 'error');
+    }
+  })
+  .catch(error => {
+    console.error('Error toggling like:', error);
+    showToast('Có lỗi xảy ra khi thích bình luận', 'error');
+  })
+  .finally(() => {
+    // Re-enable button
+    likeBtn.disabled = false;
+  });
+}
+
+function toggleCommentMenu(commentId) {
+  const menu = document.getElementById(`menu-${commentId}`);
+  const allMenus = document.querySelectorAll('.dropdown-menu');
+  
+  // Đóng tất cả menu khác
+  allMenus.forEach(m => {
+    if (m !== menu) {
+      m.classList.remove('show');
+    }
+  });
+  
+  // Toggle menu hiện tại
+  menu.classList.toggle('show');
+}
+
+function confirmDeleteComment(commentId) {
+  // Đóng menu
+  const menu = document.getElementById(`menu-${commentId}`);
+  menu.classList.remove('show');
+  
+  // Hiển thị dialog xác nhận
+  if (confirm('Bạn có chắc chắn muốn xóa bình luận này không?')) {
+    deleteComment(commentId);
+  }
+}
+
+// Đóng menu khi click bên ngoài
+document.addEventListener('click', function(event) {
+  if (!event.target.closest('.comment-menu')) {
+    const allMenus = document.querySelectorAll('.dropdown-menu');
+    allMenus.forEach(menu => {
+      menu.classList.remove('show');
+    });
+  }
+});
 
 function attachCommentEventListeners() {
   // Event listeners are attached via onclick attributes in the HTML

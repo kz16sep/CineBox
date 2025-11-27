@@ -389,20 +389,37 @@ def submit_comment(movie_id):
     
     try:
         with current_app.db_engine.begin() as conn:
+            # Giới hạn nested comment tối đa 2 cấp
+            if parent_comment_id:
+                # Kiểm tra cấp độ của parent comment
+                parent_info = conn.execute(text("""
+                    SELECT parentCommentId FROM [cine].[Comment] WHERE commentId = :parent_id
+                """), {"parent_id": parent_comment_id}).scalar()
+                
+                # Nếu parent comment đã là cấp 2 (có parentCommentId), 
+                # thì reply mới sẽ cùng cấp với nó (không tạo cấp 3)
+                if parent_info is not None:
+                    # Parent đã là reply (cấp 1), reply mới sẽ là cấp 2
+                    # Giữ nguyên parent_comment_id để tạo cấp 2
+                    pass
+                # Nếu parent_info is None, nghĩa là parent là comment gốc (cấp 0)
+                # Reply mới sẽ là cấp 1 - OK
+            
             # Tạo commentId tự động
             max_id = conn.execute(text("""
                 SELECT ISNULL(MAX(commentId), 0) + 1 FROM cine.Comment
             """)).scalar()
             
-            # Thêm comment mới
+            # Thêm comment mới (với hỗ trợ nested reply)
             conn.execute(text("""
-                INSERT INTO [cine].[Comment] (commentId, userId, movieId, content, createdAt)
-                VALUES (:comment_id, :user_id, :movie_id, :content, GETDATE())
+                INSERT INTO [cine].[Comment] (commentId, userId, movieId, content, parentCommentId, createdAt)
+                VALUES (:comment_id, :user_id, :movie_id, :content, :parent_comment_id, GETDATE())
             """), {
                 "comment_id": max_id,
                 "user_id": user_id, 
                 "movie_id": movie_id, 
-                "content": content
+                "content": content,
+                "parent_comment_id": parent_comment_id
             })
             
             comment_id = max_id
@@ -416,6 +433,7 @@ def submit_comment(movie_id):
                     c.commentId,
                     c.content,
                     c.createdAt,
+                    c.parentCommentId,
                     u.email as user_email,
                     u.avatarUrl
                 FROM [cine].[Comment] c
@@ -447,37 +465,79 @@ def submit_comment(movie_id):
 
 @main_bp.route("/get-comments/<int:movie_id>", methods=["GET"])
 def get_comments(movie_id):
-    """Lấy danh sách comment của phim"""
+    """Lấy danh sách comment của phim kèm thông tin like"""
+    user_id = session.get("user_id")
+    
     try:
         with current_app.db_engine.connect() as conn:
-            # Lấy tất cả comment của phim
+            # Lấy tất cả comment của phim kèm thông tin like
             comments = conn.execute(text("""
                 SELECT 
                     c.commentId,
                     c.content,
                     c.createdAt,
+                    c.parentCommentId,
+                    (SELECT COUNT(*) FROM [cine].[CommentRating] cr2 WHERE cr2.commentId = c.commentId AND cr2.isLike = 1) as likeCount,
                     u.email as user_email,
                     u.avatarUrl,
-                    u.userId
+                    u.userId,
+                    CASE WHEN cr.userId IS NOT NULL THEN 1 ELSE 0 END as is_liked_by_current_user
                 FROM [cine].[Comment] c
                 JOIN [cine].[User] u ON c.userId = u.userId
+                LEFT JOIN [cine].[CommentRating] cr ON c.commentId = cr.commentId AND cr.userId = :current_user_id AND cr.isLike = 1
                 WHERE c.movieId = :movie_id
-                ORDER BY c.createdAt ASC
-            """), {"movie_id": movie_id}).mappings().all()
+                ORDER BY 
+                    -- Nhóm theo comment gốc
+                    CASE 
+                        WHEN c.parentCommentId IS NULL THEN c.commentId 
+                        ELSE (
+                            SELECT CASE 
+                                WHEN parent.parentCommentId IS NULL THEN parent.commentId 
+                                ELSE parent.parentCommentId 
+                            END
+                            FROM [cine].[Comment] parent 
+                            WHERE parent.commentId = c.parentCommentId
+                        )
+                    END,
+                    -- Sắp xếp: gốc -> cấp 1 -> cấp 2
+                    CASE WHEN c.parentCommentId IS NULL THEN 0 ELSE 1 END,
+                    c.createdAt ASC
+            """), {"movie_id": movie_id, "current_user_id": user_id or 0}).mappings().all()
             
-            # Đơn giản hóa - chỉ trả về danh sách comment
-            comments_list = []
+            # Format comments với nested structure (hỗ trợ 2 cấp)
+            comments_dict = {}
+            root_comments = []
             
+            # Đầu tiên, tạo dict của tất cả comments
             for comment in comments:
-                comments_list.append({
+                comment_data = {
                     "id": comment.commentId,
                     "content": comment.content,
                     "createdAt": comment.createdAt.isoformat(),
                     "user_email": comment.user_email,
                     "avatarUrl": comment.avatarUrl,
                     "userId": comment.userId,
+                    "likeCount": comment.likeCount or 0,
+                    "isLiked": bool(comment.is_liked_by_current_user),
+                    "parentCommentId": comment.parentCommentId,
                     "replies": []
-                })
+                }
+                comments_dict[comment.commentId] = comment_data
+            
+            # Sau đó, xây dựng cấu trúc nested
+            for comment in comments:
+                comment_data = comments_dict[comment.commentId]
+                
+                if comment.parentCommentId is None:
+                    # Root comment (cấp 0)
+                    root_comments.append(comment_data)
+                else:
+                    # Reply comment - thêm vào parent
+                    parent_comment = comments_dict.get(comment.parentCommentId)
+                    if parent_comment:
+                        parent_comment["replies"].append(comment_data)
+            
+            comments_list = root_comments
             
             return jsonify({
                 "success": True,
@@ -775,3 +835,238 @@ def api_search_favorites():
         current_app.logger.error(f"Error searching favorites for user {user_id}: {e}", exc_info=True)
         return jsonify({"success": False, "message": "Có lỗi xảy ra"})
 
+
+# ============================================
+# Comment Like Routes
+# ============================================
+
+@main_bp.route("/api/like-comment/<int:comment_id>", methods=["POST"])
+@login_required
+def like_comment(comment_id):
+    """Like hoặc unlike một comment"""
+    user_id = session.get("user_id")
+    
+    try:
+        with current_app.db_engine.begin() as conn:
+            # Kiểm tra comment có tồn tại không
+            comment_exists = conn.execute(text("""
+                SELECT 1 FROM [cine].[Comment] WHERE commentId = :comment_id
+            """), {"comment_id": comment_id}).scalar()
+            
+            if not comment_exists:
+                return jsonify({"success": False, "message": "Comment không tồn tại"})
+            
+            # Kiểm tra user đã like comment này chưa
+            existing_like = conn.execute(text("""
+                SELECT isLike FROM [cine].[CommentRating] 
+                WHERE commentId = :comment_id AND userId = :user_id
+            """), {"comment_id": comment_id, "user_id": user_id}).scalar()
+            
+            if existing_like is not None:
+                if existing_like == 1:
+                    # Unlike - xóa rating
+                    conn.execute(text("""
+                        DELETE FROM [cine].[CommentRating] 
+                        WHERE commentId = :comment_id AND userId = :user_id
+                    """), {"comment_id": comment_id, "user_id": user_id})
+                    
+                    action = "unliked"
+                    message = "Đã bỏ thích bình luận"
+                else:
+                    # Đổi từ dislike sang like
+                    conn.execute(text("""
+                        UPDATE [cine].[CommentRating] 
+                        SET isLike = 1, createdAt = GETUTCDATE()
+                        WHERE commentId = :comment_id AND userId = :user_id
+                    """), {"comment_id": comment_id, "user_id": user_id})
+                    
+                    action = "liked"
+                    message = "Đã thích bình luận"
+            else:
+                # Like mới - thêm rating mới
+                conn.execute(text("""
+                    INSERT INTO [cine].[CommentRating] (commentId, userId, isLike, createdAt)
+                    VALUES (:comment_id, :user_id, 1, GETUTCDATE())
+                """), {"comment_id": comment_id, "user_id": user_id})
+                
+                action = "liked"
+                message = "Đã thích bình luận"
+            
+            # Lấy số lượng like hiện tại (trigger sẽ tự động cập nhật)
+            like_count = conn.execute(text("""
+                SELECT COUNT(*) FROM [cine].[CommentRating] 
+                WHERE commentId = :comment_id AND isLike = 1
+            """), {"comment_id": comment_id}).scalar() or 0
+            
+            # Kiểm tra trạng thái like hiện tại của user
+            current_rating = conn.execute(text("""
+                SELECT isLike FROM [cine].[CommentRating] 
+                WHERE commentId = :comment_id AND userId = :user_id
+            """), {"comment_id": comment_id, "user_id": user_id}).scalar()
+            
+            is_liked = current_rating == 1
+            
+            return jsonify({
+                "success": True,
+                "message": message,
+                "action": action,
+                "like_count": like_count,
+                "is_liked": is_liked
+            })
+            
+    except Exception as e:
+        current_app.logger.error(f"Error liking/unliking comment {comment_id}: {e}", exc_info=True)
+        return jsonify({"success": False, "message": "Có lỗi xảy ra khi thích bình luận"})
+
+
+@main_bp.route("/api/get-comment-likes/<int:comment_id>", methods=["GET"])
+def get_comment_likes(comment_id):
+    """Lấy thông tin like của một comment"""
+    user_id = session.get("user_id")
+    
+    try:
+        with current_app.db_engine.connect() as conn:
+            # Lấy số lượng like
+            like_count = conn.execute(text("""
+                SELECT COUNT(*) FROM [cine].[CommentRating] 
+                WHERE commentId = :comment_id AND isLike = 1
+            """), {"comment_id": comment_id}).scalar() or 0
+            
+            # Kiểm tra user hiện tại đã like chưa (nếu đã đăng nhập)
+            is_liked = False
+            if user_id:
+                current_rating = conn.execute(text("""
+                    SELECT isLike FROM [cine].[CommentRating] 
+                    WHERE commentId = :comment_id AND userId = :user_id
+                """), {"comment_id": comment_id, "user_id": user_id}).scalar()
+                is_liked = current_rating == 1
+            
+            return jsonify({
+                "success": True,
+                "like_count": like_count,
+                "is_liked": is_liked
+            })
+            
+    except Exception as e:
+        current_app.logger.error(f"Error getting comment likes for {comment_id}: {e}")
+        return jsonify({"success": False, "like_count": 0, "is_liked": False})
+
+
+@main_bp.route("/api/get-comments-with-likes/<int:movie_id>", methods=["GET"])
+def get_comments_with_likes(movie_id):
+    """Lấy danh sách comment của phim kèm thông tin like"""
+    user_id = session.get("user_id")
+    
+    try:
+        with current_app.db_engine.connect() as conn:
+            # Lấy tất cả comment của phim kèm thông tin like
+            comments = conn.execute(text("""
+                SELECT 
+                    c.commentId,
+                    c.content,
+                    c.createdAt,
+                    c.parentCommentId,
+                    (SELECT COUNT(*) FROM [cine].[CommentRating] cr2 WHERE cr2.commentId = c.commentId AND cr2.isLike = 1) as likeCount,
+                    u.email as user_email,
+                    u.avatarUrl,
+                    u.userId,
+                    CASE WHEN cr.userId IS NOT NULL THEN 1 ELSE 0 END as is_liked_by_current_user
+                FROM [cine].[Comment] c
+                JOIN [cine].[User] u ON c.userId = u.userId
+                LEFT JOIN [cine].[CommentRating] cr ON c.commentId = cr.commentId AND cr.userId = :current_user_id AND cr.isLike = 1
+                WHERE c.movieId = :movie_id
+                ORDER BY c.createdAt ASC
+            """), {"movie_id": movie_id, "current_user_id": user_id or 0}).mappings().all()
+            
+            # Format comments
+            comments_list = []
+            for comment in comments:
+                comments_list.append({
+                    "id": comment.commentId,
+                    "content": comment.content,
+                    "createdAt": comment.createdAt.isoformat(),
+                    "user_email": comment.user_email,
+                    "avatarUrl": comment.avatarUrl,
+                    "userId": comment.userId,
+                    "likeCount": comment.likeCount or 0,
+                    "isLiked": bool(comment.is_liked_by_current_user),
+                    "replies": []
+                })
+            
+            return jsonify({
+                "success": True,
+                "comments": comments_list
+            })
+            
+    except Exception as e:
+        current_app.logger.error(f"Error getting comments with likes: {e}", exc_info=True)
+        return jsonify({"success": False, "message": f"Có lỗi xảy ra khi lấy comment: {str(e)}"})
+
+@main_bp.route("/toggle-comment-like/<int:comment_id>", methods=["POST"])
+@login_required
+def toggle_comment_like(comment_id):
+    """Toggle like status for a comment"""
+    user_id = session.get("user_id")
+    
+    try:
+        with current_app.db_engine.begin() as conn:
+            # Kiểm tra comment có tồn tại không
+            comment_exists = conn.execute(text("""
+                SELECT 1 FROM [cine].[Comment] WHERE commentId = :comment_id
+            """), {"comment_id": comment_id}).scalar()
+            
+            if not comment_exists:
+                return jsonify({"success": False, "message": "Comment không tồn tại"})
+            
+            # Kiểm tra user đã like comment này chưa
+            existing_rating = conn.execute(text("""
+                SELECT isLike FROM [cine].[CommentRating] 
+                WHERE commentId = :comment_id AND userId = :user_id
+            """), {"comment_id": comment_id, "user_id": user_id}).scalar()
+            
+            if existing_rating is not None:
+                if existing_rating == 1:
+                    # Unlike - xóa rating
+                    conn.execute(text("""
+                        DELETE FROM [cine].[CommentRating] 
+                        WHERE commentId = :comment_id AND userId = :user_id
+                    """), {"comment_id": comment_id, "user_id": user_id})
+                    
+                    is_liked = False
+                    message = "Đã bỏ thích bình luận"
+                else:
+                    # Đổi từ dislike sang like
+                    conn.execute(text("""
+                        UPDATE [cine].[CommentRating] 
+                        SET isLike = 1, createdAt = GETUTCDATE()
+                        WHERE commentId = :comment_id AND userId = :user_id
+                    """), {"comment_id": comment_id, "user_id": user_id})
+                    
+                    is_liked = True
+                    message = "Đã thích bình luận"
+            else:
+                # Like mới - thêm rating mới
+                conn.execute(text("""
+                    INSERT INTO [cine].[CommentRating] (commentId, userId, isLike, createdAt)
+                    VALUES (:comment_id, :user_id, 1, GETUTCDATE())
+                """), {"comment_id": comment_id, "user_id": user_id})
+                
+                is_liked = True
+                message = "Đã thích bình luận"
+            
+            # Lấy số lượng like hiện tại (trigger sẽ tự động cập nhật)
+            like_count = conn.execute(text("""
+                SELECT COUNT(*) FROM [cine].[CommentRating] 
+                WHERE commentId = :comment_id AND isLike = 1
+            """), {"comment_id": comment_id}).scalar() or 0
+            
+            return jsonify({
+                "success": True, 
+                "is_liked": is_liked,
+                "new_like_count": like_count,
+                "message": message
+            })
+                       
+    except Exception as e:
+        current_app.logger.error(f"Error toggling comment like for user {user_id}, comment {comment_id}: {e}", exc_info=True)
+        return jsonify({"success": False, "message": f"Có lỗi xảy ra: {str(e)}"})
