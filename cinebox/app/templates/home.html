@@ -170,36 +170,18 @@
 </section>
 {% endif %}
 
-<!-- 2. Cold Start Recommendations (cho user mới) -->
-{% if not genre_filter and session.get('user_id') %}
-<section class="cold-start-section" id="coldStartSection" style="display: none;">
-  <div class="section-header">
-    <h3>🌟 Gợi ý dành cho bạn</h3>
-    <div class="section-subtitle">
-      <span class="badge cold-start-badge">Mới</span>
-      <span class="interaction-count" id="interactionCount">Đang kiểm tra...</span>
-    </div>
-  </div>
-  <div class="horizontal-scroll-wrapper">
-    <button class="scroll-btn scroll-btn-left" onclick="scrollHorizontal('coldStartRecommendations', 'left')" aria-label="Cuộn trái">‹</button>
-    <div class="horizontal-scroll-cards" id="coldStartRecommendations">
-      <!-- Cold Start recommendations sẽ được load bằng JavaScript -->
-    </div>
-    <button class="scroll-btn scroll-btn-right" onclick="scrollHorizontal('coldStartRecommendations', 'right')" aria-label="Cuộn phải">›</button>
-  </div>
-  <div class="cold-start-loading" id="coldStartLoading" style="text-align: center; padding: 20px; display: none;">
-    <div class="loading-spinner">⏳</div>
-    <p>Đang tạo gợi ý phù hợp với bạn...</p>
-  </div>
-</section>
-{% endif %}
+<!-- Đã xóa Cold Start section riêng biệt - merge vào Personalized section -->
 
-<!-- 3. Phim được đề xuất cho bạn (Collaborative Filtering) -->
+<!-- 3. Unified Recommendations Section (Cold Start + Personalized) -->
 {% if not genre_filter %}
 <section class="personalized-section">
   <div class="section-header">
-    <h3>🎯 Gợi ý cá nhân cho bạn</h3>
-    <div class="section-actions">
+    <h3 id="recommendationTitle">🎯 Gợi ý cá nhân cho bạn</h3>
+    <div class="section-subtitle" id="recommendationSubtitle" style="display: none;">
+      <span class="badge" id="recommendationBadge">Mới</span>
+      <span class="interaction-count" id="interactionCount">Đang kiểm tra...</span>
+    </div>
+    <div class="section-actions" id="sectionActions">
       <button class="refresh-recommendations-btn" onclick="refreshRecommendations()" id="refreshBtn">
         <span class="refresh-icon">🔄</span>
         <span class="refresh-text">Làm mới gợi ý</span>
@@ -1972,6 +1954,11 @@ html {
   margin-top: 10px;
 }
 
+.section-header .section-subtitle {
+  margin-top: 5px;
+  margin-bottom: 0;
+}
+
 .cold-start-badge {
   background: linear-gradient(135deg, #ff6b6b, #4ecdc4);
   color: white;
@@ -1981,6 +1968,21 @@ html {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+/* Badge trong section header */
+.section-subtitle .badge {
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.section-subtitle .cold-start-badge {
+  background: linear-gradient(135deg, #ff6b6b, #4ecdc4);
+  color: white;
 }
 
 .interaction-count {
@@ -2913,9 +2915,9 @@ function refreshRecommendations() {
     refreshBtn.disabled = true;
   }
   
-  // Xóa cache và load lại
+  // Xóa cache và load lại unified recommendations
   clearRecommendationsCache();
-  loadPersonalizedRecommendations(true);
+  loadUnifiedRecommendations(true);
   
   // Reset button sau 3 giây
   setTimeout(() => {
@@ -2929,7 +2931,7 @@ function refreshRecommendations() {
 function generateRecommendations() {
   // Alias cho refreshRecommendations - dùng cho nút "Tạo gợi ý ngay"
   clearRecommendationsCache();
-  loadPersonalizedRecommendations(true);
+  loadUnifiedRecommendations(true);
 }
 
 function loadColdStartFallback() {
@@ -3168,11 +3170,11 @@ function displayPreferenceAnalysis(analysis) {
 
 // Load personalized recommendations on page load
 document.addEventListener('DOMContentLoaded', function() {
-  // Load recommendations after a short delay to ensure page is ready
+  // Load unified recommendations after a short delay to ensure page is ready
   setTimeout(() => {
-    loadPersonalizedRecommendations(); // Sẽ tự động check cache
+    loadUnifiedRecommendations(); // Sẽ tự động check cache và user interactions
     loadModelStatus();
-  }, 500); // Giảm delay từ 1000ms xuống 500ms
+  }, 500);
 });
 
 // Load model status
@@ -3322,27 +3324,13 @@ function loadHybridStatus() {
 }
 
 // Initialize on page load
-document.addEventListener('DOMContentLoaded', function() {
-  // Load cold start recommendations if user is new
-  console.log('Loading cold start recommendations...');
-  loadColdStartRecommendations();
-});
+// Đã xóa DOMContentLoaded cho cold start - merge vào unified recommendations
 
-// Function to load cold start recommendations
-function loadColdStartRecommendations() {
-  const coldStartSection = document.getElementById('coldStartSection');
-  const interactionCount = document.getElementById('interactionCount');
+// Unified function to load recommendations based on user experience
+function loadUnifiedRecommendations(forceRefresh = false) {
+  console.log('🎯 Loading unified recommendations...');
   
-  console.log('Cold start section element:', coldStartSection);
-  
-  if (!coldStartSection) {
-    console.log('Cold start section not found, returning');
-    return;
-  }
-  
-  console.log('Checking user interaction status...');
-  
-  // Check user interaction status
+  // Check user interaction status first
   fetch('/api/user_interaction_status')
     .then(response => response.json())
     .then(data => {
@@ -3350,119 +3338,99 @@ function loadColdStartRecommendations() {
       
       if (data.success) {
         const totalInteractions = data.rating_count + data.view_count;
-        interactionCount.textContent = `Bạn đã tương tác ${totalInteractions} lần`;
-        
         console.log(`Total interactions: ${totalInteractions}`);
         
         if (totalInteractions < 5) {
-          // Show cold start section
-          console.log('Showing cold start section');
-          coldStartSection.style.display = 'block';
-          loadColdStartData();
+          // User mới - dùng Cold Start
+          setupColdStartMode(totalInteractions);
+          loadColdStartRecommendations(forceRefresh);
         } else {
-          // Hide cold start section
-          console.log('Hiding cold start section - user has enough interactions');
-          coldStartSection.style.display = 'none';
+          // User có kinh nghiệm - dùng Personalized
+          setupPersonalizedMode(totalInteractions);
+          loadPersonalizedRecommendations(forceRefresh);
         }
       } else {
-        console.log('Failed to get interaction status:', data.message);
+        console.log('Failed to get interaction status, defaulting to personalized');
+        setupPersonalizedMode(0);
+        loadPersonalizedRecommendations(forceRefresh);
       }
     })
     .catch(error => {
       console.error('Error checking interaction status:', error);
+      setupPersonalizedMode(0);
+      loadPersonalizedRecommendations(forceRefresh);
     });
 }
 
-// Function to load cold start data
-function loadColdStartData() {
-  const loading = document.getElementById('coldStartLoading');
-  const container = document.getElementById('coldStartRecommendations');
+// Setup UI for Cold Start mode
+function setupColdStartMode(totalInteractions) {
+  console.log('🌟 Setting up Cold Start mode');
   
-  loading.style.display = 'block';
-  container.innerHTML = '';
+  const title = document.getElementById('recommendationTitle');
+  const subtitle = document.getElementById('recommendationSubtitle');
+  const badge = document.getElementById('recommendationBadge');
+  const interactionCount = document.getElementById('interactionCount');
+  const refreshBtn = document.getElementById('refreshBtn');
+  
+  // Update title and show subtitle
+  title.innerHTML = '🌟 Gợi ý dành cho bạn';
+  subtitle.style.display = 'flex';
+  badge.className = 'badge cold-start-badge';
+  badge.textContent = 'Mới';
+  interactionCount.textContent = `Bạn đã tương tác ${totalInteractions} lần`;
+  
+  // Hide refresh button for cold start
+  refreshBtn.style.display = 'none';
+}
+
+// Setup UI for Personalized mode  
+function setupPersonalizedMode(totalInteractions) {
+  console.log('🎯 Setting up Personalized mode');
+  
+  const title = document.getElementById('recommendationTitle');
+  const subtitle = document.getElementById('recommendationSubtitle');
+  const refreshBtn = document.getElementById('refreshBtn');
+  
+  // Update title and hide subtitle
+  title.innerHTML = '🎯 Gợi ý cá nhân cho bạn';
+  subtitle.style.display = 'none';
+  
+  // Show refresh button for personalized
+  refreshBtn.style.display = 'flex';
+}
+
+// Load Cold Start recommendations
+function loadColdStartRecommendations(forceRefresh = false) {
+  console.log('🌟 Loading cold start recommendations...');
+  
+  const container = document.getElementById('personalizedCards');
+  if (!container) return;
+  
+  showRecommendationsLoading();
   
   fetch('/api/cold_start_recommendations')
     .then(response => response.json())
     .then(data => {
-      loading.style.display = 'none';
+      hideRecommendationsLoading();
       
-      if (data.success && data.recommendations) {
-        displayColdStartRecommendations(data.recommendations);
+      if (data.success && data.recommendations && data.recommendations.length > 0) {
+        console.log('✅ Cold start recommendations loaded:', data.recommendations.length);
+        updateRecommendationsDisplay(data.recommendations);
+        checkAllStatus(); // Check favorite/watchlist status
       } else {
-        container.innerHTML = `
-          <div class="empty-state">
-            <div class="empty-icon">🎬</div>
-            <h4>Chưa có gợi ý</h4>
-            <p>Hệ thống đang tạo gợi ý phù hợp với bạn...</p>
-          </div>
-        `;
+        showRecommendationsEmpty();
       }
     })
     .catch(error => {
-      console.error('Error loading cold start recommendations:', error);
-      loading.style.display = 'none';
-      container.innerHTML = `
-        <div class="empty-state">
-          <div class="empty-icon">❌</div>
-          <h4>Có lỗi xảy ra</h4>
-          <p>Không thể tải gợi ý. Vui lòng thử lại sau.</p>
-        </div>
-      `;
+      console.error('❌ Error loading cold start recommendations:', error);
+      hideRecommendationsLoading();
+      showRecommendationsError();
     });
 }
 
-// Function to display cold start recommendations
-function displayColdStartRecommendations(recommendations) {
-  const container = document.getElementById('coldStartRecommendations');
-  
-  if (recommendations.length === 0) {
-    container.innerHTML = `
-      <div class="empty-state">
-        <div class="empty-icon">🎬</div>
-        <h4>Chưa có gợi ý</h4>
-        <p>Hệ thống đang tạo gợi ý phù hợp với bạn...</p>
-      </div>
-    `;
-    return;
-  }
-  
-  container.innerHTML = recommendations.map(rec => `
-    <div class="card">
-      <a href="/movie/${rec.movieId}" class="card-link">
-        <div class="poster" style="background-image:url('${rec.posterUrl || '/static/img/no-poster.jpg'}')"></div>
-        <div class="card-content">
-          <div class="card-title">${rec.title}</div>
-          <div class="card-meta">
-            ${rec.releaseYear ? `<span class="year">${rec.releaseYear}</span>` : ''}
-            ${rec.country ? `<span class="country">${rec.country}</span>` : ''}
-          </div>
-          ${rec.genres ? `<div class="card-genres">${rec.genres}</div>` : ''}
-          <div class="recommendation-info">
-            <span class="rec-badge cold-start-badge">${rec.source === 'preference_genre' ? 'Dựa trên sở thích' : 'Phổ biến'}</span>
-            <div class="rec-reason">${rec.reason || ''}</div>
-          </div>
-          <div class="movie-rating" data-movie-id="${rec.movieId}">
-            <span class="rating-stars">⭐ ${rec.avgRating ? rec.avgRating.toFixed(1) : '0.0'}</span>
-            <span class="rating-count">(${rec.ratingCount || 0})</span>
-          </div>
-        </div>
-      </a>
-      <div class="action-buttons">
-        <button class="favorite-btn" onclick="toggleFavorite(${rec.movieId}, event)" data-movie-id="${rec.movieId}">
-          <span class="favorite-icon">🤍</span>
-        </button>
-        <button class="watchlist-btn" onclick="toggleWatchlist(${rec.movieId}, event)" data-movie-id="${rec.movieId}">
-          <span class="watchlist-icon">📋</span>
-        </button>
-      </div>
-    </div>
-  `).join('');
-  
-  // Cập nhật scroll buttons sau khi load content
-  setTimeout(() => {
-    updateHorizontalScrollButtons('coldStartRecommendations');
-  }, 100);
-}
+// Đã xóa loadColdStartData() - merge vào loadColdStartRecommendations()
+
+// Đã xóa displayColdStartRecommendations() - dùng updateRecommendationsDisplay() chung
 
 // Personalized Recommendations Horizontal Scroll Functions
 function scrollPersonalizedCards(direction) {
