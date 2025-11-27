@@ -1,0 +1,72 @@
+{% macro render_smart_pagination(pagination, endpoint, q=None, genre=None, sort=None, year=None, genre_slug=None) %}
+{% if pagination and pagination.pages > 1 %}
+<div class="pagination">
+  <div class="pagination-info">
+    <span>Trang {{ pagination.page }} / {{ pagination.pages }}</span>
+    <span>({{ pagination.total }} phim)</span>
+  </div>
+  
+  <div class="pagination-controls">
+    <!-- Previous button -->
+    {% if pagination.has_prev %}
+      {% set prev_url = url_for(endpoint, page=pagination.prev_num, q=q, genre=genre, sort=sort, year=year, genre_slug=genre_slug) %}
+      <a href="{{ prev_url }}" class="btn-pagination">← Trang trước</a>
+    {% else %}
+      <span class="btn-pagination disabled">← Trang trước</span>
+    {% endif %}
+    
+    <!-- Page numbers -->
+    <div class="page-numbers">
+      {% set current = pagination.page %}
+      {% set total = pagination.pages %}
+      
+      <!-- Always show page 1 -->
+      {% if current != 1 %}
+        {% set page1_url = url_for(endpoint, page=1, q=q, genre=genre, sort=sort, year=year, genre_slug=genre_slug) %}
+        <a href="{{ page1_url }}" class="page-number">1</a>
+        
+        <!-- Show ellipsis if gap between 1 and current-2 > 1 -->
+        {% if current - 2 > 2 %}
+          <span class="page-ellipsis">...</span>
+        {% endif %}
+      {% else %}
+        <span class="page-number current">1</span>
+      {% endif %}
+      
+      <!-- Show current-2 to current+2 range -->
+      {% for page in range([current-2, 2]|max, [current+3, total+1]|min) %}
+        {% if page != 1 and page != total %}
+          {% if page == current %}
+            <span class="page-number current">{{ page }}</span>
+          {% else %}
+            {% set page_url = url_for(endpoint, page=page, q=q, genre=genre, sort=sort, year=year, genre_slug=genre_slug) %}
+            <a href="{{ page_url }}" class="page-number">{{ page }}</a>
+          {% endif %}
+        {% endif %}
+      {% endfor %}
+      
+      <!-- Always show last page -->
+      {% if total > 1 and current != total %}
+        <!-- Show ellipsis if gap between current+2 and last > 1 -->
+        {% if total - (current + 2) > 1 %}
+          <span class="page-ellipsis">...</span>
+        {% endif %}
+        
+        {% set last_url = url_for(endpoint, page=total, q=q, genre=genre, sort=sort, year=year, genre_slug=genre_slug) %}
+        <a href="{{ last_url }}" class="page-number">{{ total }}</a>
+      {% elif total > 1 and current == total %}
+        <span class="page-number current">{{ total }}</span>
+      {% endif %}
+    </div>
+    
+    <!-- Next button -->
+    {% if pagination.has_next %}
+      {% set next_url = url_for(endpoint, page=pagination.next_num, q=q, genre=genre, sort=sort, year=year, genre_slug=genre_slug) %}
+      <a href="{{ next_url }}" class="btn-pagination">Trang sau →</a>
+    {% else %}
+      <span class="btn-pagination disabled">Trang sau →</span>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endmacro %}

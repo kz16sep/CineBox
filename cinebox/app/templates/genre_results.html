@@ -83,34 +83,8 @@
     </div>
     
     <!-- Pagination -->
-    {% if pagination and pagination.pages > 1 %}
-    <div class="pagination">
-      <div class="pagination-info">
-        <span>Trang {{ pagination.page }} / {{ pagination.pages }}</span>
-        <span>({{ pagination.total }} phim)</span>
-      </div>
-      
-      <div class="pagination-controls">
-        {% if pagination.has_prev %}
-          <a href="{{ url_for('main.genre_page', genre_slug=genre_slug, page=pagination.prev_num) }}" class="btn-pagination">
-            ← Trang trước
-          </a>
-        {% else %}
-          <span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">← Trang trước</span>
-        {% endif %}
-        
-        <span class="page-info">Trang {{ pagination.page }} / {{ pagination.pages }}</span>
-        
-        {% if pagination.has_next %}
-          <a href="{{ url_for('main.genre_page', genre_slug=genre_slug, page=pagination.next_num) }}" class="btn-pagination">
-            Trang sau →
-          </a>
-        {% else %}
-          <span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">Trang sau →</span>
-        {% endif %}
-      </div>
-    </div>
-    {% endif %}
+    {% from 'macros/pagination_simple.html' import render_smart_pagination %}
+    {{ render_smart_pagination(pagination, 'main.genre_page', genre_slug=genre_slug) }}
   {% else %}
     <div class="no-results">
       <div class="no-results-icon">🎬</div>
@@ -202,11 +176,54 @@
   cursor: pointer;
 }
 
-.btn-pagination:hover {
+.btn-pagination:hover:not(.disabled) {
   background: var(--primary-2);
   color: white;
   text-decoration: none;
   transform: translateY(-1px);
+}
+
+.btn-pagination.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.page-numbers {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.page-number {
+  display: inline-block;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  text-decoration: none;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  transition: all 0.3s ease;
+  backdrop-filter: blur(10px);
+  min-width: 40px;
+  text-align: center;
+}
+
+.page-number:hover:not(.current) {
+  background: rgba(255, 255, 255, 0.2);
+  transform: translateY(-1px);
+}
+
+.page-number.current {
+  background: #e50914;
+  color: #fff;
+  font-weight: bold;
+}
+
+.page-ellipsis {
+  color: #888;
+  padding: 8px 4px;
+  font-size: 0.9rem;
 }
 
 .page-numbers {
@@ -365,7 +382,7 @@ function attachGenreFilterListeners() {
 }
 
 function attachPaginationListeners() {
-    const paginationLinks = document.querySelectorAll('.pagination-controls a');
+    const paginationLinks = document.querySelectorAll('.pagination-controls a, .page-numbers a');
     
     paginationLinks.forEach(link => {
         link.addEventListener('click', function(e) {

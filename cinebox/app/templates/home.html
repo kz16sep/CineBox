@@ -498,34 +498,8 @@
   </div>
   
   <!-- Pagination -->
-  {% if pagination and pagination.pages > 1 %}
-  <div class="pagination">
-    <div class="pagination-info">
-      <span>Trang {{ pagination.page }} / {{ pagination.pages }}</span>
-      <span>({{ pagination.total }} phim)</span>
-    </div>
-    
-    <div class="pagination-controls">
-      {% if pagination.has_prev %}
-        <a href="{{ url_for('main.home', page=pagination.prev_num, q=search_query, genre=genre_filter, sort=sort_by, year=year_filter) }}" class="btn-pagination">
-          ← Trang trước
-        </a>
-      {% else %}
-        <span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">← Trang trước</span>
-      {% endif %}
-      
-      <span class="page-info">Trang {{ pagination.page }} / {{ pagination.pages }}</span>
-      
-      {% if pagination.has_next %}
-        <a href="{{ url_for('main.home', page=pagination.next_num, q=search_query, genre=genre_filter, sort=sort_by, year=year_filter) }}" class="btn-pagination">
-          Trang sau →
-        </a>
-      {% else %}
-        <span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">Trang sau →</span>
-      {% endif %}
-    </div>
-  </div>
-  {% endif %}
+  {% from 'macros/pagination_simple.html' import render_smart_pagination %}
+  {{ render_smart_pagination(pagination, 'main.home', q=search_query, genre=genre_filter, sort=sort_by, year=year_filter) }}
 </section>
 {% endif %}
 
@@ -1197,10 +1171,16 @@
   backdrop-filter: blur(10px);
 }
 
-.btn-pagination:hover {
+.btn-pagination:hover:not(.disabled) {
   background: rgba(255, 255, 255, 0.2);
   border-color: rgba(255, 255, 255, 0.4);
   transform: translateY(-1px);
+}
+
+.btn-pagination.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .page-numbers {
@@ -1223,7 +1203,7 @@
   text-align: center;
 }
 
-.page-number:hover {
+.page-number:hover:not(.current) {
   background: rgba(255, 255, 255, 0.2);
   transform: translateY(-1px);
 }
@@ -1902,7 +1882,7 @@ function attachGenreFilterListeners() {
 }
 
 function attachPaginationListeners() {
-    const paginationLinks = document.querySelectorAll('.pagination-controls a');
+    const paginationLinks = document.querySelectorAll('.pagination-controls a, .page-numbers a');
     
     paginationLinks.forEach(link => {
         link.addEventListener('click', function(e) {
@@ -1939,8 +1919,8 @@ function attachPaginationListeners() {
                     }
                     
                     // Update pagination
-                    const newPagination = doc.querySelector('.pagination-controls');
-                    const currentPagination = document.querySelector('.pagination-controls');
+                    const newPagination = doc.querySelector('.pagination');
+                    const currentPagination = document.querySelector('.pagination');
                     if (newPagination && currentPagination) {
                         currentPagination.innerHTML = newPagination.innerHTML;
                         // Re-attach event listeners to new pagination links
