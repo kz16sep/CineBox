@@ -155,22 +155,10 @@
       <a href="{{ url_for('main.detail', movie_id=m.movieId) }}" class="card-link">
         <div class="poster" style="background-image:url('{{ m.posterUrl }}')"></div>
         <div class="card-content">
-          <div class="card-title">{{ m.title }}</div>
-          <div class="card-meta">
-            {% if m.releaseYear %}<span class="year">{{ m.releaseYear }}</span>{% endif %}
-            {% if m.country %}<span class="country">{{ m.country }}</span>{% endif %}
+          <div class="card-title">
+            {{ m.title }}{% if m.releaseYear %} ({{ m.releaseYear }}){% endif %}
           </div>
           {% if m.genres %}<div class="card-genres">{{ m.genres }}</div>{% endif %}
-          {% if m.similarity %}
-          <div class="similarity-score">
-            <span class="similarity-label">Độ tương đồng:</span>
-            <span class="similarity-value">{{ "%.1f"|format(m.similarity * 100) }}%</span>
-          </div>
-          {% endif %}
-          <div class="movie-rating" data-movie-id="{{ m.id }}">
-            <span class="rating-stars">⭐ 0.0</span>
-            <!-- <span class="rating-count">(0)</span> -->
-          </div>
         </div>
       </a>
     </div>
