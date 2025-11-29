@@ -208,20 +208,34 @@ def get_personalized_recommendations():
                     if len(recommendations) < limit:
                         remaining_limit = limit - len(recommendations)
                         popular_movies = conn.execute(text("""
+                            WITH rating_stats AS (
+                                SELECT movieId,
+                                       AVG(CAST(value AS FLOAT)) AS avgRating,
+                                       COUNT(*) AS ratingCount
+                                FROM cine.Rating
+                                GROUP BY movieId
+                            )
                             SELECT TOP (:limit) 
-                                m.movieId, m.title, m.posterUrl as poster, m.releaseYear, 
-                                m.country, m.averageRating as avgRating, m.totalRatings as ratingCount,
-                                STRING_AGG(g.name, ', ') as genres
-                            FROM [cine].[Movie] m
-                            LEFT JOIN [cine].[MovieGenre] mg ON m.movieId = mg.movieId
-                            LEFT JOIN [cine].[Genre] g ON mg.genreId = g.genreId
-                            WHERE m.averageRating >= 4.0 AND m.totalRatings >= 10
-                                AND m.movieId NOT IN (
-                                    SELECT vh.movieId FROM cine.ViewHistory vh WHERE vh.userId = :user_id
-                                )
+                                m.movieId,
+                                m.title,
+                                m.posterUrl AS poster,
+                                m.releaseYear,
+                                m.country,
+                                rs.avgRating,
+                                rs.ratingCount,
+                                STRING_AGG(g.name, ', ') AS genres
+                            FROM cine.Movie m
+                            JOIN rating_stats rs ON rs.movieId = m.movieId
+                            LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                            LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
+                            WHERE rs.avgRating >= 4.0
+                              AND rs.ratingCount >= 10
+                              AND m.movieId NOT IN (
+                                  SELECT vh.movieId FROM cine.ViewHistory vh WHERE vh.userId = :user_id
+                              )
                             GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, 
-                                     m.country, m.averageRating, m.totalRatings
-                            ORDER BY m.averageRating DESC, m.totalRatings DESC
+                                     m.country, rs.avgRating, rs.ratingCount
+                            ORDER BY rs.avgRating DESC, rs.ratingCount DESC
                         """), {"limit": remaining_limit, "user_id": user_id}).mappings().all()
                         
                         existing_ids = {rec.get('movieId') or rec.get('id') for rec in recommendations}

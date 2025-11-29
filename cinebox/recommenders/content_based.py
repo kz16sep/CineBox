@@ -476,23 +476,37 @@ class ContentBasedRecommender:
             with self.db_engine.connect() as conn:
                 # Lấy phim phổ biến mà user chưa xem
                 popular_movies = conn.execute(text("""
+                    WITH rating_stats AS (
+                        SELECT movieId,
+                               AVG(CAST(value AS FLOAT)) AS avgRating,
+                               COUNT(*) AS ratingCount
+                        FROM cine.Rating
+                        GROUP BY movieId
+                    )
                     SELECT TOP (:limit) 
-                        m.movieId, m.title, m.posterUrl, m.releaseYear, 
-                        m.country, m.averageRating, m.totalRatings,
-                        STRING_AGG(g.name, ', ') as genres
-                    FROM [cine].[Movie] m
-                    LEFT JOIN [cine].[MovieGenre] mg ON m.movieId = mg.movieId
-                    LEFT JOIN [cine].[Genre] g ON mg.genreId = g.genreId
-                    WHERE m.averageRating >= 4.0 AND m.totalRatings >= 5
-                        AND m.movieId NOT IN (
-                            SELECT COALESCE(vh.movieId, 0) FROM cine.ViewHistory vh WHERE vh.userId = :user_id
-                        )
-                        AND m.movieId NOT IN (
-                            SELECT COALESCE(r.movieId, 0) FROM cine.Rating r WHERE r.userId = :user_id
-                        )
+                        m.movieId,
+                        m.title,
+                        m.posterUrl,
+                        m.releaseYear,
+                        m.country,
+                        rs.avgRating,
+                        rs.ratingCount,
+                        STRING_AGG(g.name, ', ') AS genres
+                    FROM cine.Movie m
+                    JOIN rating_stats rs ON rs.movieId = m.movieId
+                    LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                    LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
+                    WHERE rs.avgRating >= 4.0
+                      AND rs.ratingCount >= 5
+                      AND m.movieId NOT IN (
+                          SELECT COALESCE(vh.movieId, 0) FROM cine.ViewHistory vh WHERE vh.userId = :user_id
+                      )
+                      AND m.movieId NOT IN (
+                          SELECT COALESCE(r.movieId, 0) FROM cine.Rating r WHERE r.userId = :user_id
+                      )
                     GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, 
-                             m.country, m.averageRating, m.totalRatings
-                    ORDER BY m.averageRating DESC, m.totalRatings DESC
+                             m.country, rs.avgRating, rs.ratingCount
+                    ORDER BY rs.avgRating DESC, rs.ratingCount DESC
                 """), {"limit": limit, "user_id": user_id}).mappings().all()
                 
                 recommendations = []
@@ -505,8 +519,8 @@ class ContentBasedRecommender:
                         "posterUrl": movie["posterUrl"],
                         "releaseYear": movie["releaseYear"],
                         "country": movie["country"],
-                        "avgRating": float(movie["averageRating"]) if movie["averageRating"] else 0.0,
-                        "ratingCount": movie["totalRatings"] or 0,
+                        "avgRating": float(movie["avgRating"]) if movie["avgRating"] else 0.0,
+                        "ratingCount": movie["ratingCount"] or 0,
                         "genres": movie["genres"] or "",
                         "similarity": 0.7 - (i * 0.03),  # Giảm dần similarity
                         "reason": f"Phim phổ biến (Top {i+1})",

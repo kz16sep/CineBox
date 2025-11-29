@@ -39,6 +39,8 @@ carousel_movies_cache = {
     'ttl': 300  # 5 minutes
 }
 
+RECOMMENDATION_LIMIT = 12
+
 
 def init_recommenders():
     """Initialize recommender instances - sử dụng lazy loading và background loading để tránh lag"""
@@ -259,7 +261,7 @@ def get_cold_start_recommendations(user_id, conn):
                     rec["avgRating"] = stats.get("avgRating", 0.0)
                     rec["ratingCount"] = stats.get("ratingCount", 0)
         
-        return recommendations[:10]
+        return recommendations[:RECOMMENDATION_LIMIT]
         
     except Exception as e:
         current_app.logger.error(f"Error generating cold start recommendations: {e}")

@@ -77,30 +77,7 @@
         <!-- Pagination -->
         {% if pagination and pagination.pages > 1 %}
         <div class="pagination">
-          <div class="pagination-info">
-            <span>Trang {{ pagination.page }} / {{ pagination.pages }}</span>
-            <span>({{ pagination.total }} kết quả)</span>
-          </div>
-          
-          <div class="pagination-controls">
-            {% if pagination.has_prev %}
-              <a href="{{ url_for('main.search', q=query, page=pagination.prev_num) }}" class="btn-pagination">
-                ← Trang trước
-              </a>
-            {% else %}
-              <span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">← Trang trước</span>
-            {% endif %}
-            
-            <span class="page-info">Trang {{ pagination.page }} / {{ pagination.pages }}</span>
-            
-            {% if pagination.has_next %}
-              <a href="{{ url_for('main.search', q=query, page=pagination.next_num) }}" class="btn-pagination">
-                Trang sau →
-              </a>
-            {% else %}
-              <span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">Trang sau →</span>
-            {% endif %}
-          </div>
+          <div id="paginationControls" class="pagination-controls"></div>
         </div>
         {% endif %}
       </div>
@@ -408,45 +385,81 @@
   margin-top: 8px;
 }
 
-/* Pagination centering */
+/* Pagination - Use same styles as all_movies */
 .pagination {
   display: flex;
-  flex-direction: column;
+  justify-content: center;
   align-items: center;
-  gap: 15px;
-  margin-top: 30px;
-}
-
-.pagination-info {
-  text-align: center;
-  color: #fff !important;
-  font-size: 0.9rem;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 10px;
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  flex-wrap: wrap;
 }
 
 .pagination-controls {
   display: flex;
   align-items: center;
   gap: 8px;
-  justify-content: center;
   flex-wrap: wrap;
+  justify-content: center;
 }
 
 .btn-pagination {
-  background: #333 !important;
-  color: #fff !important;
-  padding: 8px 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  min-width: 38px;
+  height: 38px;
+  background: var(--panel-2);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 6px;
-  text-decoration: none !important;
+  color: var(--text);
+  text-decoration: none;
   font-size: 0.9rem;
-  transition: all 0.2s ease;
-  border: none;
+  font-weight: 500;
   cursor: pointer;
+  transition: all 0.2s ease;
 }
 
-.btn-pagination:hover {
-  background: #555 !important;
-  color: #fff !important;
-  text-decoration: none !important;
+.btn-pagination:hover:not(.disabled):not(.active) {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: rgba(59, 130, 246, 0.5);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.btn-pagination.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+}
+
+.btn-pagination.disabled,
+.btn-pagination[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.btn-pagination-icon {
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+.pagination-ellipsis {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 4px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  user-select: none;
 }
 
 .page-numbers {
@@ -515,6 +528,111 @@
 </style>
 
 <script>
+// Pagination functions (same as all_movies.html)
+function generatePaginationNumbers(current, total) {
+  if (total <= 1) return [];
+  
+  const showAdjacent = 2;
+  const numbers = [];
+  
+  // Always show first page
+  if (total > 0) {
+    numbers.push(1);
+  }
+  
+  // Calculate start and end of visible range
+  let start = Math.max(2, current - showAdjacent);
+  let end = Math.min(total - 1, current + showAdjacent);
+  
+  // Adjust if we're near the beginning
+  if (current <= showAdjacent + 2) {
+    end = Math.min(total - 1, showAdjacent * 2 + 2);
+  }
+  
+  // Adjust if we're near the end
+  if (current >= total - showAdjacent - 1) {
+    start = Math.max(2, total - showAdjacent * 2 - 1);
+  }
+  
+  // Add ellipsis after first page if needed
+  if (start > 2) {
+    numbers.push('ellipsis-start');
+  }
+  
+  // Add page numbers in range
+  for (let i = start; i <= end; i++) {
+    if (i !== 1 && i !== total) {
+      numbers.push(i);
+    }
+  }
+  
+  // Add ellipsis before last page if needed
+  if (end < total - 1) {
+    numbers.push('ellipsis-end');
+  }
+  
+  // Always show last page (if more than 1 page)
+  if (total > 1) {
+    numbers.push(total);
+  }
+  
+  return numbers;
+}
+
+function renderPagination(page, total, query, baseUrl) {
+  const container = document.getElementById('paginationControls');
+  if (!container) return;
+  
+  container.innerHTML = '';
+  
+  // Previous button
+  const prevBtn = document.createElement('a');
+  prevBtn.href = page > 1 ? `${baseUrl}?q=${encodeURIComponent(query)}&page=${page - 1}` : '#';
+  prevBtn.className = 'btn-pagination btn-pagination-icon' + (page <= 1 ? ' disabled' : '');
+  prevBtn.innerHTML = '←';
+  if (page <= 1) {
+    prevBtn.style.pointerEvents = 'none';
+    prevBtn.style.opacity = '0.4';
+  }
+  container.appendChild(prevBtn);
+  
+  // Page numbers
+  const pageNumbers = generatePaginationNumbers(page, total);
+  pageNumbers.forEach(num => {
+    if (num === 'ellipsis-start' || num === 'ellipsis-end') {
+      const ellipsis = document.createElement('span');
+      ellipsis.className = 'pagination-ellipsis';
+      ellipsis.textContent = '...';
+      container.appendChild(ellipsis);
+    } else {
+      const pageBtn = document.createElement('a');
+      pageBtn.href = `${baseUrl}?q=${encodeURIComponent(query)}&page=${num}`;
+      pageBtn.className = 'btn-pagination' + (num === page ? ' active' : '');
+      pageBtn.textContent = num;
+      container.appendChild(pageBtn);
+    }
+  });
+  
+  // Next button
+  const nextBtn = document.createElement('a');
+  nextBtn.href = page < total ? `${baseUrl}?q=${encodeURIComponent(query)}&page=${page + 1}` : '#';
+  nextBtn.className = 'btn-pagination btn-pagination-icon' + (page >= total ? ' disabled' : '');
+  nextBtn.innerHTML = '→';
+  if (page >= total) {
+    nextBtn.style.pointerEvents = 'none';
+    nextBtn.style.opacity = '0.4';
+  }
+  container.appendChild(nextBtn);
+}
+
+// Initialize pagination on page load
+{% if pagination and pagination.pages > 1 %}
+document.addEventListener('DOMContentLoaded', function() {
+  const baseUrl = '{{ url_for("main.search") }}';
+  renderPagination({{ pagination.page }}, {{ pagination.pages }}, {{ query|tojson }}, baseUrl);
+});
+{% endif %}
+
 // Search Suggestions
 document.addEventListener('DOMContentLoaded', function() {
     const searchInput = document.getElementById('searchInput');

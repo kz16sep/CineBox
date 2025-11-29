@@ -12,7 +12,7 @@
   <!-- Movie Hero Section -->
   <div class="detail-hero">
     <div class="hero-backdrop" style="background-image: url('{{ movie.backdrop }}')"></div>
-    <div class="hero-content">
+    <div class="detail-hero-content">
       <!-- Back Button -->
       <button class="back-button" onclick="history.back()" title="Quay về trang trước">
         <span class="back-icon">←</span>
@@ -115,7 +115,7 @@
           <h3>Thể loại:</h3>
           <div class="genre-tags">
             {% for genre in movie.genres %}
-              <a href="{{ url_for('main.genre_page', genre_slug=genre.slug) }}" 
+              <a href="{{ url_for('main.home', genre=genre.name) }}" 
                  class="genre-tag">
                 {{ genre.name }}
               </a>
@@ -148,22 +148,29 @@
 {% if related %}
 <section class="related-section">
   <h3>🎬 Phim liên quan & Gợi ý cho bạn</h3>
-  <div class="cards-container">
-    <div class="cards" id="relatedCards">
+  <div class="movies-grid-10" id="relatedCards">
     {% for m in related %}
     <div class="card">
       <a href="{{ url_for('main.detail', movie_id=m.movieId) }}" class="card-link">
         <div class="poster" style="background-image:url('{{ m.posterUrl }}')"></div>
         <div class="card-content">
-          <div class="card-title">
-            {{ m.title }}{% if m.releaseYear %} ({{ m.releaseYear }}){% endif %}
+          <div class="card-title">{{ m.title }}</div>
+          <div class="card-meta">
+            {% if m.releaseYear %}<span class="year">{{ m.releaseYear }}</span>{% endif %}
           </div>
           {% if m.genres %}<div class="card-genres">{{ m.genres }}</div>{% endif %}
+          <div class="movie-rating" data-movie-id="{{ m.movieId }}">
+            <span class="rating-stars">⭐ 0.0</span>
+            <span class="rating-count">(0)</span>
+          </div>
         </div>
       </a>
+      <div class="action-buttons">
+        <button class="watchlist-btn" onclick="toggleWatchlist({{ m.movieId }}, event)" data-movie-id="{{ m.movieId }}"><span class="watchlist-icon">📋</span></button>
+        <button class="favorite-btn" onclick="toggleFavorite({{ m.movieId }}, event)" data-movie-id="{{ m.movieId }}"><span class="favorite-icon">🤍</span></button>
+      </div>
     </div>
     {% endfor %}
-    </div>
   </div>
   
   <!-- Pagination cho related movies -->
@@ -292,7 +299,7 @@
   z-index: 1;
 }
 
-.hero-content {
+.detail-hero-content {
   position: relative;
   z-index: 2;
   padding: 40px;
@@ -757,64 +764,11 @@
   }
 }
 
-.card {
-  flex: 0 0 250px;
-  text-decoration: none;
-  color: inherit;
-  transition: transform 0.3s ease;
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 12px;
-  overflow: hidden;
-  backdrop-filter: blur(10px);
-}
-
-.card:hover {
-  transform: translateY(-8px);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
-}
-
-.poster {
-  width: 100%;
-  height: 320px;
-  background-size: cover;
-  background-position: center;
-}
-
-.card-content {
-  padding: 15px;
-}
-
-.card-title {
-  color: #fff;
-  font-weight: bold;
-  margin-bottom: 8px;
-  font-size: 1rem;
-  line-height: 1.3;
-}
-
-.similarity-score {
-  margin: 8px 0;
-  font-size: 0.9rem;
-}
-
-.similarity-label {
-  color: #888;
-}
-
-.similarity-value {
-  color: #4CAF50;
-  font-weight: bold;
-}
-
-.stars {
-  color: #ffd700;
-  font-size: 0.9rem;
-  margin-top: 5px;
-}
+/* CSS for card removed to use global styles */
 
 /* Responsive */
 @media (max-width: 768px) {
-  .hero-content {
+  .detail-hero-content {
     padding: 20px;
   }
   
@@ -1139,32 +1093,7 @@
   }
 }
 
-/* Fix text color and remove underlines for related movies cards */
-.card-link {
-  text-decoration: none !important;
-  color: inherit !important;
-}
-
-.card-link:hover {
-  text-decoration: none !important;
-  color: inherit !important;
-}
-
-.card-title {
-  color: #fff !important;
-}
-
-.card-meta {
-  color: #fff !important;
-}
-
-.card-genres {
-  color: #fff !important;
-}
-
-.movie-rating {
-  color: #fff !important;
-}
+/* Card styles inherited from styles.css */
 
 /* Fix pagination text color */
 .pagination-info {

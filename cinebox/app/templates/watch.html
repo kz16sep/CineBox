@@ -1,90 +1,103 @@
 {% extends 'base.html' %}
-{% block title %}{% if request.args.get('type') == 'trailer' %}Trailer: {% endif %}{{ movie.title }} · CineBox{% endblock %}
+{% block title %}{% if is_trailer %}Trailer: {% endif %}{{ movie.title }} · CineBox{% endblock %}
 {% block content %}
 <!-- eslint-disable -->
 <section class="watch">
-  <!-- Back to Detail Button -->
-  <div class="back-to-detail">
-    <a href="{{ url_for('main.detail', movie_id=movie.id) }}" class="btn btn-secondary">
-      ← Quay lại chi tiết phim
-    </a>
-  </div>
-  
-  <!-- Movie Title -->
-  <div class="watch-header">
-    <h1>{{ movie.title }}</h1>
-    {% if request.args.get('type') == 'trailer' %}
-      <span class="trailer-badge">🎬 TRAILER</span>
-    {% endif %}
-  </div>
-  
-  <!-- View Count -->
-  <div class="view-count">
-    <span class="view-icon">👁️</span>
-    <span class="view-text">{{ "{:,}".format(movie.viewCount) }} lượt xem</span>
-  </div>
-  
-  <!-- Video Player -->
-  <div class="video-container">
-    {% if tmdb_video %}
-      <!-- Embed video từ TMDB (YouTube/Vimeo) -->
-      <div class="embed-wrapper">
-        {% if tmdb_video.type == 'youtube' %}
-          <iframe 
-            class="player-embed" 
-            src="https://www.youtube.com/embed/{{ tmdb_video.key }}?autoplay=0&rel=0" 
-            frameborder="0" 
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
-            allowfullscreen>
-          </iframe>
-        {% elif tmdb_video.type == 'vimeo' %}
-          <iframe 
-            class="player-embed" 
-            src="https://player.vimeo.com/video/{{ tmdb_video.key }}?autoplay=0" 
-            frameborder="0" 
-            allow="autoplay; fullscreen; picture-in-picture" 
-            allowfullscreen>
-          </iframe>
-        {% endif %}
-      </div>
-      {% if movie.movie_url %}
-        <div class="movie-url-link">
-          <a href="{{ movie.movie_url }}" target="_blank" class="btn btn-secondary">
-            🔗 Xem thông tin phim tại trang gốc
-          </a>
+  <div class="watch-hero">
+    <div class="watch-hero-backdrop" style="background-image:url('{{ movie.backdrop }}')"></div>
+    <div class="watch-hero-overlay"></div>
+    <div class="watch-hero-content">
+      <div class="watch-layout">
+        <div class="watch-player-card">
+          {% if tmdb_video %}
+            <div class="embed-wrapper">
+              {% if tmdb_video.type == 'youtube' %}
+                <iframe 
+                  class="player-embed" 
+                  src="https://www.youtube.com/embed/{{ tmdb_video.key }}?autoplay=0&rel=0" 
+                  frameborder="0" 
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+                  allowfullscreen>
+                </iframe>
+              {% elif tmdb_video.type == 'vimeo' %}
+                <iframe 
+                  class="player-embed" 
+                  src="https://player.vimeo.com/video/{{ tmdb_video.key }}?autoplay=0" 
+                  frameborder="0" 
+                  allow="autoplay; fullscreen; picture-in-picture" 
+                  allowfullscreen>
+                </iframe>
+              {% endif %}
+            </div>
+          {% else %}
+            <video class="player" controls poster="{{ movie.backdrop }}">
+              {% for s in movie.sources %}
+              <source src="{{ s.url }}" type="video/mp4" />
+              {% endfor %}
+              Trình duyệt của bạn không hỗ trợ video.
+            </video>
+          {% endif %}
+          {% if movie.description %}
+          <div class="hero-overview">
+            <p id="hero-overview-text" class="hero-overview-text {% if movie.description|length > 240 %}collapsed{% endif %}">{{ movie.description }}</p>
+            {% if movie.description|length > 240 %}
+            <button class="hero-overview-toggle" type="button" onclick="toggleHeroOverview()">Xem thêm</button>
+            {% endif %}
+          </div>
+          {% endif %}
         </div>
-      {% endif %}
-    {% else %}
-      <!-- Video player thông thường -->
-      <video class="player" controls poster="{{ movie.backdrop }}">
-        {% for s in movie.sources %}
-        <source src="{{ s.url }}" type="video/mp4" />
-        {% endfor %}
-        Trình duyệt của bạn không hỗ trợ video.
-      </video>
-      {% if movie.movie_url %}
-        <div class="movie-url-link">
-          <a href="{{ movie.movie_url }}" target="_blank" class="btn btn-secondary">
-            🔗 Xem thông tin phim tại trang gốc
-          </a>
-        </div>
-      {% endif %}
-    {% endif %}
-  </div>
+        <div class="watch-info-card">
+          <div class="watch-info-header">
+            <h1>{{ movie.title }}</h1>
+            {% if is_trailer %}
+              <span class="trailer-badge">🎬 Trailer</span>
+            {% endif %}
+          </div>
+          <div class="watch-info-meta">
+            {% if movie.year %}<span>📅 {{ movie.year }}</span>{% endif %}
+            <span>👁️ {{ "{:,}".format(movie.viewCount) }} lượt xem</span>
+          </div>
+          {% if movie.genres %}
+          <div class="genre-tags compact">
+            {% for genre in movie.genres %}
+              <a href="{{ url_for('main.genre_page', genre_slug=genre.slug) }}" class="genre-tag">{{ genre.name }}</a>
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% if movie.description %}
+          <p class="watch-description">{{ movie.description }}</p>
+          {% endif %}
 
-  <!-- Movie Genres -->
-  {% if movie.genres %}
-  <div class="movie-genres">
-    <h3>Thể loại:</h3>
-    <div class="genre-tags">
-      {% for genre in movie.genres %}
-        <a href="{{ url_for('main.genre_page', genre_slug=genre.slug) }}" class="genre-tag">{{ genre.name }}</a>
-      {% endfor %}
+          {% if related_movies %}
+          <div class="watch-related-list">
+            <div class="watch-related-header">
+              <h4>🎬 Phim liên quan</h4>
+              <span>{{ related_movies|length }} phim</span>
+            </div>
+            <div class="watch-related-scroll" id="relatedCards">
+              {% for m in related_movies %}
+              <a href="{{ url_for('main.watch', movie_id=m.movieId) }}" class="watch-related-item">
+                <div class="watch-related-poster" style="background-image:url('{{ m.posterUrl }}')"></div>
+                <div class="watch-related-info">
+                  <div class="watch-related-title">
+                    {{ m.title }}{% if m.releaseYear %} ({{ m.releaseYear }}){% endif %}
+                  </div>
+                  {% if m.genres %}
+                  <div class="watch-related-meta">
+                    {{ m.genres }}
+                  </div>
+                  {% endif %}
+                </div>
+              </a>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
     </div>
   </div>
-  {% endif %}
 
-  <!-- Episodes Section (chỉ hiển thị nếu có nhiều hơn 1 tập) -->
   {% if movie.episodes and movie.episodes|length > 1 %}
   <div class="episodes-section">
     <h3>📺 Tập phim</h3>
@@ -102,14 +115,6 @@
       </div>
       {% endfor %}
     </div>
-  </div>
-  {% endif %}
-
-  <!-- Movie Overview -->
-  {% if movie.description %}
-  <div class="movie-overview">
-    <h3>Nội dung phim</h3>
-    <p>{{ movie.description }}</p>
   </div>
   {% endif %}
 
@@ -154,107 +159,146 @@
     </div>
   </div>
 
-  <!-- Phim liên quan (Related Movies) -->
-  {% if related_movies %}
-  <div class="related-section">
-  <h3>🎬 Phim liên quan</h3>
-  <div class="cards-container">
-    <button class="scroll-btn scroll-left" onclick="scrollCards('left')">‹</button>
-    <div class="cards" id="relatedCards">
-      {% for m in related_movies %}
-      <div class="card">
-        <a href="{{ url_for('main.watch', movie_id=m.movieId) }}" class="card-link">
-          <div class="poster" style="background-image:url('{{ m.posterUrl }}')"></div>
-          <div class="card-content">
-            <div class="card-title">
-              {{ m.title }}{% if m.releaseYear %} ({{ m.releaseYear }}){% endif %}
-            </div>
-            {% if m.genres %}<div class="card-genres">{{ m.genres }}</div>{% endif %}
-          </div>
-        </a>
-      </div>
-      {% endfor %}
-    </div>
-    <button class="scroll-btn scroll-right" onclick="scrollCards('right')">›</button>
-  </div>
-  </div>
-  {% endif %}
-
   <!-- Chỉ hiển thị phim liên quan từ mô hình improved_train.py -->
 </section>
 
 <style>
 /* Watch Page Styles */
-.back-to-detail {
-  margin-bottom: 20px;
+.watch-hero {
+  position: relative;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 24px;
+  overflow: hidden;
+  margin-bottom: 30px;
+  background: rgba(15, 20, 32, 0.6);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
 }
 
-.watch-header {
+.watch-hero-backdrop {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  filter: blur(24px);
+  opacity: 0.45;
+}
+
+.watch-hero-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, rgba(7,11,20,0.95) 10%, rgba(15,23,42,0.85) 55%, rgba(15,23,42,0.55) 100%);
+}
+
+.watch-hero-content {
+  position: relative;
+  padding: 40px;
+}
+
+.watch-layout {
   display: flex;
-  align-items: center;
-  gap: 15px;
-  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 24px;
+  align-items: stretch;
 }
 
-.watch-header h1 {
+.watch-player-card,
+.watch-info-card {
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(11, 17, 31, 0.85);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+}
+
+.watch-player-card {
+  flex: 1 1 58%;
+  min-width: 320px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.watch-info-card {
+  flex: 1 1 35%;
+  min-width: 280px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.watch-info-header h1 {
   color: #fff;
-  font-size: 2rem;
+  margin: 0;
+  font-size: 2.2rem;
+}
+
+.watch-badge,
+.trailer-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  background: rgba(111, 177, 255, 0.15);
+  border: 1px solid rgba(111, 177, 255, 0.4);
+  color: #dbeafe;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.watch-info-meta {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 0.95rem;
+  color: #c3ccdf;
+}
+
+.watch-info-card .genre-tags {
+  padding: 0;
+  justify-content: flex-start;
+}
+
+.watch-info-card .genre-tag {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.85rem;
+  padding: 8px 16px;
+}
+
+.watch-info-card .genre-tag:hover {
+  background: rgba(111, 177, 255, 0.18);
+  border-color: rgba(111, 177, 255, 0.6);
+}
+
+.watch-description {
+  color: #d1d5db;
+  line-height: 1.7;
   margin: 0;
 }
 
-.trailer-badge {
-  background: linear-gradient(45deg, #ff6b6b, #ff8e8e);
-  color: white;
-  padding: 8px 16px;
-  border-radius: 20px;
-  font-size: 0.9rem;
-  font-weight: bold;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3);
-}
-
-.view-count {
+.watch-body {
+  max-width: 1200px;
+  margin: 0 auto;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 10px 0 20px 0;
-  padding: 12px 20px;
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(147, 51, 234, 0.1));
-  border: 1px solid rgba(59, 130, 246, 0.3);
-  border-radius: 25px;
-  backdrop-filter: blur(10px);
-  width: fit-content;
-  transition: all 0.3s ease;
+  flex-direction: column;
+  gap: 30px;
+  padding-bottom: 40px;
 }
 
-.view-count:hover {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(147, 51, 234, 0.2));
-  border-color: rgba(59, 130, 246, 0.5);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.2);
-}
-
-.view-icon {
-  font-size: 1.2rem;
-  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
-}
-
-.view-text {
-  color: #e2e8f0;
-  font-size: 1rem;
-  font-weight: 600;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-}
-
-.video-container {
-  position: relative;
-  width: 100%;
-  max-width: 1000px;
-  margin: 0 auto 30px auto;
-  border-radius: 12px;
-  overflow: hidden;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+@media (max-width: 1024px) {
+  .watch-layout {
+    flex-direction: column;
+  }
+  
+  .watch-player-card,
+  .watch-info-card {
+    flex: 1 1 100%;
+  }
 }
 
 .player {
@@ -288,6 +332,131 @@
 .movie-url-link {
   margin-top: 15px;
   text-align: center;
+}
+
+.hero-overview {
+  margin-top: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 16px 18px;
+  color: #cfd7ed;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.hero-overview-text {
+  margin: 0;
+}
+
+.hero-overview-text.collapsed {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.hero-overview-toggle {
+  margin-top: 10px;
+  background: none;
+  border: 1px solid rgba(255,255,255,0.3);
+  color: #9ac1ff;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.hero-overview-toggle:hover {
+  border-color: rgba(111,177,255,0.6);
+  color: #fff;
+}
+
+.watch-related-list {
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+}
+
+.watch-related-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #e2e8f0;
+  margin-bottom: 12px;
+}
+
+.watch-related-header h4 {
+  margin: 0;
+  font-size: 1rem;
+  color: #fff;
+}
+
+.watch-related-scroll {
+  max-height: 360px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.watch-related-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.watch-related-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.25);
+  border-radius: 999px;
+}
+
+.watch-related-item {
+  display: flex;
+  gap: 12px;
+  padding: 10px;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  text-decoration: none;
+  color: inherit;
+  transition: all 0.2s ease;
+  align-items: center;
+}
+
+.watch-related-item:hover {
+  border-color: rgba(111,177,255,0.6);
+  background: rgba(111,177,255,0.08);
+  transform: translateY(-1px);
+}
+
+.watch-related-poster {
+  width: 56px;
+  height: 72px;
+  border-radius: 10px;
+  background-size: cover;
+  background-position: center;
+  flex-shrink: 0;
+}
+
+.watch-related-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.watch-related-title {
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.watch-related-meta {
+  color: #cbd5f5;
+  font-size: 0.8rem;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 /* Movie Genres - Enhanced */
@@ -632,31 +801,44 @@
 }
 
 .card {
-  flex: 0 0 200px;
+  flex: 0 0 320px;
   text-decoration: none;
   color: inherit;
   transition: transform 0.2s ease;
+  height: 140px;
+  display: flex;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  overflow: hidden;
 }
 
 .card:hover {
   transform: translateY(-5px);
 }
 
-.poster {
+.card-link {
+  display: flex;
+  flex-direction: row;
   width: 100%;
-  height: 280px;
-  background-size: cover;
-  background-position: center;
-  border-radius: 8px;
-  margin-bottom: 10px;
+  height: 100%;
 }
 
-.card-title {
-  color: #fff;
-  font-weight: bold;
-  margin-bottom: 5px;
-  font-size: 0.9em;
-  line-height: 1.3;
+.poster {
+  width: 100px;
+  height: 100%;
+  background-size: cover;
+  background-position: center;
+  flex-shrink: 0;
+  margin-bottom: 0;
+  border-radius: 0;
+}
+
+.card-content {
+  padding: 10px 15px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .stars {
@@ -1325,62 +1507,16 @@
 
 <script>
 /* eslint-disable */
-// Scroll cards function
-function scrollCards(direction) {
-  const cardsContainer = document.getElementById('relatedCards');
-  const scrollAmount = 300; // pixels to scroll
-  
-  if (direction === 'left') {
-    cardsContainer.scrollBy({
-      left: -scrollAmount,
-      behavior: 'smooth'
-    });
-  } else if (direction === 'right') {
-    cardsContainer.scrollBy({
-      left: scrollAmount,
-      behavior: 'smooth'
-    });
-  }
+function toggleHeroOverview() {
+  const text = document.getElementById('hero-overview-text');
+  const btn = document.querySelector('.hero-overview-toggle');
+  if (!text || !btn) return;
+  const isCollapsed = text.classList.toggle('collapsed');
+  btn.textContent = isCollapsed ? 'Xem thêm' : 'Thu gọn';
 }
 
-// Auto-hide scroll buttons based on scroll position
 document.addEventListener('DOMContentLoaded', function() {
-  const cardsContainer = document.getElementById('relatedCards');
-  const leftBtn = document.querySelector('.scroll-left');
-  const rightBtn = document.querySelector('.scroll-right');
-  
-  if (cardsContainer && leftBtn && rightBtn) {
-    function updateScrollButtons() {
-      const scrollLeft = cardsContainer.scrollLeft;
-      const maxScroll = cardsContainer.scrollWidth - cardsContainer.clientWidth;
-      
-      // Show/hide left button
-      if (scrollLeft <= 0) {
-        leftBtn.style.opacity = '0.3';
-        leftBtn.style.pointerEvents = 'none';
-      } else {
-        leftBtn.style.opacity = '1';
-        leftBtn.style.pointerEvents = 'auto';
-      }
-      
-      // Show/hide right button
-      if (scrollLeft >= maxScroll - 10) { // 10px tolerance
-        rightBtn.style.opacity = '0.3';
-        rightBtn.style.pointerEvents = 'none';
-      } else {
-        rightBtn.style.opacity = '1';
-        rightBtn.style.pointerEvents = 'auto';
-      }
-    }
-    
-    // Update buttons on scroll
-    cardsContainer.addEventListener('scroll', updateScrollButtons);
-    
-    // Initial update
-    updateScrollButtons();
-  }
-  
-  // Load ratings for all movies
+  // Load ratings for related movies
   loadAllRatings();
   
   // Load rating for current movie

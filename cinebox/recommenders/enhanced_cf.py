@@ -928,23 +928,37 @@ class EnhancedCFRecommender:
             with self.db_engine.connect() as conn:
                 # Lấy phim phổ biến mà user chưa xem
                 popular_movies = conn.execute(text("""
+                    WITH rating_stats AS (
+                        SELECT movieId,
+                               AVG(CAST(value AS FLOAT)) AS avgRating,
+                               COUNT(*) AS ratingCount
+                        FROM cine.Rating
+                        GROUP BY movieId
+                    )
                     SELECT TOP (:limit) 
-                        m.movieId, m.title, m.posterUrl, m.releaseYear, 
-                        m.country, m.averageRating, m.totalRatings,
-                        STRING_AGG(g.name, ', ') as genres
-                    FROM [cine].[Movie] m
-                    LEFT JOIN [cine].[MovieGenre] mg ON m.movieId = mg.movieId
-                    LEFT JOIN [cine].[Genre] g ON mg.genreId = g.genreId
-                    WHERE m.averageRating >= 4.0 AND m.totalRatings >= 10
-                        AND m.movieId NOT IN (
-                            SELECT vh.movieId FROM cine.ViewHistory vh WHERE vh.userId = :user_id
-                        )
-                        AND m.movieId NOT IN (
-                            SELECT r.movieId FROM cine.Rating r WHERE r.userId = :user_id
-                        )
+                        m.movieId,
+                        m.title,
+                        m.posterUrl,
+                        m.releaseYear,
+                        m.country,
+                        rs.avgRating,
+                        rs.ratingCount,
+                        STRING_AGG(g.name, ', ') AS genres
+                    FROM cine.Movie m
+                    JOIN rating_stats rs ON rs.movieId = m.movieId
+                    LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                    LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
+                    WHERE rs.avgRating >= 4.0
+                      AND rs.ratingCount >= 10
+                      AND m.movieId NOT IN (
+                          SELECT vh.movieId FROM cine.ViewHistory vh WHERE vh.userId = :user_id
+                      )
+                      AND m.movieId NOT IN (
+                          SELECT r.movieId FROM cine.Rating r WHERE r.userId = :user_id
+                      )
                     GROUP BY m.movieId, m.title, m.posterUrl, m.releaseYear, 
-                             m.country, m.averageRating, m.totalRatings
-                    ORDER BY m.averageRating DESC, m.totalRatings DESC
+                             m.country, rs.avgRating, rs.ratingCount
+                    ORDER BY rs.avgRating DESC, rs.ratingCount DESC
                 """), {"limit": limit, "user_id": user_id}).mappings().all()
                 
                 recommendations = []
@@ -957,8 +971,8 @@ class EnhancedCFRecommender:
                         "posterUrl": movie["posterUrl"],
                         "releaseYear": movie["releaseYear"],
                         "country": movie["country"],
-                        "avgRating": float(movie["averageRating"]) if movie["averageRating"] else 0.0,
-                        "ratingCount": movie["totalRatings"] or 0,
+                        "avgRating": float(movie["avgRating"]) if movie["avgRating"] else 0.0,
+                        "ratingCount": movie["ratingCount"] or 0,
                         "genres": movie["genres"] or "",
                         "score": 0.8 - (i * 0.05),  # Giảm dần score
                         "reason": "Phim phổ biến với đánh giá cao",

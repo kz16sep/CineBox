@@ -180,6 +180,7 @@ def home():
     # Lấy parameters
     page = request.args.get('page', 1, type=int)
     per_page = 10
+    HOME_SECTION_LIMIT = 12
     genre_filter = request.args.get('genre', '', type=str)
     search_query = request.args.get('q', '', type=str)
     sort_by = request.args.get('sort', 'newest', type=str)
@@ -198,8 +199,8 @@ def home():
         try:
             with current_app.db_engine.connect() as conn:
                 if genre_filter:
-                    rows = conn.execute(text("""
-                        SELECT DISTINCT TOP 10
+                    rows = conn.execute(text(f"""
+                        SELECT DISTINCT TOP {HOME_SECTION_LIMIT}
                             m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt, m.viewCount
                         FROM cine.Movie m
                         JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
@@ -208,8 +209,8 @@ def home():
                         ORDER BY m.createdAt DESC, m.movieId DESC
                     """), {"genre": genre_filter}).mappings().all()
                 else:
-                    rows = conn.execute(text("""
-                        SELECT TOP 10 
+                    rows = conn.execute(text(f"""
+                        SELECT TOP {HOME_SECTION_LIMIT} 
                             movieId, title, posterUrl, backdropUrl, overview, createdAt, viewCount
                         FROM cine.Movie
                         ORDER BY createdAt DESC, movieId DESC
@@ -492,8 +493,8 @@ def home():
                 # Lấy CF/CB recommendations từ database
                 cf_cb_recs = []
                 if cf_cb_weight > 0:
-                    personal_rows = conn.execute(text("""
-                        SELECT TOP 10 
+                    personal_rows = conn.execute(text(f"""
+                        SELECT TOP {HOME_SECTION_LIMIT} 
                             m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
                             pr.score, pr.rank, pr.algo
                         FROM cine.PersonalRecommendation pr
@@ -527,7 +528,7 @@ def home():
                             })
                     else:
                         # Fallback: rating-based recommendations
-                        cf_cb_recs = create_rating_based_recommendations(user_id, latest_movies[:10], current_app.db_engine)
+                        cf_cb_recs = create_rating_based_recommendations(user_id, latest_movies[:HOME_SECTION_LIMIT], current_app.db_engine)
                 
                 # Merge cold start và CF/CB
                 if cold_start_weight > 0 and cold_start_recs:
@@ -540,19 +541,19 @@ def home():
                         ]
                         
                         if len(high_quality_cf_cb) >= 5:
-                            personal_recommendations = cf_cb_recs[:10]
+                            personal_recommendations = cf_cb_recs[:HOME_SECTION_LIMIT]
                         else:
-                            num_cold_start = max(1, int(10 * cold_start_weight))
-                            num_cf_cb = 10 - num_cold_start
+                            num_cold_start = max(1, int(HOME_SECTION_LIMIT * cold_start_weight))
+                            num_cf_cb = HOME_SECTION_LIMIT - num_cold_start
                             selected_cold_start = cold_start_recs[:num_cold_start]
                             selected_cf_cb = cf_cb_recs[:num_cf_cb] if len(cf_cb_recs) >= num_cf_cb else cf_cb_recs
                             personal_recommendations = selected_cold_start + selected_cf_cb
                             random.shuffle(personal_recommendations)
-                            personal_recommendations = personal_recommendations[:10]
+                            personal_recommendations = personal_recommendations[:HOME_SECTION_LIMIT]
                     else:
-                        personal_recommendations = cold_start_recs[:10]
+                        personal_recommendations = cold_start_recs[:HOME_SECTION_LIMIT]
                 elif cf_cb_weight > 0 and cf_cb_recs:
-                    personal_recommendations = cf_cb_recs[:10]
+                    personal_recommendations = cf_cb_recs[:HOME_SECTION_LIMIT]
                 
                 # Trending movies
                 if (trending_cache.get('data') and 
@@ -579,7 +580,7 @@ def home():
                             WHERE ratedAt >= DATEADD(day, -{TRENDING_TIME_WINDOW_DAYS}, GETDATE())
                             GROUP BY movieId
                         )
-                        SELECT TOP 10
+                        SELECT TOP {HOME_SECTION_LIMIT}
                             m.movieId, 
                             m.title, 
                             m.posterUrl, 
@@ -615,14 +616,14 @@ def home():
                             "genres": ""
                         })
                     
-                    # Fallback nếu không đủ 10 phim
-                    if len(trending_movies) < 10:
+                    # Fallback nếu không đủ phim
+                    if len(trending_movies) < HOME_SECTION_LIMIT:
                         existing_ids = [m["id"] for m in trending_movies]
                         placeholders = ','.join([f':id{i}' for i in range(len(existing_ids))]) if existing_ids else ''
                         params = {f'id{i}': mid for i, mid in enumerate(existing_ids)}
                         
-                        fallback_query = """
-                            SELECT TOP 10
+                        fallback_query = f"""
+                            SELECT TOP {HOME_SECTION_LIMIT}
                                 m.movieId, m.title, m.posterUrl, m.releaseYear, m.country
                             FROM cine.Movie m
                             WHERE m.releaseYear IS NOT NULL
@@ -645,7 +646,7 @@ def home():
                                 "genres": ""
                             })
                     
-                    trending_movies = trending_movies[:10]
+                    trending_movies = trending_movies[:HOME_SECTION_LIMIT]
                     trending_cache['data'] = trending_movies
                     trending_cache['timestamp'] = current_time
                 
@@ -656,9 +657,9 @@ def home():
                     current_time - session.get(f'{cache_key_recent}_time', 0) < 300):  # 5 minutes cache
                     recent_watched = session.get(cache_key_recent, [])
                 else:
-                    history_rows = conn.execute(text("""
+                    history_rows = conn.execute(text(f"""
                         WITH recent_history AS (
-                            SELECT TOP 10
+                            SELECT TOP {HOME_SECTION_LIMIT}
                                 vh.movieId,
                                 MAX(vh.startedAt) AS lastWatchedAt,
                                 MAX(vh.finishedAt) AS lastFinishedAt,
@@ -719,7 +720,7 @@ def home():
     
     # Fallback
     if not personal_recommendations:
-        personal_recommendations = latest_movies[:10]
+        personal_recommendations = latest_movies[:HOME_SECTION_LIMIT]
     if not trending_movies:
         trending_movies = latest_movies
     
@@ -1321,7 +1322,7 @@ def genre_page(genre_slug):
     
     # Lấy các tham số filter (giống all_movies)
     page = request.args.get('page', 1, type=int)
-    per_page = 20
+    per_page = 24
     sort_by = request.args.get('sort', 'newest', type=str)
     year_filter = request.args.get('year', '', type=str)
     # Genre filter được fix từ slug, nhưng vẫn có thể filter thêm genre khác
@@ -1711,7 +1712,7 @@ def all_movies():
     """Trang tất cả phim với bộ lọc"""
     # Lấy các tham số filter
     page = request.args.get('page', 1, type=int)
-    per_page = 20
+    per_page = 24
     sort_by = request.args.get('sort', 'newest', type=str)
     year_filter = request.args.get('year', '', type=str)
     genre_filter = request.args.get('genre', '', type=str)
@@ -1865,3 +1866,139 @@ def all_movies():
                              year_list=[],
                              genre_list=[])
 
+
+@main_bp.route("/api/all-movies")
+@login_required
+def api_all_movies():
+    """API endpoint để load movies với pagination (JSON response)"""
+    page = request.args.get('page', 1, type=int)
+    per_page = 24
+    sort_by = request.args.get('sort', 'newest', type=str)
+    year_filter = request.args.get('year', '', type=str)
+    genre_filter = request.args.get('genre', '', type=str)
+    
+    try:
+        with current_app.db_engine.connect() as conn:
+            # Xây dựng WHERE clause
+            where_clauses = []
+            params = {}
+            
+            if year_filter:
+                where_clauses.append("m.releaseYear = :year")
+                params["year"] = int(year_filter)
+            
+            if genre_filter:
+                where_clauses.append("EXISTS (SELECT 1 FROM cine.MovieGenre mg2 JOIN cine.Genre g2 ON mg2.genreId = g2.genreId WHERE mg2.movieId = m.movieId AND g2.name = :genre)")
+                params["genre"] = genre_filter
+            
+            where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+            
+            # Xây dựng ORDER BY clause
+            if sort_by == 'ratings':
+                order_by_inner = 'avgRating DESC, ratingCount DESC, m.movieId DESC'
+                order_by_outer = 'avgRating DESC, ratingCount DESC'
+            else:
+                order_by_map = {
+                    'newest': 'm.releaseYear DESC, m.movieId DESC',
+                    'oldest': 'm.releaseYear ASC, m.movieId ASC',
+                    'views': 'm.viewCount DESC, m.movieId DESC',
+                    'title_asc': 'm.title ASC',
+                    'title_desc': 'm.title DESC'
+                }
+                order_by_inner = order_by_map.get(sort_by, order_by_map['newest'])
+                order_by_outer = order_by_inner
+            
+            # Đếm tổng số phim
+            count_query = f"""
+                SELECT COUNT(DISTINCT m.movieId)
+                FROM cine.Movie m
+                {where_sql}
+            """
+            total_count = conn.execute(text(count_query), params).scalar()
+            
+            # Tính toán phân trang
+            total_pages = (total_count + per_page - 1) // per_page
+            offset = (page - 1) * per_page
+            
+            # Lấy danh sách phim
+            if sort_by == 'ratings':
+                query = f"""
+                    SELECT m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country, m.viewCount,
+                           AVG(CAST(r.value AS FLOAT)) AS avgRating,
+                           COUNT(r.value) AS ratingCount
+                    FROM cine.Movie m
+                    LEFT JOIN cine.Rating r ON m.movieId = r.movieId
+                    {where_sql}
+                    GROUP BY m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country, m.viewCount
+                    ORDER BY {order_by_outer}
+                    OFFSET :offset ROWS
+                    FETCH NEXT :per_page ROWS ONLY
+                """
+            else:
+                query = f"""
+                    SELECT m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country, m.viewCount,
+                           AVG(CAST(r.value AS FLOAT)) AS avgRating,
+                           COUNT(r.value) AS ratingCount
+                    FROM cine.Movie m
+                    LEFT JOIN cine.Rating r ON m.movieId = r.movieId
+                    {where_sql}
+                    GROUP BY m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country, m.viewCount
+                    ORDER BY {order_by_inner}
+                    OFFSET :offset ROWS
+                    FETCH NEXT :per_page ROWS ONLY
+                """
+            
+            params["offset"] = offset
+            params["per_page"] = per_page
+            rows = conn.execute(text(query), params).mappings().all()
+            
+            # Lấy genres cho các phim
+            movie_ids = [r["movieId"] for r in rows]
+            genres_dict = get_movies_genres(movie_ids, current_app.db_engine) if movie_ids else {}
+            
+            # Format movies
+            movies = []
+            for r in rows:
+                movie_id = r["movieId"]
+                genres = genres_dict.get(movie_id, "")
+                
+                movies.append({
+                    "id": movie_id,
+                    "title": r["title"],
+                    "poster": get_poster_or_dummy(r.get("posterUrl"), r["title"]),
+                    "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
+                    "description": (r.get("overview") or "")[:160],
+                    "year": r.get("releaseYear"),
+                    "country": r.get("country"),
+                    "avgRating": round(float(r["avgRating"]), 2) if r["avgRating"] else 0.0,
+                    "ratingCount": int(r["ratingCount"]) if r["ratingCount"] else 0,
+                    "viewCount": int(r["viewCount"]) if r["viewCount"] else 0,
+                    "genres": genres.split(", ") if genres else []
+                })
+            
+            # Pagination
+            pagination = {
+                "page": page,
+                "per_page": per_page,
+                "total": total_count,
+                "pages": total_pages,
+                "has_prev": page > 1,
+                "has_next": page < total_pages,
+                "prev_num": page - 1 if page > 1 else None,
+                "next_num": page + 1 if page < total_pages else None
+            }
+            
+            return jsonify({
+                "success": True,
+                "movies": movies,
+                "pagination": pagination
+            })
+            
+    except Exception as e:
+        current_app.logger.error(f"Error in API all movies: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": str(e),
+            "movies": [],
+            "pagination": None
+        }), 500
