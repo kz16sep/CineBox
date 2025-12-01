@@ -462,15 +462,17 @@ def submit_comment(movie_id):
             """)).scalar()
             
             # Thêm comment mới (với hỗ trợ nested reply)
+            # Xử lý parent_comment_id: nếu None thì truyền NULL vào SQL
+            # likes và dislikes sẽ dùng giá trị mặc định từ schema (0)
             conn.execute(text("""
-                INSERT INTO [cine].[Comment] (commentId, userId, movieId, content, parentCommentId, createdAt)
-                VALUES (:comment_id, :user_id, :movie_id, :content, :parent_comment_id, GETDATE())
+                INSERT INTO [cine].[Comment] (commentId, userId, movieId, content, parentCommentId, createdAt, likes, dislikes)
+                VALUES (:comment_id, :user_id, :movie_id, :content, :parent_comment_id, GETDATE(), 0, 0)
             """), {
                 "comment_id": max_id,
                 "user_id": user_id, 
                 "movie_id": movie_id, 
                 "content": content,
-                "parent_comment_id": parent_comment_id
+                "parent_comment_id": parent_comment_id if parent_comment_id else None
             })
             
             comment_id = max_id
@@ -478,7 +480,7 @@ def submit_comment(movie_id):
             if not comment_id:
                 return jsonify({"success": False, "message": "Không thể tạo comment"})
             
-            # Lấy thông tin comment vừa tạo
+            # Lấy thông tin comment vừa tạo (kèm username từ Account nếu có)
             comment_data = conn.execute(text("""
                 SELECT 
                     c.commentId,
@@ -486,9 +488,11 @@ def submit_comment(movie_id):
                     c.createdAt,
                     c.parentCommentId,
                     u.email as user_email,
-                    u.avatarUrl
+                    u.avatarUrl,
+                    COALESCE(a.username, u.email) as display_name
                 FROM [cine].[Comment] c
                 JOIN [cine].[User] u ON c.userId = u.userId
+                LEFT JOIN [cine].[Account] a ON a.userId = u.userId
                 WHERE c.commentId = :comment_id
             """), {"comment_id": comment_id}).mappings().first()
             
@@ -503,6 +507,7 @@ def submit_comment(movie_id):
                     "content": comment_data.content,
                     "createdAt": comment_data.createdAt.isoformat(),
                     "user_email": comment_data.user_email,
+                    "display_name": comment_data.display_name or comment_data.user_email,
                     "avatarUrl": comment_data.avatarUrl
                 }
             })
@@ -521,7 +526,7 @@ def get_comments(movie_id):
     
     try:
         with current_app.db_engine.connect() as conn:
-            # Lấy tất cả comment của phim kèm thông tin like
+            # Lấy tất cả comment của phim kèm thông tin like (kèm username từ Account nếu có)
             comments = conn.execute(text("""
                 SELECT 
                     c.commentId,
@@ -530,11 +535,13 @@ def get_comments(movie_id):
                     c.parentCommentId,
                     (SELECT COUNT(*) FROM [cine].[CommentRating] cr2 WHERE cr2.commentId = c.commentId AND cr2.isLike = 1) as likeCount,
                     u.email as user_email,
+                    COALESCE(a.username, u.email) as display_name,
                     u.avatarUrl,
                     u.userId,
                     CASE WHEN cr.userId IS NOT NULL THEN 1 ELSE 0 END as is_liked_by_current_user
                 FROM [cine].[Comment] c
                 JOIN [cine].[User] u ON c.userId = u.userId
+                LEFT JOIN [cine].[Account] a ON a.userId = u.userId
                 LEFT JOIN [cine].[CommentRating] cr ON c.commentId = cr.commentId AND cr.userId = :current_user_id AND cr.isLike = 1
                 WHERE c.movieId = :movie_id
                 ORDER BY 
@@ -566,6 +573,7 @@ def get_comments(movie_id):
                     "content": comment.content,
                     "createdAt": comment.createdAt.isoformat(),
                     "user_email": comment.user_email,
+                    "display_name": comment.display_name or comment.user_email,
                     "avatarUrl": comment.avatarUrl,
                     "userId": comment.userId,
                     "likeCount": comment.likeCount or 0,
@@ -576,6 +584,7 @@ def get_comments(movie_id):
                 comments_dict[comment.commentId] = comment_data
             
             # Sau đó, xây dựng cấu trúc nested
+            # Xử lý theo thứ tự: root comments trước, sau đó là replies
             for comment in comments:
                 comment_data = comments_dict[comment.commentId]
                 
@@ -583,10 +592,18 @@ def get_comments(movie_id):
                     # Root comment (cấp 0)
                     root_comments.append(comment_data)
                 else:
-                    # Reply comment - thêm vào parent
-                    parent_comment = comments_dict.get(comment.parentCommentId)
+                    # Reply comment - tìm parent và thêm vào
+                    parent_id = comment.parentCommentId
+                    parent_comment = comments_dict.get(parent_id)
+                    
                     if parent_comment:
+                        # Thêm reply vào parent
                         parent_comment["replies"].append(comment_data)
+                    else:
+                        # Nếu không tìm thấy parent (có thể do lỗi dữ liệu), 
+                        # thêm vào root comments như một fallback
+                        current_app.logger.warning(f"Parent comment {parent_id} not found for comment {comment.commentId}")
+                        root_comments.append(comment_data)
             
             comments_list = root_comments
             

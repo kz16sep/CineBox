@@ -516,46 +516,185 @@ def admin_movie_create():
 @main_bp.route("/admin/movies/<int:movie_id>/edit", methods=["GET", "POST"])
 @admin_required
 def admin_movie_edit(movie_id):
-    """Sửa phim"""
+    """Sửa phim với validation đầy đủ"""
+    import re
+    
     if request.method == "POST":
+        # Lấy dữ liệu từ form
         title = request.form.get("title", "").strip()
         release_year = request.form.get("release_year", "").strip()
+        country = request.form.get("country", "").strip()
         overview = request.form.get("overview", "").strip()
+        director = request.form.get("director", "").strip()
+        cast = request.form.get("cast", "").strip()
+        imdb_rating = request.form.get("imdb_rating", "").strip()
+        trailer_url = request.form.get("trailer_url", "").strip()
         poster_url = request.form.get("poster_url", "").strip()
         backdrop_url = request.form.get("backdrop_url", "").strip()
+        view_count = request.form.get("view_count", "0").strip()
+        selected_genres = request.form.getlist("genres")
         
+        # Validation (giống như create)
+        errors = []
+        
+        # 1. Title validation (required, max 300 chars)
         if not title:
-            flash("Vui lòng nhập tên phim.", "error")
-            return redirect(url_for("main.admin_movie_edit", movie_id=movie_id))
+            errors.append("Tiêu đề phim là bắt buộc")
+        elif len(title) > 300:
+            errors.append("Tiêu đề phim không được quá 300 ký tự")
         
+        # 2. Release Year validation (1900-2030)
+        if release_year:
+            try:
+                year = int(release_year)
+                if year < 1900 or year > 2030:
+                    errors.append("Năm phát hành phải trong khoảng 1900-2030")
+            except ValueError:
+                errors.append("Năm phát hành phải là số hợp lệ")
+        else:
+            year = None
+        
+        # 3. Country validation (max 80 chars)
+        if country and len(country) > 80:
+            errors.append("Tên quốc gia không được quá 80 ký tự")
+        
+        # 4. Director validation (max 200 chars)
+        if director and len(director) > 200:
+            errors.append("Tên đạo diễn không được quá 200 ký tự")
+        
+        # 5. Cast validation (max 500 chars)
+        if cast and len(cast) > 500:
+            errors.append("Tên diễn viên không được quá 500 ký tự")
+        
+        # 6. IMDb Rating validation (0.0-10.0)
+        if imdb_rating:
+            try:
+                rating = float(imdb_rating)
+                if rating < 0.0 or rating > 10.0:
+                    errors.append("Điểm IMDb phải trong khoảng 0.0-10.0")
+            except ValueError:
+                errors.append("Điểm IMDb phải là số thập phân hợp lệ")
+        else:
+            rating = None
+        
+        # 7. URL validation
+        url_pattern = r'^https?://[^\s/$.?#].[^\s]*$'
+        
+        if trailer_url and not re.match(url_pattern, trailer_url):
+            errors.append("Trailer URL phải là địa chỉ web hợp lệ (bắt đầu bằng http:// hoặc https://)")
+        
+        if poster_url and not re.match(url_pattern, poster_url):
+            errors.append("Poster URL phải là địa chỉ web hợp lệ (bắt đầu bằng http:// hoặc https://)")
+        
+        if backdrop_url and not re.match(url_pattern, backdrop_url):
+            errors.append("Backdrop URL phải là địa chỉ web hợp lệ (bắt đầu bằng http:// hoặc https://)")
+        
+        # 8. View Count validation
+        try:
+            views = int(view_count) if view_count else 0
+            if views < 0:
+                errors.append("Lượt xem phải là số dương")
+        except ValueError:
+            errors.append("Lượt xem phải là số hợp lệ")
+        
+        # 9. Genres validation
+        if not selected_genres:
+            errors.append("Vui lòng chọn ít nhất một thể loại")
+        
+        # Nếu có lỗi, hiển thị lại form với lỗi
+        if errors:
+            try:
+                with current_app.db_engine.connect() as conn:
+                    all_genres = conn.execute(text("SELECT genreId, name FROM cine.Genre ORDER BY name")).mappings().all()
+                    # Lấy genres đã chọn từ form (ưu tiên genres từ form khi có lỗi)
+                    selected_genre_ids = [int(gid) for gid in selected_genres if gid]
+                    
+                return render_template("admin_movie_form.html", 
+                                     all_genres=all_genres,
+                                     errors=errors,
+                                     form_data=request.form,
+                                     current_genre_ids=selected_genre_ids,
+                                     is_edit=True,
+                                     movie_id=movie_id)
+            except Exception as e:
+                current_app.logger.error(f"Error loading genres: {e}")
+                flash(f"Lỗi khi tải thể loại: {str(e)}", "error")
+                return render_template("admin_movie_form.html", 
+                                     errors=errors, 
+                                     form_data=request.form, 
+                                     all_genres=[],
+                                     current_genre_ids=[],
+                                     is_edit=True, 
+                                     movie_id=movie_id)
+        
+        # Lưu vào database
         try:
             with current_app.db_engine.begin() as conn:
+                # Cập nhật thông tin phim
                 conn.execute(text("""
                     UPDATE cine.Movie
-                    SET title = :title, releaseYear = :year, overview = :overview, 
-                        posterUrl = :poster, backdropUrl = :backdrop
+                    SET title = :title, releaseYear = :year, country = :country, 
+                        overview = :overview, director = :director, cast = :cast,
+                        imdbRating = :rating, trailerUrl = :trailer, 
+                        posterUrl = :poster, backdropUrl = :backdrop, viewCount = :views
                     WHERE movieId = :id
                 """), {
                     "id": movie_id,
                     "title": title,
-                    "year": int(release_year) if release_year else None,
-                    "overview": overview,
-                    "poster": poster_url,
-                    "backdrop": backdrop_url
+                    "year": year,
+                    "country": country if country else None,
+                    "overview": overview if overview else None,
+                    "director": director if director else None,
+                    "cast": cast if cast else None,
+                    "rating": rating,
+                    "trailer": trailer_url if trailer_url else None,
+                    "poster": poster_url if poster_url else None,
+                    "backdrop": backdrop_url if backdrop_url else None,
+                    "views": views
                 })
                 
-                flash("Cập nhật phim thành công!", "success")
+                # Xóa thể loại cũ
+                conn.execute(text("DELETE FROM cine.MovieGenre WHERE movieId = :movieId"), {"movieId": movie_id})
+                
+                # Thêm thể loại mới
+                for genre_id in selected_genres:
+                    if genre_id:
+                        conn.execute(text("""
+                            INSERT INTO cine.MovieGenre (movieId, genreId) 
+                            VALUES (:movieId, :genreId)
+                        """), {"movieId": movie_id, "genreId": int(genre_id)})
+                
+                flash("✅ Cập nhật phim thành công!", "success")
                 return redirect(url_for("main.admin_movies"))
+    
         except Exception as e:
             current_app.logger.error(f"Error updating movie: {e}", exc_info=True)
-            flash(f"Lỗi khi cập nhật phim: {str(e)}", "error")
-            return redirect(url_for("main.admin_movie_edit", movie_id=movie_id))
+            flash(f"❌ Lỗi khi cập nhật phim: {str(e)}", "error")
+            try:
+                with current_app.db_engine.connect() as conn:
+                    all_genres = conn.execute(text("SELECT genreId, name FROM cine.Genre ORDER BY name")).mappings().all()
+                    selected_genre_ids = [int(gid) for gid in selected_genres if gid]
+                    return render_template("admin_movie_form.html", 
+                                         all_genres=all_genres,
+                                         form_data=request.form,
+                                         current_genre_ids=selected_genre_ids,
+                                         is_edit=True,
+                                         movie_id=movie_id)
+            except:
+                return render_template("admin_movie_form.html", 
+                                     form_data=request.form, 
+                                     all_genres=[],
+                                     current_genre_ids=[],
+                                     is_edit=True, 
+                                     movie_id=movie_id)
     
     # GET request - hiển thị form sửa
     try:
         with current_app.db_engine.connect() as conn:
+            # Lấy đầy đủ thông tin phim
             movie = conn.execute(text("""
-                SELECT movieId, title, releaseYear, overview, posterUrl, backdropUrl
+                SELECT movieId, title, releaseYear, country, overview, director, cast,
+                       imdbRating, trailerUrl, posterUrl, backdropUrl, viewCount
                 FROM cine.Movie
                 WHERE movieId = :id
             """), {"id": movie_id}).mappings().first()
@@ -564,7 +703,39 @@ def admin_movie_edit(movie_id):
                 flash("Không tìm thấy phim.", "error")
                 return redirect(url_for("main.admin_movies"))
             
-            return render_template("admin_movie_form.html", movie=movie, is_edit=True)
+            # Lấy genres hiện tại của phim
+            current_genres = conn.execute(text("""
+                SELECT genreId FROM cine.MovieGenre WHERE movieId = :movie_id
+            """), {"movie_id": movie_id}).fetchall()
+            current_genre_ids = [g[0] for g in current_genres]
+            
+            # Lấy tất cả genres
+            all_genres = conn.execute(text("SELECT genreId, name FROM cine.Genre ORDER BY name")).mappings().all()
+            
+            # Tạo form_data từ movie để template hiển thị
+            from werkzeug.datastructures import ImmutableMultiDict
+            form_data = ImmutableMultiDict({
+                'title': movie.get('title', ''),
+                'release_year': str(movie.get('releaseYear', '')) if movie.get('releaseYear') else '',
+                'country': movie.get('country', '') or '',
+                'overview': movie.get('overview', '') or '',
+                'director': movie.get('director', '') or '',
+                'cast': movie.get('cast', '') or '',
+                'imdb_rating': str(movie.get('imdbRating', '')) if movie.get('imdbRating') else '',
+                'trailer_url': movie.get('trailerUrl', '') or '',
+                'poster_url': movie.get('posterUrl', '') or '',
+                'backdrop_url': movie.get('backdropUrl', '') or '',
+                'view_count': str(movie.get('viewCount', 0)) if movie.get('viewCount') else '0',
+                'genres': [str(gid) for gid in current_genre_ids]
+            })
+            
+            return render_template("admin_movie_form.html", 
+                                 movie=movie, 
+                                 form_data=form_data,
+                                 all_genres=all_genres,
+                                 current_genre_ids=current_genre_ids,
+                                 is_edit=True,
+                                 movie_id=movie_id)
     except Exception as e:
         current_app.logger.error(f"Error loading movie: {e}", exc_info=True)
         flash(f"Lỗi khi tải thông tin phim: {str(e)}", "error")

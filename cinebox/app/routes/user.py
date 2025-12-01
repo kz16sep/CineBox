@@ -263,7 +263,7 @@ def account_history():
                 """), {"user_id": user_id, "search": f"%{search_query}%"}).scalar()
                 
                 history_offset = (page - 1) * per_page
-                # Lấy phim duy nhất với lần xem gần nhất
+                # Lấy phim duy nhất với lần xem gần nhất, kèm genres
                 history = conn.execute(text("""
                     WITH LatestHistory AS (
                         SELECT 
@@ -281,8 +281,16 @@ def account_history():
                         m.posterUrl, 
                         m.releaseYear, 
                         vh.startedAt, 
-                        vh.progressSec, 
-                        m.durationMin
+                        vh.progressSec,
+                        vh.finishedAt,
+                        m.durationMin,
+                        STUFF((
+                            SELECT ', ' + g.name
+                            FROM [cine].[MovieGenre] mg
+                            JOIN [cine].[Genre] g ON mg.genreId = g.genreId
+                            WHERE mg.movieId = m.movieId
+                            FOR XML PATH(''), TYPE
+                        ).value('.', 'NVARCHAR(MAX)'), 1, 2, '') AS genres
                     FROM [cine].[ViewHistory] vh
                     JOIN [cine].[Movie] m ON vh.movieId = m.movieId
                     JOIN LatestHistory lh ON vh.movieId = lh.movieId AND vh.startedAt = lh.latestStartedAt
@@ -305,7 +313,7 @@ def account_history():
                 """), {"user_id": user_id}).scalar()
                 
                 history_offset = (page - 1) * per_page
-                # Lấy phim duy nhất với lần xem gần nhất
+                # Lấy phim duy nhất với lần xem gần nhất, kèm genres
                 history = conn.execute(text("""
                     WITH LatestHistory AS (
                         SELECT 
@@ -322,8 +330,16 @@ def account_history():
                         m.posterUrl, 
                         m.releaseYear, 
                         vh.startedAt, 
-                        vh.progressSec, 
-                        m.durationMin
+                        vh.progressSec,
+                        vh.finishedAt,
+                        m.durationMin,
+                        STUFF((
+                            SELECT ', ' + g.name
+                            FROM [cine].[MovieGenre] mg
+                            JOIN [cine].[Genre] g ON mg.genreId = g.genreId
+                            WHERE mg.movieId = m.movieId
+                            FOR XML PATH(''), TYPE
+                        ).value('.', 'NVARCHAR(MAX)'), 1, 2, '') AS genres
                     FROM [cine].[ViewHistory] vh
                     JOIN [cine].[Movie] m ON vh.movieId = m.movieId
                     JOIN LatestHistory lh ON vh.movieId = lh.movieId AND vh.startedAt = lh.latestStartedAt
@@ -353,6 +369,9 @@ def account_history():
                 if item.get("durationMin") and item.get("durationMin") > 0 and item.get("progressSec"):
                     progress_percent = min(100, (item.get("progressSec") / 60.0 / item.get("durationMin")) * 100)
                 
+                # Kiểm tra hoàn thành: có finishedAt hoặc progress >= 90%
+                is_completed = item.get("finishedAt") is not None or progress_percent >= 90
+                
                 formatted_history.append({
                     "historyId": item["historyId"],
                     "movieId": item["movieId"],
@@ -360,11 +379,12 @@ def account_history():
                     "posterUrl": get_poster_or_dummy(item.get("posterUrl"), item["title"]),
                     "releaseYear": item.get("releaseYear"),
                     "startedAt": item.get("startedAt"),
+                    "finishedAt": item.get("finishedAt"),
                     "progressSec": item.get("progressSec"),
                     "durationMin": item.get("durationMin"),
                     "progressPercent": round(progress_percent, 1),
-                    "isCompleted": progress_percent >= 90,  # Coi như hoàn thành nếu >= 90%
-                    "genres": ""  # Sẽ thêm genres nếu cần
+                    "isCompleted": is_completed,
+                    "genres": item.get("genres") or ""  # Lấy genres từ query
                 })
             
             # Debug logging

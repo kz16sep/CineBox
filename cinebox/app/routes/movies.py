@@ -659,7 +659,7 @@ def home():
                 else:
                     history_rows = conn.execute(text(f"""
                         WITH recent_history AS (
-                            SELECT TOP {HOME_SECTION_LIMIT}
+                            SELECT TOP 12
                                 vh.movieId,
                                 MAX(vh.startedAt) AS lastWatchedAt,
                                 MAX(vh.finishedAt) AS lastFinishedAt,
@@ -670,7 +670,7 @@ def home():
                             GROUP BY vh.movieId
                             ORDER BY MAX(vh.startedAt) DESC
                         )
-                        SELECT 
+                        SELECT TOP 12
                             rh.movieId,
                             m.title,
                             m.posterUrl,
@@ -689,7 +689,7 @@ def home():
                     history_movie_ids = [row["movieId"] for row in history_rows]
                     
                     recent_watched = []
-                    for row in history_rows:
+                    for row in history_rows[:12]:  # Đảm bảo chỉ lấy tối đa 12 phim
                         progress_percent = 0
                         if row["durationMin"] and row["durationMin"] > 0 and row["lastProgressSec"]:
                             progress_percent = min(100, (row["lastProgressSec"] / 60.0 / row["durationMin"]) * 100)
@@ -709,6 +709,8 @@ def home():
                             "progressPercent": round(progress_percent, 1)
                         })
                     
+                    # Đảm bảo chỉ lấy tối đa 12 phim
+                    recent_watched = recent_watched[:12]
                     session[cache_key_recent] = recent_watched
                     session[f'{cache_key_recent}_time'] = current_time
                 

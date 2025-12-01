@@ -1,9 +1,9 @@
 {% extends 'base.html' %}
-{% block title %}{{ 'Sửa phim' if form_data else 'Thêm phim mới' }} · CineBox{% endblock %}
+{% block title %}{{ 'Sửa phim' if (form_data or movie) else 'Thêm phim mới' }} · CineBox{% endblock %}
 {% block content %}
 <div class="admin">
   <div class="form-header">
-    <h1>🎬 {{ 'Sửa phim' if form_data else 'Thêm phim mới' }}</h1>
+    <h1>🎬 {{ 'Sửa phim' if (form_data or movie) else 'Thêm phim mới' }}</h1>
     <p class="form-subtitle">Điền thông tin chi tiết cho phim</p>
   </div>
 
@@ -32,12 +32,12 @@
             id="title" 
             name="title" 
             class="form-input" 
-            value="{{ form_data.title if form_data else '' }}"
+            value="{{ form_data.title if form_data else (movie.title if movie else '') }}"
             placeholder="Nhập tiêu đề phim..."
             maxlength="300"
             required
           />
-          <small class="form-hint">Tối đa 300 ký tự, chỉ chữ cái, số và dấu câu cơ bản</small>
+          <small class="form-hint">Tối đa 300 ký tự, có thể chứa chữ cái, số, dấu cách và dấu câu cơ bản</small>
         </div>
 
         <div class="form-row">
@@ -47,7 +47,7 @@
               <option value="">Chọn năm...</option>
               {% for year in range(2030, 1899, -1) %}
               <option value="{{ year }}" 
-                {% if form_data and form_data.release_year == year|string %}selected{% endif %}>
+                {% if (form_data and form_data.release_year == year|string) or (movie and movie.releaseYear == year) %}selected{% endif %}>
                 {{ year }}
               </option>
               {% endfor %}
@@ -62,7 +62,7 @@
               id="country" 
               name="country" 
               class="form-input" 
-              value="{{ form_data.country if form_data else '' }}"
+              value="{{ form_data.country if form_data else (movie.country if movie else '') }}"
               placeholder="Ví dụ: United States, Vietnam..."
               maxlength="80"
             />
@@ -78,7 +78,7 @@
             class="form-textarea" 
             rows="4"
             placeholder="Mô tả ngắn gọn về nội dung phim..."
-          >{{ form_data.overview if form_data else '' }}</textarea>
+          >{{ form_data.overview if form_data else (movie.overview if movie else '') }}</textarea>
           <small class="form-hint">Mô tả chi tiết về nội dung phim</small>
         </div>
       </div>
@@ -94,7 +94,7 @@
             id="director" 
             name="director" 
             class="form-input" 
-            value="{{ form_data.director if form_data else '' }}"
+            value="{{ form_data.director if form_data else (movie.director if movie else '') }}"
             placeholder="Tên đạo diễn..."
             maxlength="200"
           />
@@ -108,7 +108,7 @@
             id="cast" 
             name="cast" 
             class="form-input" 
-            value="{{ form_data.cast if form_data else '' }}"
+            value="{{ form_data.cast if form_data else (movie.cast if movie else '') }}"
             placeholder="Tên các diễn viên chính, cách nhau bởi dấu phẩy..."
             maxlength="500"
           />
@@ -122,7 +122,7 @@
             id="imdb_rating" 
             name="imdb_rating" 
             class="form-input" 
-            value="{{ form_data.imdb_rating if form_data else '' }}"
+            value="{{ form_data.imdb_rating if form_data else (movie.imdbRating|string if movie and movie.imdbRating else '') }}"
             placeholder="8.5"
             min="0" 
             max="10" 
@@ -143,7 +143,7 @@
             id="trailer_url" 
             name="trailer_url" 
             class="form-input" 
-            value="{{ form_data.trailer_url if form_data else '' }}"
+            value="{{ form_data.trailer_url if form_data else (movie.trailerUrl if movie else '') }}"
             placeholder="https://www.youtube.com/watch?v=..."
           />
           <small class="form-hint">Địa chỉ video trailer (YouTube, Vimeo...)</small>
@@ -156,7 +156,7 @@
             id="poster_url" 
             name="poster_url" 
             class="form-input" 
-            value="{{ form_data.poster_url if form_data else '' }}"
+            value="{{ form_data.poster_url if form_data else (movie.posterUrl if movie else '') }}"
             placeholder="https://example.com/poster.jpg"
           />
           <small class="form-hint">Địa chỉ hình ảnh poster phim</small>
@@ -169,7 +169,7 @@
             id="backdrop_url" 
             name="backdrop_url" 
             class="form-input" 
-            value="{{ form_data.backdrop_url if form_data else '' }}"
+            value="{{ form_data.backdrop_url if form_data else (movie.backdropUrl if movie else '') }}"
             placeholder="https://example.com/backdrop.jpg"
           />
           <small class="form-hint">Địa chỉ hình ảnh nền phim</small>
@@ -182,7 +182,7 @@
             id="view_count" 
             name="view_count" 
             class="form-input" 
-            value="{{ form_data.view_count if form_data else '0' }}"
+            value="{{ form_data.view_count if form_data else (movie.viewCount|string if movie and movie.viewCount else '0') }}"
             min="0"
             placeholder="0"
           />
@@ -203,7 +203,9 @@
                 type="checkbox" 
                 name="genres" 
                 value="{{ genre.genreId }}"
-                {% if form_data and genre.genreId|string in form_data.getlist('genres') %}checked{% endif %}
+                {% if form_data and genre.genreId|string in form_data.getlist('genres') %}checked
+                {% elif current_genre_ids and genre.genreId in current_genre_ids %}checked
+                {% endif %}
               />
               <span class="genre-label">{{ genre.name }}</span>
             </label>
@@ -220,7 +222,7 @@
         ← Quay lại
       </a>
       <button type="submit" class="btn btn-primary">
-        {{ '💾 Cập nhật phim' if form_data else '➕ Thêm phim' }}
+        {{ '💾 Cập nhật phim' if (form_data or movie) else '➕ Thêm phim' }}
       </button>
     </div>
   </form>
@@ -527,8 +529,10 @@ document.addEventListener('DOMContentLoaded', function() {
         showFieldError(field, 'Tiêu đề phim không được quá 300 ký tự');
         return;
       }
-      if (!/^[a-zA-Z0-9\s\-.,:!?()]+$/.test(value)) {
-        showFieldError(field, 'Tiêu đề phim chỉ được chứa chữ cái, số và dấu câu cơ bản');
+      // Cho phép chữ cái (bao gồm tiếng Việt), số, dấu cách, dấu câu
+      // Pattern đơn giản hơn: cho phép Unicode letters, numbers, spaces, và dấu câu
+      if (!/^[\p{L}\p{N}\s\-.,:!?()]+$/u.test(value)) {
+        showFieldError(field, 'Tiêu đề phim chỉ được chứa chữ cái, số, dấu cách và dấu câu cơ bản');
         return;
       }
     }
