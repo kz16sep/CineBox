@@ -4,6 +4,50 @@
 <div class="admin">
   <h1>🎬 Quản lý phim</h1>
   
+  <!-- Hiển thị flash messages -->
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <style>
+        @keyframes slideIn {
+          from {
+            opacity: 0;
+            transform: translateY(-20px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        .flash-message {
+          animation: slideIn 0.3s ease-out;
+        }
+      </style>
+      {% for category, message in messages %}
+        <div class="flash-message flash-{{ category }}" style="background: {% if category == 'success' %}#10b981{% else %}#ef4444{% endif %}; color: white; padding: 12px 20px; border-radius: 8px; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.2);">
+          <span style="font-size: 1.2em;">{% if category == 'success' %}✅{% else %}❌{% endif %}</span>
+          <span style="flex: 1;">{{ message }}</span>
+          <button onclick="this.parentElement.remove()" style="background: transparent; border: none; color: white; font-size: 1.2em; cursor: pointer; padding: 0; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;">✕</button>
+        </div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+  
+  <!-- Progress bar cho similarity calculation -->
+  {% if new_movie_id %}
+  <div id="similarity-progress-container" style="background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.2);">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+      <h3 style="margin: 0; color: #fff; font-size: 1.1em;">🔄 Đang tính similarity cho phim ID: {{ new_movie_id }}</h3>
+      <button onclick="document.getElementById('similarity-progress-container').style.display='none'" style="background: transparent; border: none; color: #999; font-size: 1.2em; cursor: pointer;">✕</button>
+    </div>
+    <div style="background: #2a2a2a; border-radius: 4px; height: 24px; overflow: hidden; margin-bottom: 8px;">
+      <div id="similarity-progress-bar" style="background: linear-gradient(90deg, #10b981, #059669); height: 100%; width: 0%; transition: width 0.3s ease; display: flex; align-items: center; justify-content: center; color: white; font-size: 0.85em; font-weight: 600;">
+        <span id="similarity-progress-text">0%</span>
+      </div>
+    </div>
+    <div id="similarity-progress-message" style="color: #ccc; font-size: 0.9em;">Đang bắt đầu...</div>
+  </div>
+  {% endif %}
+  
   <!-- Thanh tìm kiếm -->
   <div class="admin-search-bar">
     <form method="GET" action="{{ url_for('main.admin_movies') }}" class="search-form">
@@ -399,6 +443,80 @@
   }
 }
 </style>
+
+{% if new_movie_id %}
+<script>
+(function() {
+  const movieId = {{ new_movie_id }};
+  const progressContainer = document.getElementById('similarity-progress-container');
+  const progressBar = document.getElementById('similarity-progress-bar');
+  const progressText = document.getElementById('similarity-progress-text');
+  const progressMessage = document.getElementById('similarity-progress-message');
+  
+  let pollInterval;
+  let checkCount = 0;
+  const maxChecks = 300; // Tối đa 5 phút (300 * 1 giây)
+  
+  function updateProgress(data) {
+    const progress = data.progress || 0;
+    const status = data.status || 'running';
+    const message = data.message || '';
+    
+    progressBar.style.width = progress + '%';
+    progressText.textContent = progress + '%';
+    progressMessage.textContent = message;
+    
+    if (status === 'completed') {
+      progressBar.style.background = 'linear-gradient(90deg, #10b981, #059669)';
+      clearInterval(pollInterval);
+      // Ẩn progress bar sau 3 giây
+      setTimeout(() => {
+        if (progressContainer) {
+          progressContainer.style.transition = 'opacity 0.5s';
+          progressContainer.style.opacity = '0';
+          setTimeout(() => {
+            progressContainer.style.display = 'none';
+          }, 500);
+        }
+      }, 3000);
+    } else if (status === 'error') {
+      progressBar.style.background = 'linear-gradient(90deg, #ef4444, #dc2626)';
+      clearInterval(pollInterval);
+    }
+  }
+  
+  function checkProgress() {
+    checkCount++;
+    if (checkCount > maxChecks) {
+      clearInterval(pollInterval);
+      progressMessage.textContent = '⏱️ Đã quá thời gian chờ, vui lòng tải lại trang';
+      return;
+    }
+    
+    fetch(`/api/similarity-progress/${movieId}`)
+      .then(response => response.json())
+      .then(data => {
+        updateProgress(data);
+        
+        if (data.status === 'completed' || data.status === 'error') {
+          clearInterval(pollInterval);
+        }
+      })
+      .catch(error => {
+        console.error('Error checking progress:', error);
+        if (checkCount > 10) {
+          clearInterval(pollInterval);
+          progressMessage.textContent = '❌ Lỗi khi kiểm tra tiến trình';
+        }
+      });
+  }
+  
+  // Bắt đầu poll mỗi 1 giây
+  checkProgress(); // Check ngay lập tức
+  pollInterval = setInterval(checkProgress, 1000);
+})();
+</script>
+{% endif %}
 {% endblock %}
 
 

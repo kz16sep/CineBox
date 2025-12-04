@@ -209,6 +209,63 @@
 </section>
 {% endif %}
 
+<!-- Filter Section (chỉ hiển thị khi có genre filter hoặc search) -->
+{% if genre_filter or search_query %}
+<div class="filter-section" style="background: #0b1020; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px; padding: 20px; margin-bottom: 30px;">
+  <form method="GET" action="{{ url_for('main.home') }}" id="filterForm">
+    {% if genre_filter %}
+    <input type="hidden" name="genre" value="{{ genre_filter }}">
+    {% endif %}
+    <div style="display: flex; gap: 15px; flex-wrap: wrap; align-items: center;">
+      <div style="flex: 1; min-width: 250px;">
+        <label for="q" style="color: #e7e9ee; font-size: 0.85rem; font-weight: 500; display: block; margin-bottom: 8px;">🔍 Tìm kiếm</label>
+        <div style="position: relative;">
+          <input 
+            type="text" 
+            name="q" 
+            id="q" 
+            value="{{ search_query }}" 
+            placeholder="Tìm kiếm phim..." 
+            style="width: 100%; background: #141a28; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 10px 12px; color: #e7e9ee; font-size: 0.9rem;"
+            autocomplete="off"
+            onkeypress="if(event.key === 'Enter') { event.preventDefault(); document.getElementById('filterForm').submit(); }"
+          />
+          <div class="search-suggestions" id="filterSearchSuggestions" style="display: none;">
+            <div class="suggestions-list" id="filterSuggestionsList"></div>
+          </div>
+        </div>
+      </div>
+      <div style="min-width: 150px;">
+        <label for="sort" style="color: #e7e9ee; font-size: 0.85rem; font-weight: 500; display: block; margin-bottom: 8px;">Sắp xếp theo</label>
+        <select name="sort" id="sort" style="width: 100%; background: #141a28; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 10px 12px; color: #e7e9ee; font-size: 0.9rem; cursor: pointer;" onchange="document.getElementById('filterForm').submit()">
+          <option value="newest" {% if sort_by == 'newest' %}selected{% endif %}>Mới nhất</option>
+          <option value="oldest" {% if sort_by == 'oldest' %}selected{% endif %}>Cũ nhất</option>
+          <option value="views" {% if sort_by == 'views' %}selected{% endif %}>Lượt xem nhiều nhất</option>
+          <option value="ratings" {% if sort_by == 'ratings' %}selected{% endif %}>Đánh giá cao nhất</option>
+          <option value="title_asc" {% if sort_by == 'title_asc' %}selected{% endif %}>Tên A-Z</option>
+          <option value="title_desc" {% if sort_by == 'title_desc' %}selected{% endif %}>Tên Z-A</option>
+        </select>
+      </div>
+      {% if year_list %}
+      <div style="min-width: 150px;">
+        <label for="year" style="color: #e7e9ee; font-size: 0.85rem; font-weight: 500; display: block; margin-bottom: 8px;">Năm phát hành</label>
+        <select name="year" id="year" style="width: 100%; background: #141a28; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 10px 12px; color: #e7e9ee; font-size: 0.9rem; cursor: pointer;" onchange="document.getElementById('filterForm').submit()">
+          <option value="">Tất cả năm</option>
+          {% for year in year_list %}
+          <option value="{{ year }}" {% if year_filter|string == year|string %}selected{% endif %}>{{ year }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      <div style="display: flex; gap: 10px; align-items: flex-end;">
+        <button type="submit" style="padding: 10px 20px; background: #3b82f6; color: white; border: none; border-radius: 8px; font-size: 0.9rem; font-weight: 500; cursor: pointer; transition: all 0.2s ease;">Tìm kiếm</button>
+        <a href="{{ url_for('main.home', genre=genre_filter if genre_filter else '') }}" style="padding: 10px 20px; background: #141a28; color: #e7e9ee; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; font-size: 0.9rem; font-weight: 500; cursor: pointer; text-decoration: none; transition: all 0.2s ease;">Đặt lại</a>
+      </div>
+    </div>
+  </form>
+</div>
+{% endif %}
+
 <!-- 5. Tất cả phim (Grid 10 items preview) -->
 {% if all_movies %}
 <section class="all-movies movies-section">
@@ -417,6 +474,93 @@ document.addEventListener('DOMContentLoaded', () => {
       checkAllWatchlistStatus();
     }, 100);
   };
+
+  initFilterSearchSuggestions();
+
+  function initFilterSearchSuggestions() {
+    const filterSearchInput = document.getElementById('q');
+    const suggestionsContainer = document.getElementById('filterSearchSuggestions');
+    const suggestionsList = document.getElementById('filterSuggestionsList');
+    const filterForm = document.getElementById('filterForm');
+
+    if (!filterSearchInput || !suggestionsContainer || !suggestionsList) return;
+
+    let filterSearchTimeout;
+
+    const hideSuggestions = () => {
+      suggestionsContainer.style.display = 'none';
+    };
+
+    const fetchFilterSuggestions = (query) => {
+      fetch(`/api/search/suggestions?q=${encodeURIComponent(query)}&limit=8`)
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            renderFilterSuggestions(data.suggestions || []);
+          } else {
+            hideSuggestions();
+          }
+        })
+        .catch(() => hideSuggestions());
+    };
+
+    const renderFilterSuggestions = (suggestions) => {
+      suggestionsList.innerHTML = '';
+
+      if (!suggestions.length) {
+        hideSuggestions();
+        return;
+      }
+
+      suggestions.forEach(item => {
+        const suggestionEl = document.createElement('div');
+        suggestionEl.className = 'suggestion-item';
+        suggestionEl.innerHTML = `
+          <div class="suggestion-poster" style="background-image:url('${item.poster}')"></div>
+          <div class="suggestion-info">
+            <div class="suggestion-title">${item.title}</div>
+            ${item.year ? `<div class="suggestion-year">${item.year}</div>` : ''}
+          </div>
+        `;
+
+        suggestionEl.addEventListener('click', () => {
+          filterSearchInput.value = item.title;
+          hideSuggestions();
+          if (filterForm) {
+            filterForm.submit();
+          }
+        });
+
+        suggestionsList.appendChild(suggestionEl);
+      });
+
+      suggestionsContainer.style.display = 'block';
+    };
+
+    filterSearchInput.addEventListener('input', () => {
+      const query = filterSearchInput.value.trim();
+      clearTimeout(filterSearchTimeout);
+
+      if (query.length < 2) {
+        hideSuggestions();
+        return;
+      }
+
+      filterSearchTimeout = setTimeout(() => fetchFilterSuggestions(query), 250);
+    });
+
+    filterSearchInput.addEventListener('focus', () => {
+      if (filterSearchInput.value.trim().length >= 2 && suggestionsList.childElementCount > 0) {
+        suggestionsContainer.style.display = 'block';
+      }
+    });
+
+    document.addEventListener('click', (event) => {
+      if (!suggestionsContainer.contains(event.target) && event.target !== filterSearchInput) {
+        hideSuggestions();
+      }
+    });
+  }
 });
 
 // Include other existing JS functions (toggleFavorite, toggleWatchlist, etc.)

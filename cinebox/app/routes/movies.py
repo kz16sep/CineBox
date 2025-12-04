@@ -153,9 +153,13 @@ def get_tmdb_videos(tmdb_id, is_trailer=False):
 @main_bp.route("/")
 def home():
     """Home page with movies list"""
-    # Kiểm tra onboarding
+    # Kiểm tra đăng nhập
     user_id = session.get("user_id")
-    if user_id:
+    if not user_id:
+        return redirect(url_for("main.login"))
+    
+    # Tối ưu onboarding check - chỉ check 1 lần và lưu vào session
+    if not session.get("onboarding_checked"):
         try:
             with current_app.db_engine.connect() as conn:
                 has_completed = conn.execute(text("""
@@ -170,11 +174,8 @@ def home():
         except Exception as e:
             current_app.logger.error(f"Error checking onboarding status: {e}")
             return redirect(url_for('main.onboarding'))
-    
-    if not session.get("user_id"):
-        return redirect(url_for("main.login"))
-    
-    if session.get("onboarding_checked") and not session.get("onboarding_completed"):
+    elif not session.get("onboarding_completed"):
+        # Đã check rồi nhưng chưa hoàn thành onboarding
         return redirect(url_for('main.onboarding'))
     
     # Lấy parameters
@@ -193,6 +194,7 @@ def home():
     if (latest_movies_cache.get('data') and 
         latest_movies_cache.get('key') == cache_key and
         latest_movies_cache.get('timestamp') and 
+        latest_movies_cache.get('ttl') and
         current_time - latest_movies_cache['timestamp'] < latest_movies_cache['ttl']):
         latest_movies = latest_movies_cache['data']
     else:
@@ -288,162 +290,204 @@ def home():
     else:
         current_app.logger.warning("No carousel movies found!")
     
-    # All movies với pagination
-    try:
-        with current_app.db_engine.connect() as conn:
-            # Build query với genre filter và search
-            where_clauses = []
-            params = {}
-            
-            if genre_filter:
-                where_clauses.append("EXISTS (SELECT 1 FROM cine.MovieGenre mg JOIN cine.Genre g ON mg.genreId = g.genreId WHERE mg.movieId = m.movieId AND g.name = :genre)")
-                params['genre'] = genre_filter
-            
-            if search_query:
-                where_clauses.append("m.title LIKE :search")
-                params['search'] = f"%{search_query}%"
-            
-            where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
-            
-            # Thêm year filter nếu có
-            if year_filter:
-                where_clauses.append("m.releaseYear = :year")
-                params['year'] = int(year_filter)
-                where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
-            
-            # Xây dựng ORDER BY clause (chỉ khi có genre filter hoặc search)
-            if genre_filter or search_query:
-                if sort_by == 'ratings':
-                    order_by_inner = 'avgRating DESC, ratingCount DESC, m.movieId DESC'
-                    order_by_outer = 'avgRating DESC, ratingCount DESC'
-                else:
-                    order_by_map = {
-                        'newest': 'm.releaseYear DESC, m.movieId DESC',
-                        'oldest': 'm.releaseYear ASC, m.movieId ASC',
-                        'views': 'm.viewCount DESC, m.movieId DESC',
-                        'title_asc': 'm.title ASC',
-                        'title_desc': 'm.title DESC'
+    # All movies (lazy load - chỉ load đầy đủ khi có filter hoặc search)
+    # Nếu không có filter, vẫn load 12 phim mới nhất để hiển thị section "Tất cả phim"
+    all_movies = []
+    pagination = None
+    year_list = []
+    genre_list = []
+    
+    # Nếu không có filter, load 12 phim mới nhất
+    if not genre_filter and not search_query and not year_filter:
+        try:
+            with current_app.db_engine.connect() as conn:
+                rows = conn.execute(text(f"""
+                    SELECT TOP {HOME_SECTION_LIMIT} 
+                        movieId, title, posterUrl, backdropUrl, overview, releaseYear, country, viewCount
+                    FROM cine.Movie
+                    ORDER BY createdAt DESC, movieId DESC
+                """)).mappings().all()
+                
+                movie_ids = [r["movieId"] for r in rows]
+                rating_stats = get_movie_rating_stats(movie_ids, current_app.db_engine)
+                genres_dict = get_movies_genres(movie_ids, current_app.db_engine)
+                
+                all_movies = [
+                    {
+                        "id": r["movieId"],
+                        "title": r["title"],
+                        "poster": get_poster_or_dummy(r.get("posterUrl"), r["title"]),
+                        "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
+                        "description": (r.get("overview") or "")[:160],
+                        "year": r.get("releaseYear"),
+                        "country": r.get("country"),
+                        "avgRating": rating_stats.get(r["movieId"], {}).get("avgRating", 0.0),
+                        "ratingCount": rating_stats.get(r["movieId"], {}).get("ratingCount", 0),
+                        "viewCount": r.get("viewCount", 0) or 0,
+                        "genres": genres_dict.get(r["movieId"], "").split(", ") if genres_dict.get(r["movieId"]) else []
                     }
-                    order_by_inner = order_by_map.get(sort_by, order_by_map['newest'])
+                    for r in rows
+                ]
+        except Exception as e:
+            current_app.logger.error(f"Error loading all movies preview: {e}", exc_info=True)
+            all_movies = []
+    # Nếu có filter hoặc search, load đầy đủ với pagination
+    elif genre_filter or search_query or year_filter:
+        try:
+            with current_app.db_engine.connect() as conn:
+                # Build query với genre filter và search
+                where_clauses = []
+                params = {}
+                
+                if genre_filter:
+                    where_clauses.append("EXISTS (SELECT 1 FROM cine.MovieGenre mg JOIN cine.Genre g ON mg.genreId = g.genreId WHERE mg.movieId = m.movieId AND g.name = :genre)")
+                    params['genre'] = genre_filter
+                
+                if search_query:
+                    where_clauses.append("m.title LIKE :search")
+                    params['search'] = f"%{search_query}%"
+                
+                where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
+                
+                # Thêm year filter nếu có
+                if year_filter:
+                    where_clauses.append("m.releaseYear = :year")
+                    params['year'] = int(year_filter)
+                    where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
+                
+                # Xây dựng ORDER BY clause (chỉ khi có genre filter hoặc search)
+                if genre_filter or search_query:
+                    if sort_by == 'ratings':
+                        order_by_inner = 'avgRating DESC, ratingCount DESC, m.movieId DESC'
+                        order_by_outer = 'avgRating DESC, ratingCount DESC'
+                    else:
+                        order_by_map = {
+                            'newest': 'm.releaseYear DESC, m.movieId DESC',
+                            'oldest': 'm.releaseYear ASC, m.movieId ASC',
+                            'views': 'm.viewCount DESC, m.movieId DESC',
+                            'title_asc': 'm.title ASC',
+                            'title_desc': 'm.title DESC'
+                        }
+                        order_by_inner = order_by_map.get(sort_by, order_by_map['newest'])
+                        order_by_outer = order_by_inner
+                else:
+                    order_by_inner = 'm.createdAt DESC, m.movieId DESC'
                     order_by_outer = order_by_inner
-            else:
-                order_by_inner = 'm.createdAt DESC, m.movieId DESC'
-                order_by_outer = order_by_inner
-            
-            # Count total
-            count_query = f"SELECT COUNT(*) FROM cine.Movie m WHERE {where_sql}"
-            total_count = conn.execute(text(count_query), params).scalar()
-            
-            # Get movies
-            offset = (page - 1) * per_page
-            
-            if (genre_filter or search_query) and sort_by == 'ratings':
-                # Query với ratings
-                movies_query = f"""
-                    SELECT m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country, m.viewCount,
-                           AVG(CAST(r.value AS FLOAT)) AS avgRating,
-                           COUNT(r.value) AS ratingCount
-                    FROM cine.Movie m
-                    LEFT JOIN cine.Rating r ON m.movieId = r.movieId
-                    WHERE {where_sql}
-                    GROUP BY m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country, m.viewCount
-                    ORDER BY {order_by_outer}
-                    OFFSET :offset ROWS
-                    FETCH NEXT :per_page ROWS ONLY
-                """
-            else:
-                # Query không có ratings hoặc không có filter
-                movies_query = f"""
-                    SELECT m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country, m.viewCount
-                    FROM cine.Movie m
-                    WHERE {where_sql}
-                    ORDER BY {order_by_inner}
-                    OFFSET :offset ROWS
-                    FETCH NEXT :per_page ROWS ONLY
-                """
-            
-            params['offset'] = offset
-            params['per_page'] = per_page
-            
-            rows = conn.execute(text(movies_query), params).mappings().all()
-            movie_ids = [r["movieId"] for r in rows]
-            
-            # Batch query ratings và genres
-            if (genre_filter or search_query) and sort_by == 'ratings':
-                # Đã có ratings trong query
-                rating_stats = {}
+                
+                # Count total
+                count_query = f"SELECT COUNT(*) FROM cine.Movie m WHERE {where_sql}"
+                total_count = conn.execute(text(count_query), params).scalar()
+                
+                # Get movies
+                offset = (page - 1) * per_page
+                
+                if (genre_filter or search_query) and sort_by == 'ratings':
+                    # Query với ratings
+                    movies_query = f"""
+                        SELECT m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country, m.viewCount,
+                               AVG(CAST(r.value AS FLOAT)) AS avgRating,
+                               COUNT(r.value) AS ratingCount
+                        FROM cine.Movie m
+                        LEFT JOIN cine.Rating r ON m.movieId = r.movieId
+                        WHERE {where_sql}
+                        GROUP BY m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country, m.viewCount
+                        ORDER BY {order_by_outer}
+                        OFFSET :offset ROWS
+                        FETCH NEXT :per_page ROWS ONLY
+                    """
+                else:
+                    # Query không có ratings hoặc không có filter
+                    movies_query = f"""
+                        SELECT m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country, m.viewCount
+                        FROM cine.Movie m
+                        WHERE {where_sql}
+                        ORDER BY {order_by_inner}
+                        OFFSET :offset ROWS
+                        FETCH NEXT :per_page ROWS ONLY
+                    """
+                
+                params['offset'] = offset
+                params['per_page'] = per_page
+                
+                rows = conn.execute(text(movies_query), params).mappings().all()
+                movie_ids = [r["movieId"] for r in rows]
+                
+                # Batch query ratings và genres
+                if (genre_filter or search_query) and sort_by == 'ratings':
+                    # Đã có ratings trong query
+                    rating_stats = {}
+                    for r in rows:
+                        movie_id = r["movieId"]
+                        rating_stats[movie_id] = {
+                            "avgRating": round(float(r.get("avgRating") or 0), 2),
+                            "ratingCount": int(r.get("ratingCount") or 0)
+                        }
+                else:
+                    rating_stats = get_movie_rating_stats(movie_ids, current_app.db_engine)
+                genres_dict = get_movies_genres(movie_ids, current_app.db_engine)
+                
+                all_movies = []
                 for r in rows:
                     movie_id = r["movieId"]
-                    rating_stats[movie_id] = {
-                        "avgRating": round(float(r.get("avgRating") or 0), 2),
-                        "ratingCount": int(r.get("ratingCount") or 0)
-                    }
-            else:
-                rating_stats = get_movie_rating_stats(movie_ids, current_app.db_engine)
-            genres_dict = get_movies_genres(movie_ids, current_app.db_engine)
-            
-            all_movies = []
-            for r in rows:
-                movie_id = r["movieId"]
-                stats = rating_stats.get(movie_id, {"avgRating": 0.0, "ratingCount": 0})
-                genres = genres_dict.get(movie_id, "")
+                    stats = rating_stats.get(movie_id, {"avgRating": 0.0, "ratingCount": 0})
+                    genres = genres_dict.get(movie_id, "")
+                    
+                    all_movies.append({
+                        "id": movie_id,
+                        "title": r["title"],
+                        "poster": get_poster_or_dummy(r.get("posterUrl"), r["title"]),
+                        "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
+                        "description": (r.get("overview") or "")[:160],
+                        "year": r.get("releaseYear"),
+                        "country": r.get("country"),
+                        "avgRating": stats["avgRating"],
+                        "ratingCount": stats["ratingCount"],
+                        "viewCount": r.get("viewCount", 0) or 0,
+                        "genres": genres.split(", ") if genres else []
+                    })
                 
-                all_movies.append({
-                    "id": movie_id,
-                    "title": r["title"],
-                    "poster": get_poster_or_dummy(r.get("posterUrl"), r["title"]),
-                    "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
-                    "description": (r.get("overview") or "")[:160],
-                    "year": r.get("releaseYear"),
-                    "country": r.get("country"),
-                    "avgRating": stats["avgRating"],
-                    "ratingCount": stats["ratingCount"],
-                    "viewCount": r.get("viewCount", 0) or 0,
-                    "genres": genres.split(", ") if genres else []
-                })
-            
-            # Lấy danh sách năm và thể loại cho filter (chỉ khi có genre filter hoặc search)
+                # Lấy danh sách năm và thể loại cho filter (chỉ khi có genre filter hoặc search)
+                year_list = []
+                genre_list = []
+                if genre_filter or search_query:
+                    try:
+                        years = conn.execute(text("""
+                            SELECT DISTINCT releaseYear 
+                            FROM cine.Movie 
+                            WHERE releaseYear IS NOT NULL 
+                            ORDER BY releaseYear DESC
+                        """)).fetchall()
+                        year_list = [y[0] for y in years]
+                        
+                        genres_list = conn.execute(text("""
+                            SELECT DISTINCT g.name 
+                            FROM cine.Genre g
+                            JOIN cine.MovieGenre mg ON g.genreId = mg.genreId
+                            ORDER BY g.name
+                        """)).fetchall()
+                        genre_list = [g[0] for g in genres_list]
+                    except Exception as e:
+                        current_app.logger.error(f"Error loading filter lists: {e}")
+                        year_list = []
+                        genre_list = []
+                
+                total_pages = (total_count + per_page - 1) // per_page
+                pagination = {
+                    "page": page,
+                    "per_page": per_page,
+                    "total": total_count,
+                    "pages": total_pages,
+                    "has_prev": page > 1,
+                    "has_next": page < total_pages,
+                    "prev_num": page - 1 if page > 1 else None,
+                    "next_num": page + 1 if page < total_pages else None
+                }
+        except Exception as e:
+            current_app.logger.error(f"Error loading all movies: {e}", exc_info=True)
+            all_movies = []
+            pagination = None
             year_list = []
             genre_list = []
-            if genre_filter or search_query:
-                try:
-                    years = conn.execute(text("""
-                        SELECT DISTINCT releaseYear 
-                        FROM cine.Movie 
-                        WHERE releaseYear IS NOT NULL 
-                        ORDER BY releaseYear DESC
-                    """)).fetchall()
-                    year_list = [y[0] for y in years]
-                    
-                    genres_list = conn.execute(text("""
-                        SELECT DISTINCT g.name 
-                        FROM cine.Genre g
-                        JOIN cine.MovieGenre mg ON g.genreId = mg.genreId
-                        ORDER BY g.name
-                    """)).fetchall()
-                    genre_list = [g[0] for g in genres_list]
-                except Exception as e:
-                    current_app.logger.error(f"Error loading filter lists: {e}")
-                    year_list = []
-                    genre_list = []
-            
-            total_pages = (total_count + per_page - 1) // per_page
-            pagination = {
-                "page": page,
-                "per_page": per_page,
-                "total": total_count,
-                "pages": total_pages,
-                "has_prev": page > 1,
-                "has_next": page < total_pages,
-                "prev_num": page - 1 if page > 1 else None,
-                "next_num": page + 1 if page < total_pages else None
-            }
-    except Exception as e:
-        current_app.logger.error(f"Error loading all movies: {e}", exc_info=True)
-        all_movies = []
-        pagination = None
-        year_list = []
-        genre_list = []
     
     # Personal recommendations (gợi ý cá nhân)
     user_id = session.get("user_id")
@@ -1185,6 +1229,53 @@ def trailer(movie_id: int):
                          related_movies=related_movies,
                          is_trailer=True,
                          tmdb_video=tmdb_video_embed)
+
+
+@main_bp.route("/api/search/suggestions")
+def search_suggestions():
+    """API endpoint for search autocomplete suggestions"""
+    query = request.args.get('q', '').strip()
+    limit = request.args.get('limit', 6, type=int)
+    
+    if not query or len(query) < 2:
+        return jsonify({"success": True, "suggestions": []})
+    
+    try:
+        with current_app.db_engine.connect() as conn:
+            # Tìm kiếm phim theo title
+            movies = conn.execute(text("""
+                SELECT TOP (:limit) movieId, title, posterUrl, releaseYear
+                FROM cine.Movie
+                WHERE title LIKE :query
+                ORDER BY 
+                    CASE 
+                        WHEN title LIKE :exact_query THEN 1
+                        WHEN title LIKE :start_query THEN 2
+                        ELSE 3
+                    END,
+                    releaseYear DESC
+            """), {
+                "query": f"%{query}%",
+                "exact_query": f"{query}",
+                "start_query": f"{query}%",
+                "limit": limit
+            }).mappings().all()
+            
+            suggestions = [
+                {
+                    "id": m["movieId"],
+                    "title": m["title"],
+                    "poster": get_poster_or_dummy(m.get("posterUrl"), m["title"]),
+                    "year": m.get("releaseYear")
+                }
+                for m in movies
+            ]
+            
+            return jsonify({"success": True, "suggestions": suggestions})
+            
+    except Exception as e:
+        current_app.logger.error(f"Error in search suggestions: {e}")
+        return jsonify({"success": False, "suggestions": []})
 
 
 @main_bp.route("/search")

@@ -7,6 +7,34 @@
     <p class="form-subtitle">Điền thông tin chi tiết cho phim</p>
   </div>
 
+  <!-- Hiển thị flash messages -->
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <style>
+        @keyframes slideIn {
+          from {
+            opacity: 0;
+            transform: translateY(-20px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        .flash-message {
+          animation: slideIn 0.3s ease-out;
+        }
+      </style>
+      {% for category, message in messages %}
+        <div class="flash-message flash-{{ category }}" style="background: {% if category == 'success' %}#10b981{% else %}#ef4444{% endif %}; color: white; padding: 12px 20px; border-radius: 8px; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.2);">
+          <span style="font-size: 1.2em;">{% if category == 'success' %}✅{% else %}❌{% endif %}</span>
+          <span style="flex: 1;">{{ message }}</span>
+          <button onclick="this.parentElement.remove()" style="background: transparent; border: none; color: white; font-size: 1.2em; cursor: pointer; padding: 0; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;">✕</button>
+        </div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
   <!-- Hiển thị lỗi validation -->
   {% if errors %}
   <div class="error-container">
@@ -37,7 +65,7 @@
             maxlength="300"
             required
           />
-          <small class="form-hint">Tối đa 300 ký tự, có thể chứa chữ cái, số, dấu cách và dấu câu cơ bản</small>
+          <small class="form-hint">Tối đa 300 ký tự, hỗ trợ tiếng Việt và các ngôn ngữ khác</small>
         </div>
 
         <div class="form-row">
@@ -66,7 +94,7 @@
               placeholder="Ví dụ: United States, Vietnam..."
               maxlength="80"
             />
-            <small class="form-hint">Tối đa 80 ký tự, chỉ chữ cái và khoảng trắng</small>
+             <small class="form-hint">Tối đa 80 ký tự, hỗ trợ tiếng Việt và các ngôn ngữ khác</small>
           </div>
         </div>
 
@@ -98,7 +126,7 @@
             placeholder="Tên đạo diễn..."
             maxlength="200"
           />
-          <small class="form-hint">Tối đa 200 ký tự, chỉ chữ cái, khoảng trắng và dấu câu</small>
+           <small class="form-hint">Tối đa 200 ký tự, hỗ trợ tiếng Việt và các ngôn ngữ khác</small>
         </div>
 
         <div class="form-group">
@@ -112,24 +140,9 @@
             placeholder="Tên các diễn viên chính, cách nhau bởi dấu phẩy..."
             maxlength="500"
           />
-          <small class="form-hint">Tối đa 500 ký tự, cách nhau bởi dấu phẩy</small>
+           <small class="form-hint">Tối đa 500 ký tự, cách nhau bởi dấu phẩy, hỗ trợ tiếng Việt</small>
         </div>
 
-        <div class="form-group">
-          <label for="imdb_rating" class="form-label">Điểm IMDb</label>
-          <input 
-            type="number" 
-            id="imdb_rating" 
-            name="imdb_rating" 
-            class="form-input" 
-            value="{{ form_data.imdb_rating if form_data else (movie.imdbRating|string if movie and movie.imdbRating else '') }}"
-            placeholder="8.5"
-            min="0" 
-            max="10" 
-            step="0.1"
-          />
-          <small class="form-hint">Điểm từ 0.0 đến 10.0</small>
-        </div>
       </div>
 
       <!-- Thông tin media -->
@@ -173,20 +186,19 @@
             placeholder="https://example.com/backdrop.jpg"
           />
           <small class="form-hint">Địa chỉ hình ảnh nền phim</small>
-            </div>
+        </div>
 
         <div class="form-group">
-          <label for="view_count" class="form-label">Lượt xem</label>
+          <label for="movie_url" class="form-label">Movie URL</label>
           <input 
-            type="number" 
-            id="view_count" 
-            name="view_count" 
+            type="url" 
+            id="movie_url" 
+            name="movie_url" 
             class="form-input" 
-            value="{{ form_data.view_count if form_data else (movie.viewCount|string if movie and movie.viewCount else '0') }}"
-            min="0"
-            placeholder="0"
+            value="{{ form_data.movie_url if form_data else (movie.movieUrl if movie else '') }}"
+            placeholder="https://example.com/movie.mp4"
           />
-          <small class="form-hint">Số lượt xem ban đầu (mặc định: 0)</small>
+          <small class="form-hint">Địa chỉ video phim (URL phim chính)</small>
         </div>
       </div>
 
@@ -529,10 +541,10 @@ document.addEventListener('DOMContentLoaded', function() {
         showFieldError(field, 'Tiêu đề phim không được quá 300 ký tự');
         return;
       }
-      // Cho phép chữ cái (bao gồm tiếng Việt), số, dấu cách, dấu câu
-      // Pattern đơn giản hơn: cho phép Unicode letters, numbers, spaces, và dấu câu
-      if (!/^[\p{L}\p{N}\s\-.,:!?()]+$/u.test(value)) {
-        showFieldError(field, 'Tiêu đề phim chỉ được chứa chữ cái, số, dấu cách và dấu câu cơ bản');
+      // Cho phép Unicode letters (hỗ trợ tiếng Việt và các ngôn ngữ khác)
+      // Chỉ chặn các ký tự đặc biệt nguy hiểm như <, >, &, ", ', /, \
+      if (!/^[\p{L}\p{N}\s\-.,:!?()'"]+$/u.test(value)) {
+        showFieldError(field, 'Tiêu đề phim chỉ được chứa chữ cái, số, khoảng trắng và dấu câu cơ bản');
         return;
       }
     }
@@ -543,7 +555,8 @@ document.addEventListener('DOMContentLoaded', function() {
         showFieldError(field, 'Tên quốc gia không được quá 80 ký tự');
         return;
       }
-      if (!/^[a-zA-Z\s]+$/.test(value)) {
+      // Hỗ trợ Unicode cho tên quốc gia (tiếng Việt, tiếng Trung, v.v.)
+      if (!/^[\p{L}\s]+$/u.test(value)) {
         showFieldError(field, 'Tên quốc gia chỉ được chứa chữ cái và khoảng trắng');
         return;
       }
@@ -555,7 +568,8 @@ document.addEventListener('DOMContentLoaded', function() {
         showFieldError(field, 'Tên đạo diễn không được quá 200 ký tự');
         return;
       }
-      if (!/^[a-zA-Z\s.,]+$/.test(value)) {
+      // Hỗ trợ Unicode cho tên đạo diễn (tiếng Việt, tiếng Trung, v.v.)
+      if (!/^[\p{L}\s.,\-'"]+$/u.test(value)) {
         showFieldError(field, 'Tên đạo diễn chỉ được chứa chữ cái, khoảng trắng và dấu câu');
         return;
       }
@@ -567,14 +581,16 @@ document.addEventListener('DOMContentLoaded', function() {
         showFieldError(field, 'Tên diễn viên không được quá 500 ký tự');
         return;
       }
-      if (!/^[a-zA-Z\s.,]+$/.test(value)) {
+      // Hỗ trợ Unicode cho tên diễn viên (tiếng Việt, tiếng Trung, v.v.)
+      // Cho phép dấu phẩy để phân cách tên
+      if (!/^[\p{L}\s.,\-'"]+$/u.test(value)) {
         showFieldError(field, 'Tên diễn viên chỉ được chứa chữ cái, khoảng trắng và dấu câu');
         return;
       }
     }
     
     // URL validation
-    if ((fieldName === 'trailer_url' || fieldName === 'poster_url' || fieldName === 'backdrop_url') && value) {
+    if ((fieldName === 'trailer_url' || fieldName === 'poster_url' || fieldName === 'backdrop_url' || fieldName === 'movie_url') && value) {
       if (!/^https?:\/\/[^\s/$.?#].[^\s]*$/.test(value)) {
         showFieldError(field, 'URL phải là địa chỉ web hợp lệ (bắt đầu bằng http:// hoặc https://)');
         return;

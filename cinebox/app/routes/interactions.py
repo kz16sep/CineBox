@@ -463,10 +463,10 @@ def submit_comment(movie_id):
             
             # Thêm comment mới (với hỗ trợ nested reply)
             # Xử lý parent_comment_id: nếu None thì truyền NULL vào SQL
-            # likes và dislikes sẽ dùng giá trị mặc định từ schema (0)
+            # Note: likes và dislikes không có trong schema, sử dụng CommentRating table thay thế
             conn.execute(text("""
-                INSERT INTO [cine].[Comment] (commentId, userId, movieId, content, parentCommentId, createdAt, likes, dislikes)
-                VALUES (:comment_id, :user_id, :movie_id, :content, :parent_comment_id, GETDATE(), 0, 0)
+                INSERT INTO [cine].[Comment] (commentId, userId, movieId, content, parentCommentId, createdAt)
+                VALUES (:comment_id, :user_id, :movie_id, :content, :parent_comment_id, GETDATE())
             """), {
                 "comment_id": max_id,
                 "user_id": user_id, 

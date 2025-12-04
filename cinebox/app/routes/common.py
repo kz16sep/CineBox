@@ -39,6 +39,9 @@ carousel_movies_cache = {
     'ttl': 300  # 5 minutes
 }
 
+# Similarity calculation progress tracker
+similarity_progress = {}  # {movie_id: {'status': 'running'|'completed'|'error', 'progress': 0-100, 'message': ''}}
+
 RECOMMENDATION_LIMIT = 12
 
 

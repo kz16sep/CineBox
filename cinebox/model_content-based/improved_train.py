@@ -32,116 +32,159 @@ class ImprovedContentTrainer:
     def __init__(self, db_engine):
         self.db_engine = db_engine
         self.movies_df = None
-        self.tags_df = None
         self.ratings_df = None
         
-    def load_movielens_data(self, data_path: str):
-        """Load MovieLens dataset với FULL DATASET để có model chất lượng cao nhất"""
-        logger.info("Loading MovieLens dataset (FULL DATASET for maximum quality)...")
+    def format_title(self, title: str, year: int = None) -> str:
+        """Format title để đảm bảo có (Year) giống MovieLens format"""
+        if not title:
+            return ""
+        
+        # Kiểm tra xem title đã có (Year) chưa
+        if year and f"({year})" not in title:
+            return f"{title} ({year})"
+        return title
+    
+    def load_database_data(self):
+        """Load dữ liệu trực tiếp từ database CineBox"""
+        logger.info("Loading data from CineBox database...")
         
         try:
-            # Load movies (HYBRID: FULL DATASET for maximum quality)
-            logger.info("Loading movies (HYBRID: FULL DATASET for maximum quality)...")
-            self.movies_df = pd.read_csv(f"{data_path}/movies.csv")  # Full dataset - 87k movies
-            logger.info(f"Loaded {len(self.movies_df)} movies")
-            
-            # Load tags (sample for performance)
-            logger.info("Loading tags (sampling for performance)...")
-            tags_chunk = pd.read_csv(f"{data_path}/tags.csv", nrows=100000)
-            
-            # Group tags by movieId and join them
-            self.tags_df = tags_chunk.groupby('movieId')['tag'].apply(lambda x: ' '.join(x.astype(str))).reset_index()
-            self.tags_df.columns = ['movieId', 'tag']
-            logger.info(f"Loaded tags for {len(self.tags_df)} movies")
-            
-            # Load ratings for popularity calculation (sample for performance)
-            logger.info("Loading ratings for popularity calculation (sampling for performance)...")
-            ratings_chunk = pd.read_csv(f"{data_path}/ratings.csv", nrows=200000)
-            self.ratings_df = ratings_chunk.groupby('movieId').agg({
-                'rating': ['count', 'mean']
-            }).round(2)
-            self.ratings_df.columns = ['rating_count', 'rating_avg']
-            self.ratings_df = self.ratings_df.reset_index()
-            logger.info(f"Loaded ratings for {len(self.ratings_df)} movies")
-            
+            with self.db_engine.connect() as conn:
+                # Query movies với genres
+                logger.info("Loading movies with genres from database...")
+                movies_query = text("""
+                    SELECT 
+                        m.movieId, 
+                        m.title, 
+                        m.releaseYear,
+                        STRING_AGG(g.name, '|') as genres
+                    FROM cine.Movie m
+                    LEFT JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
+                    LEFT JOIN cine.Genre g ON mg.genreId = g.genreId
+                    GROUP BY m.movieId, m.title, m.releaseYear
+                    ORDER BY m.movieId
+                """)
+                
+                movies_result = conn.execute(movies_query)
+                movies_data = []
+                for row in movies_result:
+                    movie_id, title, year, genres = row
+                    # Format title với year nếu chưa có
+                    formatted_title = self.format_title(title, year)
+                    movies_data.append({
+                        'movieId': movie_id,
+                        'title': formatted_title,
+                        'releaseYear': year,
+                        'genres': genres if genres else ''
+                    })
+                
+                self.movies_df = pd.DataFrame(movies_data)
+                logger.info(f"Loaded {len(self.movies_df)} movies from database")
+                
+                # Query ratings từ database
+                logger.info("Loading ratings from database...")
+                ratings_query = text("""
+                    SELECT 
+                        movieId, 
+                        COUNT(*) as rating_count,
+                        AVG(CAST(value AS FLOAT)) as rating_avg
+                    FROM cine.Rating
+                    GROUP BY movieId
+                """)
+                
+                ratings_result = conn.execute(ratings_query)
+                ratings_data = []
+                for row in ratings_result:
+                    movie_id, rating_count, rating_avg = row
+                    ratings_data.append({
+                        'movieId': movie_id,
+                        'rating_count': int(rating_count),
+                        'rating_avg': float(rating_avg) if rating_avg else 0.0
+                    })
+                
+                self.ratings_df = pd.DataFrame(ratings_data)
+                logger.info(f"Loaded ratings for {len(self.ratings_df)} movies from database")
+                
         except Exception as e:
-            logger.error(f"Error loading MovieLens data: {str(e)}")
+            logger.error(f"Error loading database data: {str(e)}")
             raise
     
     def create_improved_features(self) -> np.ndarray:
-        """Tao features cai tien voi weights toi uu (Phuong an 2)"""
-        logger.info("Creating improved content features...")
+        """Tạo features với weights: Genres (60%), Title (20%), Year (7%), Popularity (7%), Rating (6%)"""
+        logger.info("Creating improved content features from database...")
         logger.info("Processing movies...")
         
-        # Merge data
-        movies_with_tags = self.movies_df.merge(self.tags_df, on='movieId', how='left')
-        movies_with_ratings = movies_with_tags.merge(self.ratings_df, on='movieId', how='left')
+        # Merge data với ratings
+        movies_with_ratings = self.movies_df.merge(self.ratings_df, on='movieId', how='left')
         
         # Fill missing values
-        movies_with_ratings['tag'] = movies_with_ratings['tag'].fillna('')
+        movies_with_ratings['genres'] = movies_with_ratings['genres'].fillna('')
         movies_with_ratings['rating_count'] = movies_with_ratings['rating_count'].fillna(0)
         movies_with_ratings['rating_avg'] = movies_with_ratings['rating_avg'].fillna(0)
         
         logger.info("Creating genres features...")
-        # 1. Genres features (GIẢM WEIGHT từ 70% xuống 40%)
-        genres_text = movies_with_ratings['genres'].fillna('').astype(str)
-        genres_vectorizer = TfidfVectorizer(max_features=100, stop_words='english')
+        # 1. Genres features (60%)
+        genres_text = movies_with_ratings['genres'].fillna('').astype(str).str.replace('|', ' ')
+        genres_vectorizer = TfidfVectorizer(max_features=1000, min_df=1)
         genres_features = genres_vectorizer.fit_transform(genres_text)
         
-        logger.info("Creating tags features...")
-        # 2. Tags features (TĂNG WEIGHT từ 20% lên 30%)
-        tags_text = movies_with_ratings['tag'].fillna('').astype(str)
-        tags_vectorizer = TfidfVectorizer(max_features=200, stop_words='english')
-        tags_features = tags_vectorizer.fit_transform(tags_text)
-        
         logger.info("Creating title keywords features...")
-        # 3. Title keywords features (TĂNG WEIGHT từ 5% lên 15%)
+        # 2. Title features (20%)
         titles = movies_with_ratings['title'].fillna('').astype(str)
-        title_vectorizer = TfidfVectorizer(max_features=100, stop_words='english')
+        title_vectorizer = TfidfVectorizer(max_features=1000, min_df=1)
         title_features = title_vectorizer.fit_transform(titles)
         
         logger.info("Creating release year features...")
-        # 4. Release year features (GIỮ NGUYÊN 5%)
+        # 3. Year features (7%)
         # Extract year from title (e.g., "Toy Story (1995)" -> 1995)
         def extract_year(title):
-            import re
             match = re.search(r'\((\d{4})\)', str(title))
-            return int(match.group(1)) if match else 1995
+            if match:
+                return int(match.group(1))
+            # Fallback: dùng releaseYear từ database nếu có
+            return None
         
-        years = movies_with_ratings['title'].apply(extract_year).values.reshape(-1, 1)
+        years_list = []
+        for idx, row in movies_with_ratings.iterrows():
+            year = extract_year(row['title'])
+            if year is None and pd.notna(row.get('releaseYear')):
+                year = int(row['releaseYear'])
+            if year is None:
+                year = 2000  # Default year
+            years_list.append(year)
+        
+        years = np.array(years_list).reshape(-1, 1)
         year_scaler = MinMaxScaler()
         year_features = year_scaler.fit_transform(years)
         
         logger.info("Creating popularity features...")
-        # 5. Popularity features (GIỮ NGUYÊN 5%)
+        # 4. Popularity features (7%) - dựa trên rating_count
         popularity = np.log1p(movies_with_ratings['rating_count'].fillna(0).values).reshape(-1, 1)
         popularity_scaler = MinMaxScaler()
         popularity_features = popularity_scaler.fit_transform(popularity)
         
         logger.info("Creating rating quality features...")
-        # 6. Rating quality features (MỚI - 5%)
+        # 5. Rating features (6%) - dựa trên rating_avg
         rating_quality = movies_with_ratings['rating_avg'].fillna(0).values.reshape(-1, 1)
         rating_scaler = MinMaxScaler()
         rating_features = rating_scaler.fit_transform(rating_quality)
         
-        # Combine features with ENHANCED weights (Phuong an 2)
+        # Combine features với weights: Genres (60%), Title (20%), Year (7%), Popularity (7%), Rating (6%)
         from scipy.sparse import hstack
         
         combined_features = hstack([
-            genres_features * 0.50,      # Tăng từ 40% lên 50%
-            tags_features * 0.25,        # Giảm từ 30% xuống 25%
-            title_features * 0.15,       # Giữ nguyên 15%
-            year_features * 0.05,        # Giữ nguyên 5%
-            popularity_features * 0.03,  # Giảm từ 5% xuống 3%
-            rating_features * 0.02       # Giảm từ 5% xuống 2%
+            genres_features * 0.60,      # Genres: 60%
+            title_features * 0.20,       # Title: 20%
+            year_features * 0.07,        # Year: 7%
+            popularity_features * 0.07,  # Popularity: 7%
+            rating_features * 0.06       # Rating: 6%
         ])
         
         logger.info(f"Created improved feature matrix: {combined_features.shape}")
         
-        # Save model components for backup (HYBRID APPROACH)
+        # Save model components for backup
         self.save_model_components(movies_with_ratings, combined_features, {
             'genres_vectorizer': genres_vectorizer,
-            'tags_vectorizer': tags_vectorizer,
             'title_vectorizer': title_vectorizer,
             'year_scaler': year_scaler,
             'popularity_scaler': popularity_scaler,
@@ -162,12 +205,11 @@ class ImprovedContentTrainer:
                 'features': features,
                 'vectorizers': vectorizers,
                 'feature_weights': {
-                    'genres': 0.50,
-                    'tags': 0.25,
-                    'title': 0.15,
-                    'year': 0.05,
-                    'popularity': 0.03,
-                    'rating': 0.02
+                    'genres': 0.60,
+                    'title': 0.20,
+                    'year': 0.07,
+                    'popularity': 0.07,
+                    'rating': 0.06
                 }
             }
             
@@ -203,8 +245,8 @@ class ImprovedContentTrainer:
         
         # Clear existing data
         with self.db_engine.connect() as conn:
-            conn.execute(text("DELETE FROM cine.MovieSimilarity"))
-            conn.commit()
+            with conn.begin():
+                conn.execute(text("DELETE FROM cine.MovieSimilarity"))
         logger.info("Cleared existing MovieSimilarity data")
         
         # Filter movies to only include those in database
@@ -330,17 +372,17 @@ class ImprovedContentTrainer:
             
             logger.info(f"Saved {len(similarities_data)} similarity records")
     
-    def train_improved(self, data_path: str, top_n: int = 20):
-        """Complete improved training pipeline"""
+    def train_improved(self, top_n: int = 20):
+        """Complete improved training pipeline - sử dụng dữ liệu từ database"""
         try:
-            print("\n🚀 STARTING HYBRID APPROACH TRAINING")
+            print("\n🚀 STARTING DATABASE-BASED TRAINING")
             print("=" * 60)
             
-            # Phase 1: Load data
-            print("\n📊 PHASE 1: Loading Dataset")
+            # Phase 1: Load data từ database
+            print("\n📊 PHASE 1: Loading Data from Database")
             print("-" * 30)
             start_time = time.time()
-            self.load_movielens_data(data_path)
+            self.load_database_data()
             phase1_time = time.time() - start_time
             print(f"✅ Phase 1 completed in {phase1_time:.2f} seconds")
             
@@ -415,13 +457,13 @@ class ImprovedContentTrainer:
         logger.info(f"Low similarity (<0.7): {low_similarity} pairs")
 
 def main():
-    """Main training function - HYBRID APPROACH"""
-    print("🎯 HYBRID APPROACH: Content-based Recommendation Training")
+    """Main training function - DATABASE-BASED APPROACH"""
+    print("🎯 DATABASE-BASED: Content-based Recommendation Training")
     print("=" * 70)
-    print("Phase 1: Training with FULL dataset (87k movies)")
-    print("Phase 2: Save similarities to database (fast queries)")
-    print("Phase 3: Backup model file (for retraining)")
-    print("Enhanced weights: Genres 50%, Tags 25%, Title 15%, Year 5%, Pop 3%, Rating 2%")
+    print("Phase 1: Load data directly from CineBox database")
+    print("Phase 2: Create features with weights: Genres 60%, Title 20%, Year 7%, Popularity 7%, Rating 6%")
+    print("Phase 3: Calculate similarities and save to database")
+    print("Phase 4: Backup model file (for retraining)")
     print("=" * 70)
     
     # Database connection
@@ -437,18 +479,16 @@ def main():
     connection_url = URL.create("mssql+pyodbc", query={"odbc_connect": odbc_str})
     db_engine = create_engine(connection_url, fast_executemany=True)
     
-    # Path to MovieLens dataset
-    DATA_PATH = r"d:\N5\KLTN\ml-32m"
-    
     # Initialize improved trainer
     trainer = ImprovedContentTrainer(db_engine)
     
-    # Train improved model
-    trainer.train_improved(data_path=DATA_PATH, top_n=20)
+    # Train improved model - không cần data_path nữa
+    trainer.train_improved(top_n=20)
     
     print("\n" + "=" * 60)
-    print("Improved training completed!")
-    print("Similarity scores should now be more diverse and realistic.")
+    print("Database-based training completed!")
+    print("Similarity scores calculated from actual CineBox database data.")
+    print("New movies will automatically be included in future training runs.")
 
 if __name__ == "__main__":
     main()
