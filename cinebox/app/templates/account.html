@@ -345,6 +345,21 @@
             {% endif %}
         </div>
 
+<div class="account-section flashback-section" id="flashbackSection" data-year="{{ flashback_year }}">
+    <div class="flashback-banner flashback-trigger" id="flashbackTrigger">
+        <img src="{{ url_for('static', filename='img/flashback2025.png') }}" alt="Flashback 2025">
+        <div class="flashback-banner-info">
+            <h3>🎞️ Flashback {{ flashback_year }}</h3>
+            <p>Nhấn để xem hành trình xem phim của bạn trong năm {{ flashback_year }}.</p>
+            <button type="button" class="btn btn-primary flashback-btn">Xem Flashback</button>
+        </div>
+    </div>
+    <div id="flashbackLoading" class="flashback-loading" style="display: none;">
+        <div class="preview-loading">⏳ Đang thu thập dữ liệu...</div>
+    </div>
+    <div id="flashbackContent" style="display: none;"></div>
+</div>
+
 
         <!-- Nút đăng xuất -->
         <div class="account-section logout-section">
@@ -1511,6 +1526,247 @@ document.addEventListener('DOMContentLoaded', function() {
         strengthBar.className = `password-strength-bar ${strengthClass}`;
     }
 });
+</script>
+
+<script>
+const FLASHBACK_BANNER_URL = "{{ url_for('static', filename='img/flashback2025.png') }}";
+
+function escapeHtml(text) {
+  if (!text) return '';
+  const map = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;'
+  };
+  return String(text).replace(/[&<>"']/g, m => map[m]);
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  initFlashbackSection();
+});
+
+function initFlashbackSection() {
+  const section = document.getElementById('flashbackSection');
+  if (!section) return;
+  const trigger = document.getElementById('flashbackTrigger');
+  const loading = document.getElementById('flashbackLoading');
+  const content = document.getElementById('flashbackContent');
+  const year = section.dataset.year;
+  let loaded = false;
+  let isLoadingFlashback = false;
+
+  const loadFlashback = () => {
+    if (isLoadingFlashback) return;
+    if (loaded) {
+      if (content.style.display === 'none') {
+        content.style.display = 'block';
+      }
+      content.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+    isLoadingFlashback = true;
+    loading.style.display = 'flex';
+    content.style.display = 'none';
+    fetch(`/api/account/flashback?year=${year}`)
+      .then(response => response.json())
+      .then(data => {
+        if (!data.success) {
+          content.innerHTML = `<div class="empty-state"><p>${escapeHtml(data.message || 'Không thể tải flashback')}</p></div>`;
+          content.style.display = 'block';
+          return;
+        }
+        renderFlashbackContent(content, data.stats);
+        bindFlashbackClose(content);
+        content.style.display = 'block';
+        loaded = true;
+        setTimeout(() => {
+          content.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 150);
+      })
+      .catch(() => {
+        content.innerHTML = `<div class="empty-state"><p>Đã xảy ra lỗi khi tải flashback. Vui lòng thử lại sau.</p></div>`;
+        content.style.display = 'block';
+      })
+      .finally(() => {
+        loading.style.display = 'none';
+        isLoadingFlashback = false;
+      });
+  };
+
+  if (trigger) {
+    trigger.addEventListener('click', loadFlashback);
+  }
+}
+
+function renderFlashbackContent(container, stats) {
+  if (!stats) {
+    container.innerHTML = `<div class="empty-state"><p>Không có dữ liệu flashback cho năm này.</p></div>`;
+    return;
+  }
+
+  if (!stats.has_data) {
+    container.innerHTML = `<div class="empty-state"><p>✨ Bạn chưa có hoạt động nào trong năm ${stats.year}</p></div>`;
+    return;
+  }
+
+  const summaryParts = [];
+  if (stats.views && stats.views.unique_movies) {
+    summaryParts.push(`Bạn đã xem <strong>${stats.views.unique_movies}</strong> phim với <strong>${stats.views.total_views}</strong> lượt xem`);
+  }
+  if (stats.engagement && stats.engagement.hours) {
+    summaryParts.push(`tương đương khoảng <strong>${stats.engagement.hours}</strong> giờ trước màn hình`);
+  }
+
+  const summaryCard = (label, value, note = '') => `
+    <div class="flashback-summary-card">
+      <span class="summary-label">${label}</span>
+      <span class="summary-value">${value}</span>
+      ${note ? `<span class="summary-note">${note}</span>` : ''}
+    </div>
+  `;
+
+  const favoriteMovie = stats.views && stats.views.favorite_movie;
+  const favoriteMovieHtml = favoriteMovie ? `
+    <div class="flashback-movie-card">
+      <img src="${favoriteMovie.poster}" alt="${escapeHtml(favoriteMovie.title)}">
+      <div>
+        <h5>${escapeHtml(favoriteMovie.title)}${favoriteMovie.year ? ` (${favoriteMovie.year})` : ''}</h5>
+        <p>Đã xem ${favoriteMovie.count} lần</p>
+      </div>
+    </div>
+  ` : `<p class="flashback-subtext">Chưa có phim nào nổi bật</p>`;
+
+  const fiveStarHtml = (stats.ratings && stats.ratings.highlights && stats.ratings.highlights.length)
+    ? `<div class="flashback-highlights">
+        ${stats.ratings.highlights.map(item => `
+          <div class="flashback-highlight">
+            <img src="${item.poster}" alt="${escapeHtml(item.title)}">
+            <span>${escapeHtml(item.title)}${item.value ? ` (${item.value}⭐)` : ''}</span>
+          </div>
+        `).join('')}
+       </div>`
+    : `<p class="flashback-subtext">Chưa có phim nào đạt 5⭐ trong năm ${stats.year}</p>`;
+
+  const favoritesHtml = (stats.favorites && stats.favorites.items && stats.favorites.items.length)
+    ? `<div class="flashback-highlights vertical">
+        ${stats.favorites.items.map(item => `
+          <div class="flashback-highlight">
+            <img src="${item.poster}" alt="${escapeHtml(item.title)}">
+            <div>
+              <span>${escapeHtml(item.title)}</span>
+              ${item.date ? `<p class="flashback-subtext">Thêm ngày ${item.date}</p>` : ''}
+            </div>
+          </div>
+        `).join('')}
+       </div>`
+    : `<p class="flashback-subtext">Chưa thêm phim nào vào yêu thích</p>`;
+
+  const genresHtml = (stats.genres && stats.genres.top && stats.genres.top.length)
+    ? `<ul class="flashback-list">
+        ${stats.genres.top.map((genre, index) => `<li><span>${index + 1}. ${escapeHtml(genre.name)}</span><strong>${genre.count}</strong></li>`).join('')}
+       </ul>`
+    : `<p class="flashback-subtext">Chưa có dữ liệu</p>`;
+
+  const countriesHtml = (stats.countries && stats.countries.length)
+    ? `<ul class="flashback-list">
+        ${stats.countries.map(country => `<li><span>${escapeHtml(country.name)}</span><strong>${country.count}</strong></li>`).join('')}
+       </ul>`
+    : `<p class="flashback-subtext">Chưa có dữ liệu</p>`;
+
+  const summaryHeadline = summaryParts.length
+    ? summaryParts.join(', ')
+    : `Cùng xem lại hành trình điện ảnh của bạn trong năm ${stats.year}`;
+
+  const detailCards = [
+    `
+    <div class="flashback-detail-card">
+      <div class="card-title">📅 Ngày xem nhiều phim nhất</div>
+      ${stats.views && stats.views.binge_day
+        ? `<div class="flashback-metric">${stats.views.binge_day.count}</div>
+           <p class="flashback-subtext">phim vào ${stats.views.binge_day.date}</p>`
+        : `<p class="flashback-subtext">Chưa có dữ liệu</p>`}
+    </div>
+    `,
+    `
+    <div class="flashback-detail-card">
+      <div class="card-title">⭐ Phim đã đánh giá</div>
+      <div class="flashback-metric">${stats.ratings ? stats.ratings.count : 0}</div>
+      <p class="flashback-subtext">phim bạn đã chấm điểm trong năm ${stats.year}</p>
+    </div>
+    `,
+    `
+    <div class="flashback-detail-card wide">
+      <div class="card-title">🎯 Movie Favorite</div>
+      ${favoriteMovieHtml}
+    </div>
+    `,
+    `
+    <div class="flashback-detail-card">
+      <div class="card-title">🎯 Watchlist còn lại</div>
+      <div class="flashback-metric">${stats.watchlist_pending || 0}</div>
+      <p class="flashback-subtext">phim đang chờ bạn khám phá</p>
+    </div>
+    `,
+    `
+    <div class="flashback-detail-card">
+      <div class="card-title">🎭 Thể loại yêu thích</div>
+      ${genresHtml}
+    </div>
+    `,
+    `
+    <div class="flashback-detail-card">
+      <div class="card-title">🌍 Quốc gia xem nhiều</div>
+      ${countriesHtml}
+    </div>
+    `,
+    `
+    <div class="flashback-detail-card wide">
+      <div class="card-title">❤️ Phim 5 sao</div>
+      ${fiveStarHtml}
+    </div>
+    `,
+    `
+    <div class="flashback-detail-card wide">
+      <div class="card-title">💖 Yêu thích ${stats.year}</div>
+      ${favoritesHtml}
+    </div>
+    `
+  ];
+
+  container.innerHTML = `
+    <div class="flashback-opened">
+      <div class="flashback-hero-card">
+        <img src="${FLASHBACK_BANNER_URL}" alt="Flashback ${stats.year}">
+        <div class="flashback-hero-overlay">
+          <div>
+            <p class="flashback-hero-subtitle">FLASHBACK ${stats.year}</p>
+            <h3 class="flashback-hero-title">Hành trình điện ảnh của bạn</h3>
+            <p class="flashback-hero-desc">${summaryHeadline}</p>
+          </div>
+          <button type="button" class="flashback-close" aria-label="Đóng flashback">✕</button>
+        </div>
+      </div>
+      <div class="flashback-summary-grid">
+        ${summaryCard('Tổng phim đã xem', stats.views ? stats.views.unique_movies || 0 : 0)}
+        ${summaryCard('Tổng lượt xem', stats.views ? stats.views.total_views || 0 : 0)}
+        ${summaryCard('Thời gian xem ước tính', stats.engagement ? `~${stats.engagement.hours || 0} giờ` : '~0 giờ')}
+      </div>
+      <div class="flashback-detail-grid">
+        ${detailCards.join('')}
+      </div>
+    </div>
+  `;
+}
+
+function bindFlashbackClose(container) {
+  const closeBtn = container.querySelector('.flashback-close');
+  if (!closeBtn) return;
+  closeBtn.addEventListener('click', () => {
+    container.style.display = 'none';
+  });
+}
 </script>
 
 <style>
@@ -3113,6 +3369,292 @@ document.addEventListener('DOMContentLoaded', function() {
 
 .toggle-password:hover .eye-icon {
   filter: grayscale(0);
+}
+
+.flashback-section {
+    background: #131825;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 20px;
+    padding: 0;
+    overflow: hidden;
+}
+
+.flashback-banner {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    background: linear-gradient(120deg, #1f2a44, #0f172a);
+    padding: 24px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.flashback-banner img {
+    width: 320px;
+    max-width: 45%;
+    border-radius: 16px;
+    object-fit: cover;
+}
+
+.flashback-banner-info h3 {
+    margin: 0 0 8px;
+    color: #fff;
+    font-size: 1.6rem;
+}
+
+.flashback-banner-info p {
+    margin: 0;
+    color: #cdd5f5;
+    font-size: 1rem;
+}
+
+.flashback-opened {
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.flashback-hero-card {
+    position: relative;
+    border-radius: 18px;
+    overflow: hidden;
+    min-height: 220px;
+    box-shadow: 0 15px 40px rgba(15, 23, 42, 0.35);
+}
+
+.flashback-hero-card img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.flashback-hero-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(120deg, rgba(5,8,20,0.95), rgba(15,27,58,0.85));
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 24px;
+    gap: 20px;
+}
+
+.flashback-hero-subtitle {
+    color: #8fa3ff;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    font-size: 0.8rem;
+    margin: 0 0 8px;
+}
+
+.flashback-hero-title {
+    margin: 0;
+    color: #fff;
+    font-size: 1.9rem;
+}
+
+.flashback-hero-desc {
+    color: #cfd7ff;
+    margin-top: 10px;
+    max-width: 720px;
+}
+
+.flashback-close {
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #fff;
+    border-radius: 50%;
+    width: 42px;
+    height: 42px;
+    font-size: 1.1rem;
+    cursor: pointer;
+    transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.flashback-close:hover {
+    background: rgba(239, 68, 68, 0.85);
+    transform: scale(1.03);
+}
+
+.flashback-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+}
+
+.flashback-summary-card {
+    background: #11192a;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.summary-label {
+    color: #8fa3ff;
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+}
+
+.summary-value {
+    color: #fff;
+    font-size: 1.9rem;
+    font-weight: 700;
+}
+
+.summary-note {
+    color: #cfd7ff;
+    font-size: 0.9rem;
+}
+
+.flashback-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 20px;
+}
+
+.flashback-detail-card {
+    background: #0f1625;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 18px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 180px;
+}
+
+.flashback-detail-card.wide {
+    grid-column: span 2;
+}
+
+.card-title {
+    color: #fff;
+    font-weight: 600;
+    margin-bottom: 4px;
+    font-size: 1rem;
+}
+
+.flashback-metric {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #fbbf24;
+}
+
+.flashback-subtext {
+    color: #cfd7ff;
+    font-size: 0.9rem;
+    margin: 0;
+}
+
+.flashback-movie-card {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    background: rgba(255,255,255,0.03);
+    border-radius: 14px;
+    padding: 12px;
+}
+
+.flashback-movie-card img {
+    width: 90px;
+    height: 120px;
+    object-fit: cover;
+    border-radius: 10px;
+}
+
+.flashback-movie-card h5 {
+    margin: 0 0 6px;
+    color: #fff;
+    font-size: 1rem;
+}
+
+.flashback-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.flashback-list li {
+    display: flex;
+    justify-content: space-between;
+    color: #d0d7ff;
+    font-size: 0.9rem;
+    padding: 4px 0;
+}
+
+.flashback-highlights {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+}
+
+.flashback-highlight {
+    text-align: center;
+}
+
+.flashback-highlight img {
+    width: 100%;
+    height: 180px;
+    object-fit: cover;
+    border-radius: 12px;
+    margin-bottom: 6px;
+}
+
+.flashback-highlight span {
+    display: block;
+    color: #fff;
+    font-size: 0.9rem;
+}
+
+.flashback-highlights.vertical {
+    grid-template-columns: 1fr;
+}
+
+.flashback-highlights.vertical .flashback-highlight {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    text-align: left;
+}
+
+.flashback-highlights.vertical .flashback-highlight img {
+    width: 70px;
+    height: 95px;
+    margin: 0;
+}
+
+.flashback-highlights.vertical .flashback-highlight span {
+    font-size: 0.95rem;
+}
+
+.flashback-highlights.vertical .flashback-subtext {
+    margin: 2px 0 0;
+    font-size: 0.8rem;
+}
+
+@media (max-width: 900px) {
+    .flashback-banner {
+        flex-direction: column;
+    }
+    
+    .flashback-banner img {
+        width: 100%;
+    }
+
+    .flashback-hero-overlay {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .flashback-detail-card.wide {
+        grid-column: span 1;
+    }
 }
 </style>
 {% endblock %}

@@ -66,7 +66,7 @@
   <h3>🆕 Phim mới nhất</h3>
   <div class="movies-grid-10">
     {% for m in latest_movies[:12] %}
-    <div class="card">
+    <div class="card" data-preview-id="{{ m.id }}">
       <a href="{{ url_for('main.detail', movie_id=m.id) }}" class="card-link">
         <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
         <div class="card-content">
@@ -134,9 +134,9 @@
     <h3>📺 Xem gần đây</h3>
     <p class="section-subtitle">Tiếp tục xem phim của bạn</p>
   </div>
-  <div class="movies-grid-10" id="recentWatched">
+    <div class="movies-grid-10" id="recentWatched">
     {% for m in recent_watched[:12] %}
-    <div class="card">
+    <div class="card" data-preview-id="{{ m.id }}">
       <a href="{{ url_for('main.detail', movie_id=m.id) }}" class="card-link">
         <div class="poster" style="background-image:url('{{ m.poster }}')">
           {% if m.isCompleted %}
@@ -179,7 +179,7 @@
   </div>
   <div class="movies-grid-10" id="trendingMovies">
     {% for m in trending_movies[:12] %}
-    <div class="card">
+    <div class="card" data-preview-id="{{ m.id }}">
       <a href="{{ url_for('main.detail', movie_id=m.id) }}" class="card-link">
         <div class="poster" style="background-image:url('{{ m.poster }}')"></div>
         <div class="card-content">
@@ -294,7 +294,7 @@
       {% set display_movies = [] %}
     {% endif %}
     {% for movie in display_movies %}
-    <div class="card">
+    <div class="card" data-preview-id="{{ movie.id }}">
       <a href="{{ url_for('main.detail', movie_id=movie.id) }}" class="card-link">
         <div class="poster" style="background-image:url('{{ movie.poster }}')"></div>
         <div class="card-content">
@@ -333,6 +333,7 @@
 {% endif %}
 
 <script>
+window.CineBox = window.CineBox || {};
 let currentSlideIndex = 0;
 const slides = document.querySelectorAll('.hero-slide');
 const totalSlides = slides.length;
@@ -440,7 +441,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const ratingCount = rec.ratingCount ?? rec.total_ratings ?? 0;
       
       return `
-      <div class="card">
+      <div class="card" data-preview-id="${movieId}">
         <a href="/movie/${movieId}" class="card-link">
           <div class="poster" style="background-image:url('${poster}')"></div>
           <div class="card-content">
@@ -473,6 +474,9 @@ document.addEventListener('DOMContentLoaded', () => {
       checkAllFavoriteStatus();
       checkAllWatchlistStatus();
     }, 100);
+    if (window.CineBox && typeof window.CineBox.refreshPreviewTargets === 'function') {
+      window.CineBox.refreshPreviewTargets();
+    }
   };
 
   initFilterSearchSuggestions();
@@ -496,45 +500,23 @@ document.addEventListener('DOMContentLoaded', () => {
         .then(response => response.json())
         .then(data => {
           if (data.success) {
-            renderFilterSuggestions(data.suggestions || []);
+            const hasData = window.CineBox.renderSuggestions(
+              data.groups || [],
+              suggestionsList,
+              (item) => {
+                filterSearchInput.value = item.title;
+                hideSuggestions();
+                if (filterForm) {
+                  filterForm.submit();
+                }
+              }
+            );
+            suggestionsContainer.style.display = hasData ? 'block' : 'none';
           } else {
             hideSuggestions();
           }
         })
         .catch(() => hideSuggestions());
-    };
-
-    const renderFilterSuggestions = (suggestions) => {
-      suggestionsList.innerHTML = '';
-
-      if (!suggestions.length) {
-        hideSuggestions();
-        return;
-      }
-
-      suggestions.forEach(item => {
-        const suggestionEl = document.createElement('div');
-        suggestionEl.className = 'suggestion-item';
-        suggestionEl.innerHTML = `
-          <div class="suggestion-poster" style="background-image:url('${item.poster}')"></div>
-          <div class="suggestion-info">
-            <div class="suggestion-title">${item.title}</div>
-            ${item.year ? `<div class="suggestion-year">${item.year}</div>` : ''}
-          </div>
-        `;
-
-        suggestionEl.addEventListener('click', () => {
-          filterSearchInput.value = item.title;
-          hideSuggestions();
-          if (filterForm) {
-            filterForm.submit();
-          }
-        });
-
-        suggestionsList.appendChild(suggestionEl);
-      });
-
-      suggestionsContainer.style.display = 'block';
     };
 
     filterSearchInput.addEventListener('input', () => {

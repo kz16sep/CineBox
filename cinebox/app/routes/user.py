@@ -5,11 +5,218 @@ User account routes: account, profile, history
 from flask import render_template, request, redirect, url_for, session, current_app, jsonify, flash
 from sqlalchemy import text
 from werkzeug.utils import secure_filename
+from datetime import datetime
 import os
 import re
 from . import main_bp
 from .decorators import login_required
 from .common import get_poster_or_dummy
+
+FLASHBACK_YEAR = 2025
+
+
+def _format_date(dt):
+    return dt.strftime('%d/%m/%Y') if dt else None
+
+
+def get_flashback_stats(conn, user_id, year=FLASHBACK_YEAR):
+    start = datetime(year, 1, 1)
+    end = datetime(year + 1, 1, 1)
+    params = {"user_id": user_id, "start": start, "end": end}
+    stats = {
+        "year": year,
+        "views": {"total_views": 0, "unique_movies": 0, "binge_day": None, "first": None, "last": None, "favorite_movie": None},
+        "engagement": {"minutes": 0, "hours": 0},
+        "ratings": {"count": 0, "avg": 0, "highlights": []},
+        "comments": {"count": 0, "top": None},
+        "genres": {"top": []},
+        "countries": [],
+        "favorites": {"count": 0, "items": []},
+        "watchlist_pending": 0,
+        "has_data": False
+    }
+
+    view_stats = conn.execute(text("""
+        SELECT COUNT(*) AS total_views, COUNT(DISTINCT movieId) AS unique_movies
+        FROM cine.ViewHistory
+        WHERE userId = :user_id AND startedAt >= :start AND startedAt < :end
+    """), params).mappings().first() or {}
+    stats["views"]["total_views"] = int(view_stats.get("total_views") or 0)
+    stats["views"]["unique_movies"] = int(view_stats.get("unique_movies") or 0)
+
+    binge_row = conn.execute(text("""
+        SELECT TOP 1 CONVERT(date, startedAt) AS view_date, COUNT(*) AS view_count
+        FROM cine.ViewHistory
+        WHERE userId = :user_id AND startedAt >= :start AND startedAt < :end
+        GROUP BY CONVERT(date, startedAt)
+        ORDER BY view_count DESC, view_date DESC
+    """), params).mappings().first()
+    if binge_row:
+        stats["views"]["binge_day"] = {
+            "date": _format_date(binge_row["view_date"]),
+            "count": int(binge_row["view_count"])
+        }
+
+    first_movie = conn.execute(text("""
+        SELECT TOP 1 m.title, vh.startedAt
+        FROM cine.ViewHistory vh
+        JOIN cine.Movie m ON vh.movieId = m.movieId
+        WHERE vh.userId = :user_id AND vh.startedAt >= :start AND vh.startedAt < :end
+        ORDER BY vh.startedAt ASC
+    """), params).mappings().first()
+    if first_movie:
+        stats["views"]["first"] = {
+            "title": first_movie["title"],
+            "date": _format_date(first_movie["startedAt"])
+        }
+
+    last_movie = conn.execute(text("""
+        SELECT TOP 1 m.title, vh.startedAt
+        FROM cine.ViewHistory vh
+        JOIN cine.Movie m ON vh.movieId = m.movieId
+        WHERE vh.userId = :user_id AND vh.startedAt >= :start AND vh.startedAt < :end
+        ORDER BY vh.startedAt DESC
+    """), params).mappings().first()
+    if last_movie:
+        stats["views"]["last"] = {
+            "title": last_movie["title"],
+            "date": _format_date(last_movie["startedAt"])
+        }
+
+    favorite_movie = conn.execute(text("""
+        SELECT TOP 1
+            m.title,
+            m.posterUrl,
+            m.releaseYear,
+            COUNT(*) AS view_count,
+            MAX(vh.startedAt) AS last_view
+        FROM cine.ViewHistory vh
+        JOIN cine.Movie m ON vh.movieId = m.movieId
+        WHERE vh.userId = :user_id AND vh.startedAt >= :start AND vh.startedAt < :end
+        GROUP BY m.title, m.posterUrl, m.releaseYear
+        ORDER BY view_count DESC, last_view DESC
+    """), params).mappings().first()
+    if favorite_movie:
+        stats["views"]["favorite_movie"] = {
+            "title": favorite_movie["title"],
+            "count": int(favorite_movie["view_count"]),
+            "poster": get_poster_or_dummy(favorite_movie.get("posterUrl"), favorite_movie["title"]),
+            "year": favorite_movie.get("releaseYear")
+        }
+
+    duration_minutes = conn.execute(text("""
+        SELECT SUM(COALESCE(m.durationMin, 120)) AS total_minutes
+        FROM cine.ViewHistory vh
+        JOIN cine.Movie m ON vh.movieId = m.movieId
+        WHERE vh.userId = :user_id AND vh.startedAt >= :start AND vh.startedAt < :end
+    """), params).scalar() or 0
+    stats["engagement"]["minutes"] = int(duration_minutes)
+    stats["engagement"]["hours"] = round(duration_minutes / 60.0, 1) if duration_minutes else 0
+
+    genre_rows = conn.execute(text("""
+        SELECT TOP 3 g.name, COUNT(*) AS view_count
+        FROM cine.ViewHistory vh
+        JOIN cine.MovieGenre mg ON vh.movieId = mg.movieId
+        JOIN cine.Genre g ON mg.genreId = g.genreId
+        WHERE vh.userId = :user_id AND vh.startedAt >= :start AND vh.startedAt < :end
+        GROUP BY g.name
+        ORDER BY view_count DESC, g.name
+    """), params).mappings().all()
+    stats["genres"]["top"] = [{"name": row["name"], "count": int(row["view_count"])} for row in genre_rows]
+
+    country_rows = conn.execute(text("""
+        SELECT TOP 3 COALESCE(m.country, 'Khác') AS country, COUNT(*) AS view_count
+        FROM cine.ViewHistory vh
+        JOIN cine.Movie m ON vh.movieId = m.movieId
+        WHERE vh.userId = :user_id AND vh.startedAt >= :start AND vh.startedAt < :end
+        GROUP BY COALESCE(m.country, 'Khác')
+        ORDER BY view_count DESC, country
+    """), params).mappings().all()
+    stats["countries"] = [{"name": row["country"], "count": int(row["view_count"])} for row in country_rows]
+
+    rating_stats = conn.execute(text("""
+        SELECT COUNT(*) AS rating_count, AVG(CAST(value AS FLOAT)) AS avg_rating
+        FROM cine.Rating
+        WHERE userId = :user_id AND ratedAt >= :start AND ratedAt < :end
+    """), params).mappings().first() or {}
+    stats["ratings"]["count"] = int(rating_stats.get("rating_count") or 0)
+    stats["ratings"]["avg"] = round(float(rating_stats.get("avg_rating") or 0), 2) if rating_stats.get("avg_rating") else 0
+
+    highlight_rows = conn.execute(text("""
+        SELECT TOP 4 m.movieId, m.title, m.posterUrl, r.ratedAt, r.value
+        FROM cine.Rating r
+        JOIN cine.Movie m ON r.movieId = m.movieId
+        WHERE r.userId = :user_id AND r.value >= 5 AND r.ratedAt >= :start AND r.ratedAt < :end
+        ORDER BY r.ratedAt DESC
+    """), params).mappings().all()
+    stats["ratings"]["highlights"] = [
+        {
+            "title": row["title"],
+            "poster": get_poster_or_dummy(row.get("posterUrl"), row["title"]),
+            "date": _format_date(row.get("ratedAt")),
+            "value": int(row.get("value") or 0)
+        }
+        for row in highlight_rows
+    ]
+
+    comment_count = conn.execute(text("""
+        SELECT COUNT(*) FROM cine.Comment
+        WHERE userId = :user_id AND createdAt >= :start AND createdAt < :end
+    """), params).scalar() or 0
+    stats["comments"]["count"] = int(comment_count)
+
+    top_comment = conn.execute(text("""
+        SELECT TOP 1 c.content, c.createdAt, m.title,
+               COUNT(CASE WHEN cr.isLike = 1 THEN 1 END) AS likes
+        FROM cine.Comment c
+        JOIN cine.Movie m ON c.movieId = m.movieId
+        LEFT JOIN cine.CommentRating cr ON c.commentId = cr.commentId AND cr.isLike = 1
+        WHERE c.userId = :user_id AND c.createdAt >= :start AND c.createdAt < :end
+        GROUP BY c.content, c.createdAt, m.title
+        ORDER BY likes DESC, c.createdAt DESC
+    """), params).mappings().first()
+    if top_comment:
+        stats["comments"]["top"] = {
+            "content": top_comment["content"],
+            "movie": top_comment["title"],
+            "likes": int(top_comment["likes"] or 0),
+            "date": _format_date(top_comment["createdAt"])
+        }
+
+    favorite_count = conn.execute(text("""
+        SELECT COUNT(*) FROM cine.Favorite
+        WHERE userId = :user_id AND addedAt >= :start AND addedAt < :end
+    """), params).scalar() or 0
+    stats["favorites"]["count"] = int(favorite_count)
+
+    favorite_rows = conn.execute(text("""
+        SELECT TOP 4 m.title, m.posterUrl, f.addedAt
+        FROM cine.Favorite f
+        JOIN cine.Movie m ON f.movieId = m.movieId
+        WHERE f.userId = :user_id AND f.addedAt >= :start AND f.addedAt < :end
+        ORDER BY f.addedAt DESC
+    """), params).mappings().all()
+    stats["favorites"]["items"] = [
+        {
+            "title": row["title"],
+            "poster": get_poster_or_dummy(row.get("posterUrl"), row["title"]),
+            "date": _format_date(row.get("addedAt"))
+        }
+        for row in favorite_rows
+    ]
+
+    stats["watchlist_pending"] = int(conn.execute(text("""
+        SELECT COUNT(*) FROM cine.Watchlist
+        WHERE userId = :user_id AND isWatched = 0
+    """), {"user_id": user_id}).scalar() or 0)
+
+    stats["has_data"] = any([
+        stats["views"]["total_views"],
+        stats["ratings"]["count"],
+        stats["comments"]["count"],
+        stats["favorites"]["count"]
+    ])
+    return stats
 
 
 @main_bp.route("/account")
@@ -36,7 +243,7 @@ def account():
     favorites_total = 0
     watchlist_pagination = None
     favorites_pagination = None
-    
+    flashback_stats = None
     try:
         with current_app.db_engine.connect() as conn:
             user_info = conn.execute(text("""
@@ -219,7 +426,8 @@ def account():
                          watchlist_page=watchlist_page,
                          favorites_page=favorites_page,
                          watchlist_search=watchlist_search,
-                         favorites_search=favorites_search)
+                         favorites_search=favorites_search,
+                         flashback_year=FLASHBACK_YEAR)
 
 
 @main_bp.route("/account/history")
@@ -710,6 +918,24 @@ def serve_avatar(filename):
     if not os.path.exists(file_path):
         abort(404)
     return send_from_directory(upload_folder, filename)
+
+
+@main_bp.route("/api/account/flashback")
+@login_required
+def api_account_flashback():
+    """On-demand flashback stats"""
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"success": False, "message": "Chưa đăng nhập"}), 401
+    
+    year = request.args.get('year', FLASHBACK_YEAR, type=int)
+    try:
+        with current_app.db_engine.connect() as conn:
+            stats = get_flashback_stats(conn, user_id, year)
+            return jsonify({"success": True, "stats": stats})
+    except Exception as e:
+        current_app.logger.error(f"Error building flashback stats for user {user_id}: {e}", exc_info=True)
+        return jsonify({"success": False, "message": "Không thể tải flashback"}), 500
 
 
 @main_bp.route("/remove-history/<int:history_id>", methods=["POST"])

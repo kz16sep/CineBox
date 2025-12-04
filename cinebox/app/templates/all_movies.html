@@ -364,7 +364,7 @@
     {% if movies %}
     <div class="movies-grid" id="moviesGrid">
       {% for movie in movies %}
-      <div class="card">
+      <div class="card" data-preview-id="{{ movie.id }}">
         <a href="{{ url_for('main.detail', movie_id=movie.id) }}" class="card-link">
           <div class="poster" style="background-image:url('{{ movie.poster }}')"></div>
           <div class="card-content">
@@ -575,7 +575,7 @@ function loadPage(page) {
         // Update movies grid
         if (grid && data.movies) {
           grid.innerHTML = data.movies.map(movie => `
-            <div class="card">
+            <div class="card" data-preview-id="${movie.id}">
               <a href="/movie/${movie.id}" class="card-link">
                 <div class="poster" style="background-image:url('${movie.poster}')"></div>
                 <div class="card-content">
@@ -610,6 +610,9 @@ function loadPage(page) {
               </div>
             </div>
           `).join('');
+        }
+        if (window.CineBox && typeof window.CineBox.refreshPreviewTargets === 'function') {
+          window.CineBox.refreshPreviewTargets();
         }
         
         // Update pagination

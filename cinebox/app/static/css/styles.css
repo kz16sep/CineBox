@@ -28,7 +28,56 @@ body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;ba
 .suggestion-info{flex:1}
 .suggestion-title{color:var(--text);font-weight:500;font-size:0.9rem;margin-bottom:2px}
 .suggestion-year{color:var(--muted);font-size:0.8rem}
+.suggestion-group{padding:6px 0;border-top:1px solid rgba(255,255,255,.05)}
+.suggestion-group:first-child{border-top:none}
+.suggestion-group-label{font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:4px 12px 6px}
+.suggestion-item.match-person .suggestion-title::before{content:"🎭 ";font-size:.9em}
+.suggestion-item.match-overview .suggestion-title::before{content:"📝 ";font-size:.9em}
+.suggestion-meta{color:var(--muted);font-size:.78rem;margin-top:4px}
+.suggestion-meta mark{background:transparent;color:var(--primary);font-weight:600}
 nav .btn{margin-left:8px}
+
+[data-preview-id]{
+  position:relative;
+  overflow:hidden;
+}
+
+.preview-overlay{
+  position:absolute;
+  inset:0;
+  background:rgba(8,8,15,.95);
+  display:none;
+  align-items:center;
+  justify-content:center;
+  z-index:5;
+}
+
+.preview-overlay.active{
+  display:flex;
+}
+
+.preview-overlay iframe,
+.preview-overlay video{
+  width:100%;
+  height:100%;
+  border:0;
+  pointer-events:none;
+  border-radius:inherit;
+}
+
+.preview-loading{
+  color:#fff;
+  font-size:.9rem;
+  letter-spacing:.05em;
+}
+
+.preview-fallback{
+  width:100%;
+  height:100%;
+  background-size:cover;
+  background-position:center;
+  border-radius:inherit;
+}
 
 .btn{display:inline-block;border:1px solid transparent;border-radius:8px;padding:8px 14px;color:#fff;text-decoration:none;cursor:pointer;transition:.2s background,.2s border,.2s transform;font-size:0.9rem}
 .btn:hover{transform:translateY(-1px)}

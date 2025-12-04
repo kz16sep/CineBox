@@ -82,41 +82,89 @@
     </footer>
 
     <script>
-    // Header Search Suggestions
+    window.CineBox = window.CineBox || {};
+
+    window.CineBox.renderSuggestions = function(groups, container, onSelect) {
+        if (!container) return false;
+        container.innerHTML = "";
+        if (!groups || !groups.length) {
+            return false;
+        }
+        groups.forEach(group => {
+            const groupEl = document.createElement('div');
+            groupEl.className = 'suggestion-group';
+            if (group.label) {
+                const label = document.createElement('div');
+                label.className = 'suggestion-group-label';
+                label.textContent = group.label;
+                groupEl.appendChild(label);
+            }
+            (group.items || []).forEach(item => {
+                const itemEl = document.createElement('div');
+                itemEl.className = `suggestion-item match-${item.matchType || 'title'}`;
+                
+                const poster = document.createElement('div');
+                poster.className = 'suggestion-poster';
+                poster.style.backgroundImage = `url('${item.poster}')`;
+                
+                const info = document.createElement('div');
+                info.className = 'suggestion-info';
+                const titleEl = document.createElement('div');
+                titleEl.className = 'suggestion-title';
+                titleEl.textContent = item.title;
+                info.appendChild(titleEl);
+                if (item.year) {
+                    const yearEl = document.createElement('div');
+                    yearEl.className = 'suggestion-year';
+                    yearEl.textContent = item.year;
+                    info.appendChild(yearEl);
+                }
+                if (item.subtitle) {
+                    const meta = document.createElement('div');
+                    meta.className = 'suggestion-meta';
+                    meta.innerHTML = item.subtitle;
+                    info.appendChild(meta);
+                }
+                
+                itemEl.appendChild(poster);
+                itemEl.appendChild(info);
+                itemEl.addEventListener('click', () => onSelect(item));
+                groupEl.appendChild(itemEl);
+            });
+            container.appendChild(groupEl);
+        });
+        return true;
+    };
+
     document.addEventListener('DOMContentLoaded', function() {
+        initHeaderSearchSuggestions();
+        initQuickPreview();
+    });
+
+    function initHeaderSearchSuggestions() {
         const searchInput = document.getElementById('headerSearchInput');
         const suggestionsContainer = document.getElementById('headerSearchSuggestions');
         const suggestionsList = document.getElementById('headerSuggestionsList');
+        if (!searchInput || !suggestionsContainer || !suggestionsList) return;
         
         let searchTimeout;
         
         searchInput.addEventListener('input', function() {
             const query = this.value.trim();
-            console.log('Search input changed:', query);
-            
-            // Clear previous timeout
             clearTimeout(searchTimeout);
-            
             if (query.length < 2) {
                 suggestionsContainer.style.display = 'none';
                 return;
             }
-            
-            // Debounce search
-            searchTimeout = setTimeout(() => {
-                console.log('Fetching suggestions for:', query);
-                fetchSuggestions(query);
-            }, 300);
+            searchTimeout = setTimeout(() => fetchSuggestions(query), 250);
         });
         
-        // Hide suggestions when clicking outside
         document.addEventListener('click', function(e) {
             if (!searchInput.contains(e.target) && !suggestionsContainer.contains(e.target)) {
                 suggestionsContainer.style.display = 'none';
             }
         });
         
-        // Show suggestions when focusing on input
         searchInput.addEventListener('focus', function() {
             if (this.value.trim().length >= 2) {
                 suggestionsContainer.style.display = 'block';
@@ -124,51 +172,128 @@
         });
         
         function fetchSuggestions(query) {
-            console.log('Fetching suggestions for query:', query);
-            fetch(`/api/search/suggestions?q=${encodeURIComponent(query)}&limit=6`)
-                .then(response => {
-                    console.log('Response status:', response.status);
-                    return response.json();
-                })
+            fetch(`/api/search/suggestions?q=${encodeURIComponent(query)}&limit=9`)
+                .then(response => response.json())
                 .then(data => {
-                    console.log('Suggestions data:', data);
-                    if (data.success) {
-                        displaySuggestions(data.suggestions);
+                    if (!data.success) {
+                        suggestionsContainer.style.display = 'none';
+                        return;
                     }
+                    const hasData = window.CineBox.renderSuggestions(
+                        data.groups,
+                        suggestionsList,
+                        (item) => selectHeaderSuggestion(item)
+                    );
+                    suggestionsContainer.style.display = hasData ? 'block' : 'none';
                 })
-                .catch(error => {
-                    console.error('Error fetching suggestions:', error);
+                .catch(() => {
+                    suggestionsContainer.style.display = 'none';
                 });
         }
         
-        function displaySuggestions(suggestions) {
-            console.log('Displaying suggestions:', suggestions);
-            if (suggestions.length === 0) {
-                suggestionsContainer.style.display = 'none';
-                return;
-            }
-            
-            suggestionsList.innerHTML = suggestions.map(suggestion => `
-                <div class="suggestion-item" onclick="selectHeaderSuggestion('${suggestion.title.replace(/'/g, "\\'")}')">
-                    <div class="suggestion-poster" style="background-image: url('${suggestion.poster}')"></div>
-                    <div class="suggestion-info">
-                        <div class="suggestion-title">${suggestion.title}</div>
-                        ${suggestion.year ? `<div class="suggestion-year">${suggestion.year}</div>` : ''}
-                    </div>
-                </div>
-            `).join('');
-            
-            console.log('Suggestions HTML:', suggestionsList.innerHTML);
-            suggestionsContainer.style.display = 'block';
-        }
-        
-        // Make selectHeaderSuggestion globally available
-        window.selectHeaderSuggestion = function(title) {
+        window.selectHeaderSuggestion = function(itemOrTitle) {
+            const title = typeof itemOrTitle === 'string' ? itemOrTitle : (itemOrTitle?.title || '');
+            if (!title) return;
             searchInput.value = title;
             suggestionsContainer.style.display = 'none';
-            searchInput.form.submit();
+            searchInput.form?.submit();
         };
-    });
+    }
+
+    const previewCache = {};
+    let activePreviewCard = null;
+
+    function initQuickPreview() {
+        const cards = document.querySelectorAll('[data-preview-id]');
+        cards.forEach(card => {
+            if (card.dataset.previewBound === 'true') return;
+            card.dataset.previewBound = 'true';
+            card.addEventListener('mouseenter', handlePreviewEnter);
+            card.addEventListener('mouseleave', handlePreviewLeave);
+        });
+        window.CineBox.refreshPreviewTargets = initQuickPreview;
+    }
+
+    function handlePreviewEnter(event) {
+        const card = event.currentTarget;
+        const movieId = card.dataset.previewId;
+        if (!movieId) return;
+        
+        if (activePreviewCard && activePreviewCard !== card) {
+            hidePreview(activePreviewCard);
+        }
+        activePreviewCard = card;
+        const overlay = ensurePreviewOverlay(card);
+        overlay.classList.add('active');
+        overlay.innerHTML = `<div class="preview-loading">Đang tải...</div>`;
+        
+        getPreviewData(movieId).then(data => {
+            if (activePreviewCard !== card) return;
+            renderPreviewContent(overlay, data);
+        }).catch(() => {
+            overlay.innerHTML = `<div class="preview-loading">Không có preview</div>`;
+        });
+    }
+
+    function handlePreviewLeave(event) {
+        const card = event.currentTarget;
+        hidePreview(card);
+        if (activePreviewCard === card) {
+            activePreviewCard = null;
+        }
+    }
+
+    function hidePreview(card) {
+        const overlay = card.querySelector('.preview-overlay');
+        if (overlay) {
+            overlay.classList.remove('active');
+            overlay.innerHTML = '';
+        }
+    }
+
+    function ensurePreviewOverlay(card) {
+        let overlay = card.querySelector('.preview-overlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.className = 'preview-overlay';
+            card.appendChild(overlay);
+        }
+        return overlay;
+    }
+
+    function getPreviewData(movieId) {
+        if (!previewCache[movieId]) {
+            previewCache[movieId] = fetch(`/api/movie-preview/${movieId}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (!data.success) throw new Error('No preview');
+                    return data.preview;
+                })
+                .catch(err => {
+                    delete previewCache[movieId];
+                    throw err;
+                });
+        }
+        return previewCache[movieId];
+    }
+
+    function renderPreviewContent(overlay, preview) {
+        overlay.innerHTML = '';
+        if (preview.embedUrl) {
+            const iframe = document.createElement('iframe');
+            iframe.src = preview.embedUrl;
+            iframe.allow = "autoplay; encrypted-media";
+            iframe.setAttribute('title', preview.title);
+            overlay.appendChild(iframe);
+        } else if (preview.fallbackImages && preview.fallbackImages.length) {
+            const imgDiv = document.createElement('div');
+            imgDiv.className = 'preview-fallback';
+            imgDiv.style.backgroundImage = `url('${preview.fallbackImages[0]}')`;
+            overlay.appendChild(imgDiv);
+        } else {
+            overlay.innerHTML = `<div class="preview-loading">Không có preview</div>`;
+        }
+    }
 
     // Avatar upload function
     function uploadAvatar(input) {

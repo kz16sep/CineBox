@@ -79,6 +79,35 @@ def extract_video_key_from_url(url):
     
     return None, None
 
+
+def build_highlight_snippet(text, keyword, radius=80):
+    """Return snippet of text around keyword with highlight span"""
+    if not text or not keyword:
+        return ""
+    
+    lowered = text.lower()
+    key_lower = keyword.lower()
+    index = lowered.find(key_lower)
+    
+    if index == -1:
+        snippet = text[: radius * 2]
+        return snippet.strip()
+    
+    start = max(0, index - radius)
+    end = min(len(text), index + len(keyword) + radius)
+    snippet = text[start:end].strip()
+    
+    # Add ellipsis if trimmed
+    if start > 0:
+        snippet = "..." + snippet
+    if end < len(text):
+        snippet = snippet + "..."
+    
+    # Highlight keyword
+    regex = re.compile(re.escape(keyword), re.IGNORECASE)
+    snippet = regex.sub(lambda m: f"<mark>{m.group(0)}</mark>", snippet)
+    return snippet
+
 def get_tmdb_videos(tmdb_id, is_trailer=False):
     """Get videos from TMDB API for a movie"""
     try:
@@ -1238,12 +1267,14 @@ def search_suggestions():
     limit = request.args.get('limit', 6, type=int)
     
     if not query or len(query) < 2:
-        return jsonify({"success": True, "suggestions": []})
+        return jsonify({"success": True, "groups": []})
     
     try:
+        like_query = f"%{query}%"
+        grouped_results = []
+        
         with current_app.db_engine.connect() as conn:
-            # Tìm kiếm phim theo title
-            movies = conn.execute(text("""
+            title_rows = conn.execute(text("""
                 SELECT TOP (:limit) movieId, title, posterUrl, releaseYear
                 FROM cine.Movie
                 WHERE title LIKE :query
@@ -1255,27 +1286,135 @@ def search_suggestions():
                     END,
                     releaseYear DESC
             """), {
-                "query": f"%{query}%",
-                "exact_query": f"{query}",
+                "query": like_query,
+                "exact_query": query,
                 "start_query": f"{query}%",
-                "limit": limit
+                "limit": max(4, min(8, limit))
             }).mappings().all()
             
-            suggestions = [
-                {
-                    "id": m["movieId"],
-                    "title": m["title"],
-                    "poster": get_poster_or_dummy(m.get("posterUrl"), m["title"]),
-                    "year": m.get("releaseYear")
-                }
-                for m in movies
-            ]
+            person_rows = conn.execute(text("""
+                SELECT TOP (:limit) movieId, title, posterUrl, releaseYear, director, cast
+                FROM cine.Movie
+                WHERE (director LIKE :query OR cast LIKE :query)
+                ORDER BY releaseYear DESC, title
+            """), {"query": like_query, "limit": max(4, limit)}).mappings().all()
             
-            return jsonify({"success": True, "suggestions": suggestions})
+            overview_rows = conn.execute(text("""
+                SELECT TOP (:limit) movieId, title, posterUrl, releaseYear, overview
+                FROM cine.Movie
+                WHERE overview LIKE :query
+                ORDER BY releaseYear DESC, title
+            """), {"query": like_query, "limit": max(4, limit)}).mappings().all()
+        
+        def make_title_item(row):
+            return {
+                "id": row["movieId"],
+                "title": row["title"],
+                "poster": get_poster_or_dummy(row.get("posterUrl"), row["title"]),
+                "year": row.get("releaseYear"),
+                "matchType": "title",
+                "subtitle": "Khớp tiêu đề"
+            }
+        
+        def make_person_item(row):
+            director = row.get("director") or ""
+            cast_text = row.get("cast") or ""
+            query_lower = query.lower()
+            subtitle = "Khớp diễn viên/đạo diễn"
+            if director and query_lower in director.lower():
+                subtitle = f"Đạo diễn: {director}"
+            elif cast_text:
+                cast_matches = [c.strip() for c in cast_text.split(",") if query_lower in c.lower()]
+                if cast_matches:
+                    subtitle = f"Diễn viên: {', '.join(cast_matches[:2])}"
+            return {
+                "id": row["movieId"],
+                "title": row["title"],
+                "poster": get_poster_or_dummy(row.get("posterUrl"), row["title"]),
+                "year": row.get("releaseYear"),
+                "matchType": "person",
+                "subtitle": subtitle
+            }
+        
+        def make_overview_item(row):
+            snippet = build_highlight_snippet(row.get("overview") or "", query)
+            return {
+                "id": row["movieId"],
+                "title": row["title"],
+                "poster": get_poster_or_dummy(row.get("posterUrl"), row["title"]),
+                "year": row.get("releaseYear"),
+                "matchType": "overview",
+                "subtitle": snippet
+            }
+        
+        raw_groups = [
+            {"type": "title", "label": "Theo tiêu đề", "items": [make_title_item(r) for r in title_rows]},
+            {"type": "person", "label": "Theo diễn viên / đạo diễn", "items": [make_person_item(r) for r in person_rows]},
+            {"type": "overview", "label": "Theo nội dung", "items": [make_overview_item(r) for r in overview_rows]},
+        ]
+        
+        non_empty = [g for g in raw_groups if g["items"]]
+        remaining_slots = max(limit, 6)
+        remaining_groups = len(non_empty)
+        final_groups = []
+        
+        for group in raw_groups:
+            if not group["items"]:
+                continue
+            slots_for_group = max(1, remaining_slots - max(0, remaining_groups - 1))
+            take = min(len(group["items"]), slots_for_group)
+            final_groups.append({
+                "type": group["type"],
+                "label": group["label"],
+                "items": group["items"][:take]
+            })
+            remaining_slots -= take
+            remaining_groups -= 1
+            if remaining_slots <= 0:
+                break
+        
+        return jsonify({"success": True, "groups": final_groups})
             
     except Exception as e:
         current_app.logger.error(f"Error in search suggestions: {e}")
-        return jsonify({"success": False, "suggestions": []})
+        return jsonify({"success": False, "groups": []})
+
+
+@main_bp.route("/api/movie-preview/<int:movie_id>")
+@login_required
+def movie_preview(movie_id):
+    """Return preview embed info for quick hover preview"""
+    try:
+        with current_app.db_engine.connect() as conn:
+            movie = conn.execute(text("""
+                SELECT movieId, title, trailerUrl, posterUrl, backdropUrl
+                FROM cine.Movie
+                WHERE movieId = :movie_id
+            """), {"movie_id": movie_id}).mappings().first()
+            
+            if not movie:
+                return jsonify({"success": False, "message": "Không tìm thấy phim"}), 404
+            
+            provider, video_key = extract_video_key_from_url(movie.get("trailerUrl"))
+            embed_url = None
+            if provider == 'youtube' and video_key:
+                embed_url = f"https://www.youtube.com/embed/{video_key}?autoplay=1&mute=1&controls=0&start=0&end=10&playsinline=1&rel=0&modestbranding=1"
+            elif provider == 'vimeo' and video_key:
+                embed_url = f"https://player.vimeo.com/video/{video_key}?autoplay=1&muted=1#t=0s"
+            
+            preview_payload = {
+                "title": movie["title"],
+                "embedUrl": embed_url,
+                "provider": provider,
+                "fallbackImages": [
+                    get_poster_or_dummy(movie.get("backdropUrl") or movie.get("posterUrl"), movie["title"]),
+                    get_poster_or_dummy(movie.get("posterUrl"), movie["title"])
+                ]
+            }
+            return jsonify({"success": True, "preview": preview_payload})
+    except Exception as e:
+        current_app.logger.error(f"Error fetching preview for movie {movie_id}: {e}", exc_info=True)
+        return jsonify({"success": False, "message": "Không thể tải preview"}), 500
 
 
 @main_bp.route("/search")
@@ -1284,6 +1423,10 @@ def search():
     """Search page"""
     query = request.args.get('q', '').strip()
     page = request.args.get('page', 1, type=int)
+    match_source = request.args.get('source', 'all')
+    allowed_sources = {'all', 'title', 'person', 'overview'}
+    if match_source not in allowed_sources:
+        match_source = 'all'
     per_page = 10
     
     if not query:
@@ -1291,59 +1434,159 @@ def search():
                              query=query, 
                              movies=[], 
                              pagination=None,
-                             total_results=0)
+                             total_results=0,
+                             match_source=match_source,
+                             source_counts={})
     
     try:
+        like_query = f"%{query}%"
+        params = {
+            "like_query": like_query,
+            "exact_match": query,
+            "start_match": f"{query}%"
+        }
+        
+        def build_condition(source_key):
+            if source_key == 'title':
+                return "m.title LIKE :like_query"
+            if source_key == 'person':
+                return "(m.director LIKE :like_query OR m.cast LIKE :like_query)"
+            if source_key == 'overview':
+                return "m.overview LIKE :like_query"
+            return "1=1"
+        
+        active_sources = []
+        if match_source == 'all':
+            active_sources = ['title', 'person', 'overview']
+        else:
+            active_sources = [match_source]
+        
+        where_clauses = [build_condition(src) for src in active_sources]
+        where_sql = " OR ".join([f"({clause})" for clause in where_clauses if clause != "1=1"]) or "1=1"
+        
         with current_app.db_engine.connect() as conn:
-            total_count = conn.execute(text("""
+            total_count = conn.execute(text(f"""
                 SELECT COUNT(*) 
-                FROM cine.Movie 
-                WHERE title LIKE :query
-            """), {"query": f"%{query}%"}).scalar()
+                FROM cine.Movie m
+                WHERE {where_sql}
+            """), params).scalar()
+            
+            source_counts = {"all": total_count}
+            source_counts["title"] = conn.execute(text("""
+                SELECT COUNT(*) FROM cine.Movie WHERE title LIKE :like_query
+            """), params).scalar()
+            source_counts["person"] = conn.execute(text("""
+                SELECT COUNT(*) FROM cine.Movie WHERE (director LIKE :like_query OR cast LIKE :like_query)
+            """), params).scalar()
+            source_counts["overview"] = conn.execute(text("""
+                SELECT COUNT(*) FROM cine.Movie WHERE overview LIKE :like_query
+            """), params).scalar()
             
             total_pages = (total_count + per_page - 1) // per_page
             offset = (page - 1) * per_page
             
-            movies = conn.execute(text("""
-                SELECT m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country,
-                       AVG(CAST(r.value AS FLOAT)) AS avgRating,
-                       COUNT(r.value) AS ratingCount,
-                       STUFF((
-                           SELECT ', ' + g.name
-                           FROM cine.MovieGenre mg
-                           JOIN cine.Genre g ON mg.genreId = g.genreId
-                           WHERE mg.movieId = m.movieId
-                           FOR XML PATH('')
-                       ), 1, 2, '') AS genres
-                FROM (
-                    SELECT movieId, title, posterUrl, backdropUrl, overview, releaseYear, country,
-                           ROW_NUMBER() OVER (
-                               ORDER BY 
-                                   CASE 
-                                       WHEN title LIKE :exact_query THEN 1
-                                       WHEN title LIKE :start_query THEN 2
-                                       ELSE 3
-                                   END,
-                                   title
-                           ) as rn
-                    FROM cine.Movie 
-                    WHERE title LIKE :query
-                ) t
-                JOIN cine.Movie m ON t.movieId = m.movieId
-                LEFT JOIN cine.Rating r ON m.movieId = r.movieId
-                WHERE t.rn > :offset AND t.rn <= :offset + :per_page
-                GROUP BY m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.releaseYear, m.country, t.rn
-                ORDER BY t.rn
+            movies = conn.execute(text(f"""
+                WITH FilteredMovies AS (
+                    SELECT 
+                        m.movieId,
+                        m.title,
+                        m.posterUrl,
+                        m.backdropUrl,
+                        m.overview,
+                        m.releaseYear,
+                        m.country,
+                        m.director,
+                        m.cast,
+                        CASE 
+                            WHEN m.title LIKE :exact_match THEN 'title'
+                            WHEN m.title LIKE :start_match THEN 'title'
+                            WHEN m.title LIKE :like_query THEN 'title'
+                            WHEN (m.director LIKE :like_query OR m.cast LIKE :like_query) THEN 'person'
+                            WHEN m.overview LIKE :like_query THEN 'overview'
+                            ELSE 'title'
+                        END AS matchType,
+                        CASE 
+                            WHEN m.title LIKE :exact_match THEN 1
+                            WHEN m.title LIKE :start_match THEN 2
+                            WHEN m.title LIKE :like_query THEN 3
+                            WHEN (m.director LIKE :like_query OR m.cast LIKE :like_query) THEN 4
+                            WHEN m.overview LIKE :like_query THEN 5
+                            ELSE 6
+                        END AS matchPriority,
+                        ROW_NUMBER() OVER (
+                            ORDER BY 
+                                CASE 
+                                    WHEN m.title LIKE :exact_match THEN 1
+                                    WHEN m.title LIKE :start_match THEN 2
+                                    WHEN m.title LIKE :like_query THEN 3
+                                    WHEN (m.director LIKE :like_query OR m.cast LIKE :like_query) THEN 4
+                                    WHEN m.overview LIKE :like_query THEN 5
+                                    ELSE 6
+                                END,
+                                m.title
+                        ) as rn
+                    FROM cine.Movie m
+                    WHERE {where_sql}
+                )
+                SELECT 
+                    fm.movieId,
+                    fm.title,
+                    fm.posterUrl,
+                    fm.backdropUrl,
+                    fm.overview,
+                    fm.releaseYear,
+                    fm.country,
+                    fm.director,
+                    fm.cast,
+                    fm.matchType,
+                    fm.matchPriority,
+                    AVG(CAST(r.value AS FLOAT)) AS avgRating,
+                    COUNT(r.value) AS ratingCount,
+                    STUFF((
+                        SELECT ', ' + g.name
+                        FROM cine.MovieGenre mg
+                        JOIN cine.Genre g ON mg.genreId = g.genreId
+                        WHERE mg.movieId = fm.movieId
+                        FOR XML PATH('')
+                    ), 1, 2, '') AS genres
+                FROM FilteredMovies fm
+                LEFT JOIN cine.Rating r ON fm.movieId = r.movieId
+                WHERE fm.rn > :offset AND fm.rn <= :offset + :per_page
+                GROUP BY fm.movieId, fm.title, fm.posterUrl, fm.backdropUrl, fm.overview, fm.releaseYear, fm.country, fm.director, fm.cast, fm.matchType, fm.matchPriority, fm.rn
+                ORDER BY fm.matchPriority, fm.rn
             """), {
-                "query": f"%{query}%",
-                "exact_query": f"{query}%",
-                "start_query": f"{query}%",
+                **params,
                 "offset": offset,
                 "per_page": per_page
             }).mappings().all()
             
-            movie_list = [
-                {
+            movie_list = []
+            for r in movies:
+                match_type = r.get("matchType") or 'title'
+                director = r.get("director") or ""
+                cast_text = r.get("cast") or ""
+                snippet = ""
+                match_reason = "Khớp tiêu đề"
+                
+                if match_type == 'person':
+                    query_lower = query.lower()
+                    if director and query_lower in director.lower():
+                        match_reason = f"Đạo diễn: {director}"
+                    elif cast_text:
+                        cast_matches = [c.strip() for c in cast_text.split(",") if query_lower in c.lower()]
+                        if cast_matches:
+                            match_reason = f"Diễn viên: {', '.join(cast_matches[:2])}"
+                        else:
+                            match_reason = "Khớp diễn viên/đạo diễn"
+                    else:
+                        match_reason = "Khớp diễn viên/đạo diễn"
+                elif match_type == 'overview':
+                    snippet = build_highlight_snippet(r.get("overview") or "", query)
+                    match_reason = "Khớp nội dung"
+                else:
+                    match_reason = "Khớp tiêu đề"
+                
+                movie_list.append({
                     "id": r["movieId"],
                     "title": r["title"],
                     "poster": get_poster_or_dummy(r.get("posterUrl"), r["title"]),
@@ -1353,10 +1596,13 @@ def search():
                     "country": r.get("country"),
                     "avgRating": round(float(r["avgRating"]), 2) if r["avgRating"] else 0.0,
                     "ratingCount": int(r["ratingCount"]) if r["ratingCount"] else 0,
-                    "genres": r.get("genres", "").split(", ") if r.get("genres") else []
-                }
-                for r in movies
-            ]
+                    "genres": r.get("genres", "").split(", ") if r.get("genres") else [],
+                    "matchType": match_type,
+                    "director": director,
+                    "cast": cast_text,
+                    "snippet": snippet,
+                    "matchReason": match_reason
+                })
             
             pagination = {
                 "page": page,
@@ -1373,7 +1619,9 @@ def search():
                                  query=query, 
                                  movies=movie_list, 
                                  pagination=pagination,
-                                 total_results=total_count)
+                                 total_results=total_count,
+                                 match_source=match_source,
+                                 source_counts=source_counts)
             
     except Exception as e:
         current_app.logger.error(f"Error in search: {e}")
@@ -1381,7 +1629,9 @@ def search():
                              query=query, 
                              movies=[], 
                              pagination=None,
-                             total_results=0)
+                             total_results=0,
+                             match_source=match_source,
+                             source_counts={})
 
 
 @main_bp.route("/the-loai/<string:genre_slug>")

@@ -50,53 +50,79 @@
 
   <!-- Search Results -->
   {% if query %}
-    {% if movies %}
-      <div class="search-results">
-        <div class="movies-grid">
-          {% for movie in movies %}
-          <div class="card">
-            <a href="{{ url_for('main.detail', movie_id=movie.id) }}" class="card-link">
-              <div class="poster" style="background-image:url('{{ movie.poster }}')"></div>
-              <div class="card-content">
-                <div class="card-title">{{ movie.title }}</div>
-                <div class="card-meta">
-                  {% if movie.year %}<span class="year">{{ movie.year }}</span>{% endif %}
-                  {% if movie.country %}<span class="country">{{ movie.country }}</span>{% endif %}
-                </div>
-                {% if movie.genres %}<div class="card-genres">{{ movie.genres|join(', ') }}</div>{% endif %}
-                <div class="movie-rating">
-                  <span class="rating-stars">⭐ {{ "%.1f"|format(movie.avgRating) }}</span>
-                  <!-- <span class="rating-count">({{ movie.ratingCount }})</span> -->
-                </div>
-              </div>
-            </a>
-          </div>
+    {% set source_labels = {'all': 'Tất cả', 'title': 'Theo tiêu đề', 'person': 'Diễn viên / đạo diễn', 'overview': 'Theo nội dung'} %}
+    <div class="search-body">
+      <aside class="search-sidebar">
+        <div class="sidebar-card">
+          <h3>🔎 Nguồn khớp</h3>
+          {% for key, label in source_labels.items() %}
+          <a href="{{ url_for('main.search', q=query, source=key) }}" class="source-chip {% if match_source == key %}active{% endif %}">
+            <span>{{ label }}</span>
+            <span class="chip-count">{{ source_counts.get(key, 0) if source_counts else 0 }}</span>
+          </a>
           {% endfor %}
         </div>
-        
-        <!-- Pagination -->
-        {% if pagination and pagination.pages > 1 %}
-        <div class="pagination">
-          <div id="paginationControls" class="pagination-controls"></div>
+        <div class="sidebar-card">
+          <h3>📊 Thống kê nhanh</h3>
+          <ul class="sidebar-stats">
+            <li><span>Phim phù hợp</span><strong>{{ total_results }}</strong></li>
+            <li><span>Bộ lọc</span><strong>{{ source_labels.get(match_source, 'Tất cả') }}</strong></li>
+          </ul>
+        </div>
+      </aside>
+      <div class="search-main">
+        {% if movies %}
+        <div class="search-results">
+          <div class="movies-grid">
+            {% for movie in movies %}
+            <div class="card" data-preview-id="{{ movie.id }}">
+              <a href="{{ url_for('main.detail', movie_id=movie.id) }}" class="card-link">
+                <div class="poster" style="background-image:url('{{ movie.poster }}')"></div>
+                <div class="card-content">
+                  <div class="card-title">{{ movie.title }}</div>
+                  <div class="card-meta">
+                    {% if movie.year %}<span class="year">{{ movie.year }}</span>{% endif %}
+                    {% if movie.country %}<span class="country">{{ movie.country }}</span>{% endif %}
+                  </div>
+                  {% if movie.genres %}<div class="card-genres">{{ movie.genres|join(', ') }}</div>{% endif %}
+                  <div class="match-info">
+                    <span class="match-badge match-{{ movie.matchType }}">{{ movie.matchReason }}</span>
+                  </div>
+                  {% if movie.matchType == 'overview' and movie.snippet %}
+                  <div class="match-snippet">{{ movie.snippet|safe }}</div>
+                  {% endif %}
+                  <div class="movie-rating">
+                    <span class="rating-stars">⭐ {{ "%.1f"|format(movie.avgRating) }}</span>
+                  </div>
+                </div>
+              </a>
+            </div>
+            {% endfor %}
+          </div>
+          {% if pagination and pagination.pages > 1 %}
+          <div class="pagination">
+            <div id="paginationControls" class="pagination-controls"></div>
+          </div>
+          {% endif %}
+        </div>
+        {% else %}
+        <div class="no-results">
+          <div class="no-results-icon">🔍</div>
+          <h3>Không tìm thấy kết quả</h3>
+          <p>Hãy thử với từ khóa khác hoặc kiểm tra chính tả</p>
+          <div class="search-tips">
+            <h4>💡 Gợi ý tìm kiếm:</h4>
+            <ul>
+              <li>Sử dụng từ khóa ngắn gọn</li>
+              <li>Thử tìm theo tên diễn viên</li>
+              <li>Kiểm tra chính tả</li>
+              <li>Sử dụng từ khóa tiếng Anh</li>
+            </ul>
+          </div>
         </div>
         {% endif %}
       </div>
-    {% else %}
-      <div class="no-results">
-        <div class="no-results-icon">🔍</div>
-        <h3>Không tìm thấy kết quả</h3>
-        <p>Hãy thử với từ khóa khác hoặc kiểm tra chính tả</p>
-        <div class="search-tips">
-          <h4>💡 Gợi ý tìm kiếm:</h4>
-          <ul>
-            <li>Sử dụng từ khóa ngắn gọn</li>
-            <li>Thử tìm theo tên diễn viên</li>
-            <li>Kiểm tra chính tả</li>
-            <li>Sử dụng từ khóa tiếng Anh</li>
-          </ul>
-        </div>
-      </div>
-    {% endif %}
+    </div>
   {% else %}
     <div class="search-placeholder">
       <div class="search-placeholder-icon">🎬</div>
@@ -132,6 +158,93 @@
 .search-form-container {
   position: relative;
   margin-bottom: 40px;
+}
+
+.search-body {
+  display: flex;
+  gap: 24px;
+  margin-top: 10px;
+}
+
+.search-sidebar {
+  width: 260px;
+}
+
+.search-main {
+  flex: 1;
+}
+
+.sidebar-card {
+  background: #1a1f2e;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 18px;
+  margin-bottom: 20px;
+}
+
+.sidebar-card h3 {
+  margin: 0 0 12px;
+  color: #fff;
+  font-size: 1.05rem;
+}
+
+.source-chip {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  margin-bottom: 10px;
+  text-decoration: none;
+  color: #d6dcff;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.source-chip:last-child {
+  margin-bottom: 0;
+}
+
+.source-chip.active {
+  background: #e50914;
+  border-color: #e50914;
+  color: #fff;
+  box-shadow: 0 8px 20px rgba(229, 9, 20, 0.35);
+}
+
+.source-chip:not(.active):hover {
+  border-color: rgba(229, 9, 20, 0.5);
+}
+
+.chip-count {
+  background: rgba(255, 255, 255, 0.15);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+}
+
+.sidebar-stats {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.sidebar-stats li {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+  color: #cfd5f5;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.sidebar-stats li:last-child {
+  border-bottom: none;
+}
+
+.sidebar-stats strong {
+  color: #fff;
 }
 
 .search-form {
@@ -241,6 +354,50 @@
   margin-top: 30px;
 }
 
+.match-info {
+  margin-top: 10px;
+}
+
+.match-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.match-badge.match-title {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+}
+
+.match-badge.match-person {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+}
+
+.match-badge.match-overview {
+  background: rgba(234, 179, 8, 0.15);
+  color: #facc15;
+}
+
+.match-snippet {
+  margin-top: 6px;
+  font-size: 0.85rem;
+  color: #dbe4ff;
+  line-height: 1.4;
+}
+
+.match-snippet mark {
+  background: rgba(229, 9, 20, 0.25);
+  color: #fff;
+  padding: 0 2px;
+  border-radius: 3px;
+}
+
 .movies-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -329,6 +486,14 @@
 @media (max-width: 768px) {
   .search-container {
     padding: 15px;
+  }
+  
+  .search-body {
+    flex-direction: column;
+  }
+  
+  .search-sidebar {
+    width: 100%;
   }
   
   .search-header h1 {
@@ -528,6 +693,7 @@
 </style>
 
 <script>
+window.CineBox = window.CineBox || {};
 // Pagination functions (same as all_movies.html)
 function generatePaginationNumbers(current, total) {
   if (total <= 1) return [];
@@ -579,15 +745,16 @@ function generatePaginationNumbers(current, total) {
   return numbers;
 }
 
-function renderPagination(page, total, query, baseUrl) {
+function renderPagination(page, total, query, baseUrl, currentSource) {
   const container = document.getElementById('paginationControls');
   if (!container) return;
+  const sourceParam = currentSource ? `&source=${encodeURIComponent(currentSource)}` : '';
   
   container.innerHTML = '';
   
   // Previous button
   const prevBtn = document.createElement('a');
-  prevBtn.href = page > 1 ? `${baseUrl}?q=${encodeURIComponent(query)}&page=${page - 1}` : '#';
+  prevBtn.href = page > 1 ? `${baseUrl}?q=${encodeURIComponent(query)}&page=${page - 1}${sourceParam}` : '#';
   prevBtn.className = 'btn-pagination btn-pagination-icon' + (page <= 1 ? ' disabled' : '');
   prevBtn.innerHTML = '←';
   if (page <= 1) {
@@ -606,7 +773,7 @@ function renderPagination(page, total, query, baseUrl) {
       container.appendChild(ellipsis);
     } else {
       const pageBtn = document.createElement('a');
-      pageBtn.href = `${baseUrl}?q=${encodeURIComponent(query)}&page=${num}`;
+      pageBtn.href = `${baseUrl}?q=${encodeURIComponent(query)}&page=${num}${sourceParam}`;
       pageBtn.className = 'btn-pagination' + (num === page ? ' active' : '');
       pageBtn.textContent = num;
       container.appendChild(pageBtn);
@@ -615,7 +782,7 @@ function renderPagination(page, total, query, baseUrl) {
   
   // Next button
   const nextBtn = document.createElement('a');
-  nextBtn.href = page < total ? `${baseUrl}?q=${encodeURIComponent(query)}&page=${page + 1}` : '#';
+  nextBtn.href = page < total ? `${baseUrl}?q=${encodeURIComponent(query)}&page=${page + 1}${sourceParam}` : '#';
   nextBtn.className = 'btn-pagination btn-pagination-icon' + (page >= total ? ' disabled' : '');
   nextBtn.innerHTML = '→';
   if (page >= total) {
@@ -629,7 +796,7 @@ function renderPagination(page, total, query, baseUrl) {
 {% if pagination and pagination.pages > 1 %}
 document.addEventListener('DOMContentLoaded', function() {
   const baseUrl = '{{ url_for("main.search") }}';
-  renderPagination({{ pagination.page }}, {{ pagination.pages }}, {{ query|tojson }}, baseUrl);
+  renderPagination({{ pagination.page }}, {{ pagination.pages }}, {{ query|tojson }}, baseUrl, {{ match_source|tojson }});
 });
 {% endif %}
 
@@ -676,36 +843,26 @@ document.addEventListener('DOMContentLoaded', function() {
         fetch(`/api/search/suggestions?q=${encodeURIComponent(query)}&limit=8`)
             .then(response => response.json())
             .then(data => {
-                if (data.success) {
-                    displaySuggestions(data.suggestions);
+                if (!data.success) {
+                    suggestionsContainer.style.display = 'none';
+                    return;
                 }
+                const hasData = window.CineBox.renderSuggestions(
+                    data.groups,
+                    suggestionsList,
+                    (item) => selectSuggestion(item)
+                );
+                suggestionsContainer.style.display = hasData ? 'block' : 'none';
             })
             .catch(error => {
                 console.error('Error fetching suggestions:', error);
+                suggestionsContainer.style.display = 'none';
             });
     }
     
-    function displaySuggestions(suggestions) {
-        if (suggestions.length === 0) {
-            suggestionsContainer.style.display = 'none';
-            return;
-        }
-        
-        suggestionsList.innerHTML = suggestions.map(suggestion => `
-            <div class="suggestion-item" onclick="selectSuggestion('${suggestion.title.replace(/'/g, "\\'")}')">
-                <div class="suggestion-poster" style="background-image: url('${suggestion.poster}')"></div>
-                <div class="suggestion-info">
-                    <div class="suggestion-title">${suggestion.title}</div>
-                    ${suggestion.year ? `<div class="suggestion-year">${suggestion.year}</div>` : ''}
-                </div>
-            </div>
-        `).join('');
-        
-        suggestionsContainer.style.display = 'block';
-    }
-    
-    // Make selectSuggestion globally available
-    window.selectSuggestion = function(title) {
+    window.selectSuggestion = function(itemOrTitle) {
+        const title = typeof itemOrTitle === 'string' ? itemOrTitle : (itemOrTitle?.title || '');
+        if (!title) return;
         searchInput.value = title;
         suggestionsContainer.style.display = 'none';
         searchInput.form.submit();
