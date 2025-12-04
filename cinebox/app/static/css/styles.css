@@ -40,6 +40,9 @@ nav .btn{margin-left:8px}
 [data-preview-id]{
   position:relative;
   overflow:hidden;
+  touch-action:pan-y;
+  -webkit-user-select:none;
+  user-select:none;
 }
 
 .preview-overlay{
@@ -50,6 +53,7 @@ nav .btn{margin-left:8px}
   align-items:center;
   justify-content:center;
   z-index:5;
+  pointer-events:none;
 }
 
 .preview-overlay.active{

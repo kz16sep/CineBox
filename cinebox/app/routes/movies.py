@@ -3,7 +3,6 @@ Movie browsing routes: home, detail, watch, search, genre, all movies
 """
 
 import time
-import random
 import threading
 import re
 import requests
@@ -12,10 +11,10 @@ from sqlalchemy import text
 from . import main_bp
 from .decorators import login_required
 from .common import (
-    get_poster_or_dummy, 
-    latest_movies_cache, 
-    carousel_movies_cache, 
-    trending_cache, 
+    get_poster_or_dummy,
+    latest_movies_cache,
+    carousel_movies_cache,
+    trending_cache,
     TRENDING_TIME_WINDOW_DAYS,
     content_recommender,
     enhanced_cf_recommender,
@@ -34,6 +33,10 @@ if _cinebox_dir not in sys.path:
 from app.helpers.movie_query_helpers import get_movie_rating_stats, get_movies_genres
 from app.helpers.recommendation_helpers import hybrid_recommendations
 from app.helpers.sql_helpers import validate_limit, safe_top_clause
+
+HOME_SECTION_LIMIT = 12
+CAROUSEL_LIMIT = 6
+HOME_CACHE_REFRESH_INTERVAL = 300
 
 # TMDB API configuration
 TMDB_API_KEY = "410065906e9552ec1e24efe8c5393791"
@@ -210,21 +213,23 @@ def home():
     # Lấy parameters
     page = request.args.get('page', 1, type=int)
     per_page = 10
-    HOME_SECTION_LIMIT = 12
     genre_filter = request.args.get('genre', '', type=str)
     search_query = request.args.get('q', '', type=str)
     sort_by = request.args.get('sort', 'newest', type=str)
     year_filter = request.args.get('year', '', type=str)
     
     # Latest movies với caching
-    cache_key = f"latest_{genre_filter}"
+    cache_key = f"latest_{genre_filter or 'all'}"
     current_time = time.time()
+    latest_movies = []
     
-    if (latest_movies_cache.get('data') and 
-        latest_movies_cache.get('key') == cache_key and
-        latest_movies_cache.get('timestamp') and 
-        latest_movies_cache.get('ttl') and
-        current_time - latest_movies_cache['timestamp'] < latest_movies_cache['ttl']):
+    if (
+        latest_movies_cache.get('data')
+        and latest_movies_cache.get('key') == cache_key
+        and latest_movies_cache.get('timestamp')
+        and latest_movies_cache.get('ttl')
+        and current_time - latest_movies_cache['timestamp'] < latest_movies_cache['ttl']
+    ):
         latest_movies = latest_movies_cache['data']
     else:
         try:
@@ -232,7 +237,7 @@ def home():
                 if genre_filter:
                     rows = conn.execute(text(f"""
                         SELECT DISTINCT TOP {HOME_SECTION_LIMIT}
-                            m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt, m.viewCount
+                            m.movieId, m.title, m.posterUrl, m.backdropUrl, m.overview, m.createdAt, m.viewCount, m.releaseYear, m.country
                         FROM cine.Movie m
                         JOIN cine.MovieGenre mg ON m.movieId = mg.movieId
                         JOIN cine.Genre g ON mg.genreId = g.genreId
@@ -242,12 +247,10 @@ def home():
                 else:
                     rows = conn.execute(text(f"""
                         SELECT TOP {HOME_SECTION_LIMIT} 
-                            movieId, title, posterUrl, backdropUrl, overview, createdAt, viewCount
+                            movieId, title, posterUrl, backdropUrl, overview, createdAt, viewCount, releaseYear, country
                         FROM cine.Movie
                         ORDER BY createdAt DESC, movieId DESC
                     """)).mappings().all()
-                
-                movie_ids = [r["movieId"] for r in rows]
             
             latest_movies = [
                 {
@@ -261,6 +264,8 @@ def home():
                     "ratingCount": 0,
                     "viewCount": r.get("viewCount", 0) or 0,
                     "genres": "",
+                    "releaseYear": r.get("releaseYear"),
+                    "country": r.get("country"),
                 }
                 for r in rows
             ]
@@ -269,6 +274,11 @@ def home():
             latest_movies_cache['data'] = latest_movies
             latest_movies_cache['key'] = cache_key
             latest_movies_cache['timestamp'] = current_time
+            
+            # Keep carousel cache in sync for default home
+            if not genre_filter:
+                carousel_movies_cache['data'] = latest_movies[:CAROUSEL_LIMIT]
+                carousel_movies_cache['timestamp'] = current_time
         except Exception as e:
             current_app.logger.error(f"Error loading latest movies: {e}", exc_info=True)
             latest_movies = []
@@ -280,16 +290,20 @@ def home():
     else:
         current_app.logger.warning("No latest movies found!")
     
-    # Carousel movies
-    if (carousel_movies_cache.get('data') and 
-        carousel_movies_cache.get('timestamp') and 
-        current_time - carousel_movies_cache['timestamp'] < carousel_movies_cache['ttl']):
+    # Carousel movies reuse latest data when possible
+    if not genre_filter and latest_movies:
+        carousel_movies = latest_movies[:CAROUSEL_LIMIT]
+    elif (
+        carousel_movies_cache.get('data')
+        and carousel_movies_cache.get('timestamp')
+        and current_time - carousel_movies_cache['timestamp'] < carousel_movies_cache['ttl']
+    ):
         carousel_movies = carousel_movies_cache['data']
     else:
         try:
             with current_app.db_engine.connect() as conn:
-                rows = conn.execute(text("""
-                    SELECT TOP 6 
+                rows = conn.execute(text(f"""
+                    SELECT TOP {CAROUSEL_LIMIT} 
                         movieId, title, posterUrl, backdropUrl, overview
                     FROM cine.Movie
                     ORDER BY createdAt DESC, movieId DESC
@@ -326,40 +340,16 @@ def home():
     year_list = []
     genre_list = []
     
-    # Nếu không có filter, load 12 phim mới nhất
+    # Nếu không có filter, tái sử dụng dữ liệu phim mới nhất
     if not genre_filter and not search_query and not year_filter:
-        try:
-            with current_app.db_engine.connect() as conn:
-                rows = conn.execute(text(f"""
-                    SELECT TOP {HOME_SECTION_LIMIT} 
-                        movieId, title, posterUrl, backdropUrl, overview, releaseYear, country, viewCount
-                    FROM cine.Movie
-                    ORDER BY createdAt DESC, movieId DESC
-                """)).mappings().all()
-                
-                movie_ids = [r["movieId"] for r in rows]
-                rating_stats = get_movie_rating_stats(movie_ids, current_app.db_engine)
-                genres_dict = get_movies_genres(movie_ids, current_app.db_engine)
-                
-                all_movies = [
-                    {
-                        "id": r["movieId"],
-                        "title": r["title"],
-                        "poster": get_poster_or_dummy(r.get("posterUrl"), r["title"]),
-                        "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
-                        "description": (r.get("overview") or "")[:160],
-                        "year": r.get("releaseYear"),
-                        "country": r.get("country"),
-                        "avgRating": rating_stats.get(r["movieId"], {}).get("avgRating", 0.0),
-                        "ratingCount": rating_stats.get(r["movieId"], {}).get("ratingCount", 0),
-                        "viewCount": r.get("viewCount", 0) or 0,
-                        "genres": genres_dict.get(r["movieId"], "").split(", ") if genres_dict.get(r["movieId"]) else []
-                    }
-                    for r in rows
-                ]
-        except Exception as e:
-            current_app.logger.error(f"Error loading all movies preview: {e}", exc_info=True)
-            all_movies = []
+        all_movies = [
+            {
+                **movie,
+                "year": movie.get("releaseYear"),
+                "country": movie.get("country"),
+            }
+            for movie in latest_movies
+        ]
     # Nếu có filter hoặc search, load đầy đủ với pagination
     elif genre_filter or search_query or year_filter:
         try:
@@ -518,286 +508,10 @@ def home():
             year_list = []
             genre_list = []
     
-    # Personal recommendations (gợi ý cá nhân)
-    user_id = session.get("user_id")
     personal_recommendations = []
+    # Các section nặng sẽ được lazy load qua API
     trending_movies = []
     recent_watched = []
-    
-    if user_id:
-        try:
-            with current_app.db_engine.connect() as conn:
-                # Kiểm tra số interactions của user
-                interaction_counts = conn.execute(text("""
-                    SELECT 
-                        (SELECT COUNT(*) FROM cine.Rating WHERE userId = :user_id) as rating_count,
-                        (SELECT COUNT(*) FROM cine.ViewHistory WHERE userId = :user_id) as view_count
-                """), {"user_id": user_id}).mappings().first()
-                
-                total_interactions = (interaction_counts.rating_count or 0) + (interaction_counts.view_count or 0)
-                
-                # Progressive Cold Start weights
-                if total_interactions < 5:
-                    cold_start_weight = 1.0
-                    cf_cb_weight = 0.0
-                elif total_interactions < 11:
-                    cold_start_weight = 0.3
-                    cf_cb_weight = 0.7
-                elif total_interactions < 21:
-                    cold_start_weight = 0.2
-                    cf_cb_weight = 0.8
-                elif total_interactions < 51:
-                    cold_start_weight = 0.1
-                    cf_cb_weight = 0.9
-                else:
-                    cold_start_weight = 0.05
-                    cf_cb_weight = 0.95
-                
-                # Lấy cold start recommendations
-                cold_start_recs = []
-                if cold_start_weight > 0:
-                    cold_start_recs = get_cold_start_recommendations(user_id, conn)
-                    for rec in cold_start_recs:
-                        rec['algo'] = 'cold_start'
-                        rec['cf_score'] = 0.0
-                        rec['cb_score'] = 0.0
-                        rec['hybrid_score'] = rec.get('score', 0.0)
-                
-                # Lấy CF/CB recommendations từ database
-                cf_cb_recs = []
-                if cf_cb_weight > 0:
-                    personal_rows = conn.execute(text(f"""
-                        SELECT TOP {HOME_SECTION_LIMIT} 
-                            m.movieId, m.title, m.posterUrl, m.releaseYear, m.country,
-                            pr.score, pr.rank, pr.algo
-                        FROM cine.PersonalRecommendation pr
-                        JOIN cine.Movie m ON m.movieId = pr.movieId
-                        WHERE pr.userId = :user_id 
-                            AND pr.expiresAt > GETUTCDATE()
-                            AND NOT EXISTS (
-                                SELECT 1 FROM cine.ViewHistory vh 
-                                WHERE vh.movieId = pr.movieId AND vh.userId = :user_id
-                            )
-                        ORDER BY 
-                            CASE WHEN pr.algo = 'hybrid' THEN 0 ELSE 1 END,
-                            pr.rank
-                    """), {"user_id": user_id}).mappings().all()
-                    
-                    if personal_rows:
-                        for row in personal_rows:
-                            cf_cb_recs.append({
-                                "id": row["movieId"],
-                                "title": row["title"],
-                                "poster": get_poster_or_dummy(row.get("posterUrl"), row["title"]),
-                                "year": row.get("releaseYear"),
-                                "country": row.get("country"),
-                                "score": round(float(row["score"]), 4),
-                                "rank": row["rank"],
-                                "genres": "",
-                                "avgRating": 0.0,
-                                "ratingCount": 0,
-                                "algo": row["algo"] or "hybrid",
-                                "hybrid_score": round(float(row["score"]), 4)
-                            })
-                    else:
-                        # Fallback: rating-based recommendations
-                        cf_cb_recs = create_rating_based_recommendations(user_id, latest_movies[:HOME_SECTION_LIMIT], current_app.db_engine)
-                
-                # Merge cold start và CF/CB
-                if cold_start_weight > 0 and cold_start_recs:
-                    if cf_cb_weight > 0 and cf_cb_recs:
-                        high_quality_cf_cb = [
-                            rec for rec in cf_cb_recs 
-                            if rec.get('hybrid_score', 0) > 0.3 
-                            or rec.get('cf_score', 0) > 0 
-                            or rec.get('cb_score', 0) > 0
-                        ]
-                        
-                        if len(high_quality_cf_cb) >= 5:
-                            personal_recommendations = cf_cb_recs[:HOME_SECTION_LIMIT]
-                        else:
-                            num_cold_start = max(1, int(HOME_SECTION_LIMIT * cold_start_weight))
-                            num_cf_cb = HOME_SECTION_LIMIT - num_cold_start
-                            selected_cold_start = cold_start_recs[:num_cold_start]
-                            selected_cf_cb = cf_cb_recs[:num_cf_cb] if len(cf_cb_recs) >= num_cf_cb else cf_cb_recs
-                            personal_recommendations = selected_cold_start + selected_cf_cb
-                            random.shuffle(personal_recommendations)
-                            personal_recommendations = personal_recommendations[:HOME_SECTION_LIMIT]
-                    else:
-                        personal_recommendations = cold_start_recs[:HOME_SECTION_LIMIT]
-                elif cf_cb_weight > 0 and cf_cb_recs:
-                    personal_recommendations = cf_cb_recs[:HOME_SECTION_LIMIT]
-                
-                # Trending movies
-                if (trending_cache.get('data') and 
-                    trending_cache.get('timestamp') and 
-                    current_time - trending_cache['timestamp'] < trending_cache['ttl']):
-                    trending_movies = trending_cache['data']
-                else:
-                    trending_rows = conn.execute(text(f"""
-                        WITH view_stats AS (
-                            SELECT 
-                                movieId,
-                                COUNT(DISTINCT historyId) as view_count_recent,
-                                COUNT(DISTINCT userId) as unique_viewers_recent
-                            FROM cine.ViewHistory
-                            WHERE startedAt >= DATEADD(day, -{TRENDING_TIME_WINDOW_DAYS}, GETDATE())
-                            GROUP BY movieId
-                        ),
-                        rating_stats AS (
-                            SELECT 
-                                movieId,
-                                COUNT(DISTINCT userId) as rating_count_recent,
-                                AVG(CAST(value AS FLOAT)) as avg_rating_recent
-                            FROM cine.Rating
-                            WHERE ratedAt >= DATEADD(day, -{TRENDING_TIME_WINDOW_DAYS}, GETDATE())
-                            GROUP BY movieId
-                        )
-                        SELECT TOP {HOME_SECTION_LIMIT}
-                            m.movieId, 
-                            m.title, 
-                            m.posterUrl, 
-                            m.releaseYear, 
-                            m.country,
-                            ISNULL(vs.view_count_recent, 0) as view_count_recent,
-                            ISNULL(vs.unique_viewers_recent, 0) as unique_viewers_recent,
-                            ISNULL(rs.rating_count_recent, 0) as rating_count_recent,
-                            ISNULL(rs.avg_rating_recent, 0) as avg_rating_recent,
-                            ISNULL(vs.view_count_recent, 0) as trending_score
-                        FROM cine.Movie m
-                        LEFT JOIN view_stats vs ON m.movieId = vs.movieId
-                        LEFT JOIN rating_stats rs ON m.movieId = rs.movieId
-                        WHERE vs.view_count_recent > 0
-                        ORDER BY 
-                            trending_score DESC,
-                            ISNULL(rs.avg_rating_recent, 0) DESC
-                    """)).mappings().all()
-                    
-                    trending_movies = []
-                    for row in trending_rows:
-                        trending_movies.append({
-                            "id": row.movieId,
-                            "title": row.title,
-                            "poster": get_poster_or_dummy(row.posterUrl, row.title),
-                            "releaseYear": row.releaseYear,
-                            "country": row.country,
-                            "ratingCount": row.rating_count_recent or 0,
-                            "avgRating": float(row.avg_rating_recent) if row.avg_rating_recent else 0.0,
-                            "viewCount": row.view_count_recent or 0,
-                            "uniqueViewers": row.unique_viewers_recent or 0,
-                            "trendingScore": row.trending_score or 0,
-                            "genres": ""
-                        })
-                    
-                    # Fallback nếu không đủ phim
-                    if len(trending_movies) < HOME_SECTION_LIMIT:
-                        existing_ids = [m["id"] for m in trending_movies]
-                        placeholders = ','.join([f':id{i}' for i in range(len(existing_ids))]) if existing_ids else ''
-                        params = {f'id{i}': mid for i, mid in enumerate(existing_ids)}
-                        
-                        fallback_query = f"""
-                            SELECT TOP {HOME_SECTION_LIMIT}
-                                m.movieId, m.title, m.posterUrl, m.releaseYear, m.country
-                            FROM cine.Movie m
-                            WHERE m.releaseYear IS NOT NULL
-                        """
-                        if existing_ids:
-                            fallback_query += f" AND m.movieId NOT IN ({placeholders})"
-                        fallback_query += " ORDER BY m.releaseYear DESC, m.movieId DESC"
-                        
-                        fallback_rows = conn.execute(text(fallback_query), params).mappings().all()
-                        for row in fallback_rows:
-                            trending_movies.append({
-                                "id": row.movieId,
-                                "title": row.title,
-                                "poster": get_poster_or_dummy(row.posterUrl, row.title),
-                                "releaseYear": row.releaseYear,
-                                "country": row.country,
-                                "ratingCount": 0,
-                                "avgRating": 0.0,
-                                "viewCount": 0,
-                                "genres": ""
-                            })
-                    
-                    trending_movies = trending_movies[:HOME_SECTION_LIMIT]
-                    trending_cache['data'] = trending_movies
-                    trending_cache['timestamp'] = current_time
-                
-                # Recent watched movies (đã xem gần đây)
-                cache_key_recent = f"recent_watched_{user_id}"
-                if (session.get(cache_key_recent) and 
-                    session.get(f'{cache_key_recent}_time') and 
-                    current_time - session.get(f'{cache_key_recent}_time', 0) < 300):  # 5 minutes cache
-                    recent_watched = session.get(cache_key_recent, [])
-                else:
-                    history_rows = conn.execute(text(f"""
-                        WITH recent_history AS (
-                            SELECT TOP 12
-                                vh.movieId,
-                                MAX(vh.startedAt) AS lastWatchedAt,
-                                MAX(vh.finishedAt) AS lastFinishedAt,
-                                MAX(vh.progressSec) AS lastProgressSec,
-                                COUNT(vh.historyId) AS watch_count
-                            FROM cine.ViewHistory vh
-                            WHERE vh.userId = :user_id
-                            GROUP BY vh.movieId
-                            ORDER BY MAX(vh.startedAt) DESC
-                        )
-                        SELECT TOP 12
-                            rh.movieId,
-                            m.title,
-                            m.posterUrl,
-                            m.releaseYear,
-                            m.durationMin,
-                            rh.lastWatchedAt,
-                            rh.lastFinishedAt,
-                            rh.watch_count,
-                            CASE WHEN rh.lastFinishedAt IS NOT NULL THEN 1 ELSE 0 END AS isCompleted,
-                            rh.lastProgressSec
-                        FROM recent_history rh
-                        JOIN cine.Movie m ON rh.movieId = m.movieId
-                        ORDER BY rh.lastWatchedAt DESC
-                    """), {"user_id": user_id}).mappings().all()
-                    
-                    history_movie_ids = [row["movieId"] for row in history_rows]
-                    
-                    recent_watched = []
-                    for row in history_rows[:12]:  # Đảm bảo chỉ lấy tối đa 12 phim
-                        progress_percent = 0
-                        if row["durationMin"] and row["durationMin"] > 0 and row["lastProgressSec"]:
-                            progress_percent = min(100, (row["lastProgressSec"] / 60.0 / row["durationMin"]) * 100)
-                        
-                        recent_watched.append({
-                            "movieId": row["movieId"],
-                            "id": row["movieId"],
-                            "title": row["title"],
-                            "posterUrl": get_poster_or_dummy(row["posterUrl"], row["title"]),
-                            "poster": get_poster_or_dummy(row["posterUrl"], row["title"]),
-                            "releaseYear": row["releaseYear"],
-                            "genres": "",
-                            "lastWatchedAt": row["lastWatchedAt"],
-                            "lastFinishedAt": row["lastFinishedAt"],
-                            "watchCount": int(row["watch_count"]),
-                            "isCompleted": bool(row["isCompleted"]),
-                            "progressPercent": round(progress_percent, 1)
-                        })
-                    
-                    # Đảm bảo chỉ lấy tối đa 12 phim
-                    recent_watched = recent_watched[:12]
-                    session[cache_key_recent] = recent_watched
-                    session[f'{cache_key_recent}_time'] = current_time
-                
-        except Exception as e:
-            current_app.logger.error(f"Error getting personal recommendations: {e}", exc_info=True)
-            personal_recommendations = []
-            trending_movies = []
-            recent_watched = []
-    
-    # Fallback
-    if not personal_recommendations:
-        personal_recommendations = latest_movies[:HOME_SECTION_LIMIT]
-    if not trending_movies:
-        trending_movies = latest_movies
     
     # Combine tất cả movie_ids để batch query genres/ratings
     all_movie_ids_combined = set()
@@ -851,21 +565,270 @@ def home():
         current_app.logger.error(f"Error loading genres: {e}")
         all_genres = []
     
-    return render_template("home.html",
-                         latest_movies=latest_movies,
-                         carousel_movies=carousel_movies,
-                         recommended=personal_recommendations,
-                         trending_movies=trending_movies,
-                         all_movies=all_movies,
-                         recent_watched=recent_watched,
-                         pagination=pagination,
-                         genre_filter=genre_filter,
-                         search_query=search_query,
-                         sort_by=sort_by,
-                         year_filter=year_filter,
-                         year_list=year_list if 'year_list' in locals() else [],
-                         genre_list=genre_list if 'genre_list' in locals() else [],
-                         all_genres=all_genres)
+    return render_template(
+        "home.html",
+        latest_movies=latest_movies,
+        carousel_movies=carousel_movies,
+        all_movies=all_movies,
+        pagination=pagination,
+        genre_filter=genre_filter,
+        search_query=search_query,
+        sort_by=sort_by,
+        year_filter=year_filter,
+        year_list=year_list if 'year_list' in locals() else [],
+        genre_list=genre_list if 'genre_list' in locals() else [],
+        all_genres=all_genres
+    )
+
+
+def _refresh_latest_cache():
+    """Precompute default latest/carousel cache."""
+    try:
+        with current_app.db_engine.connect() as conn:
+            rows = conn.execute(text(f"""
+                SELECT TOP {HOME_SECTION_LIMIT}
+                    movieId, title, posterUrl, backdropUrl, overview, createdAt, viewCount, releaseYear, country
+                FROM cine.Movie
+                ORDER BY createdAt DESC, movieId DESC
+            """)).mappings().all()
+
+        latest_movies = [
+            {
+                "id": r["movieId"],
+                "title": r["title"],
+                "poster": get_poster_or_dummy(r.get("posterUrl"), r["title"]),
+                "backdrop": r.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
+                "description": (r.get("overview") or "")[:160],
+                "createdAt": r.get("createdAt"),
+                "avgRating": 0,
+                "ratingCount": 0,
+                "viewCount": r.get("viewCount", 0) or 0,
+                "genres": "",
+                "releaseYear": r.get("releaseYear"),
+                "country": r.get("country"),
+            }
+            for r in rows
+        ]
+
+        latest_movies_cache['data'] = latest_movies
+        latest_movies_cache['key'] = 'latest_all'
+        latest_movies_cache['timestamp'] = time.time()
+        carousel_movies_cache['data'] = latest_movies[:CAROUSEL_LIMIT]
+        carousel_movies_cache['timestamp'] = time.time()
+        return latest_movies
+    except Exception as e:
+        current_app.logger.error(f"Error refreshing latest cache: {e}", exc_info=True)
+        return latest_movies_cache.get('data') or []
+
+
+def _load_trending_movies(limit=HOME_SECTION_LIMIT, force_refresh=False):
+    """Load trending movies with caching."""
+    limit = max(1, min(limit, HOME_SECTION_LIMIT))
+    current_time = time.time()
+    if (
+        not force_refresh
+        and trending_cache.get('data')
+        and trending_cache.get('timestamp')
+        and current_time - trending_cache['timestamp'] < trending_cache['ttl']
+    ):
+        return trending_cache['data'][:limit]
+
+    try:
+        with current_app.db_engine.connect() as conn:
+            trending_rows = conn.execute(text(f"""
+                WITH view_stats AS (
+                    SELECT 
+                        movieId,
+                        COUNT(DISTINCT historyId) as view_count_recent,
+                        COUNT(DISTINCT userId) as unique_viewers_recent
+                    FROM cine.ViewHistory
+                    WHERE startedAt >= DATEADD(day, -{TRENDING_TIME_WINDOW_DAYS}, GETDATE())
+                    GROUP BY movieId
+                ),
+                rating_stats AS (
+                    SELECT 
+                        movieId,
+                        COUNT(DISTINCT userId) as rating_count_recent,
+                        AVG(CAST(value AS FLOAT)) as avg_rating_recent
+                    FROM cine.Rating
+                    WHERE ratedAt >= DATEADD(day, -{TRENDING_TIME_WINDOW_DAYS}, GETDATE())
+                    GROUP BY movieId
+                )
+                SELECT TOP {HOME_SECTION_LIMIT}
+                    m.movieId, 
+                    m.title, 
+                    m.posterUrl, 
+                    m.releaseYear, 
+                    m.country,
+                    ISNULL(vs.view_count_recent, 0) as view_count_recent,
+                    ISNULL(vs.unique_viewers_recent, 0) as unique_viewers_recent,
+                    ISNULL(rs.rating_count_recent, 0) as rating_count_recent,
+                    ISNULL(rs.avg_rating_recent, 0) as avg_rating_recent,
+                    ISNULL(vs.view_count_recent, 0) as trending_score
+                FROM cine.Movie m
+                LEFT JOIN view_stats vs ON m.movieId = vs.movieId
+                LEFT JOIN rating_stats rs ON m.movieId = rs.movieId
+                WHERE vs.view_count_recent > 0
+                ORDER BY 
+                    trending_score DESC,
+                    ISNULL(rs.avg_rating_recent, 0) DESC
+            """)).mappings().all()
+
+        trending_movies = [
+            {
+                "id": row.movieId,
+                "title": row.title,
+                "poster": get_poster_or_dummy(row.posterUrl, row.title),
+                "releaseYear": row.releaseYear,
+                "country": row.country,
+                "ratingCount": row.rating_count_recent or 0,
+                "avgRating": float(row.avg_rating_recent) if row.avg_rating_recent else 0.0,
+                "viewCount": row.view_count_recent or 0,
+                "uniqueViewers": row.unique_viewers_recent or 0,
+                "trendingScore": row.trending_score or 0,
+                "genres": "",
+            }
+            for row in trending_rows
+        ]
+
+        if len(trending_movies) < HOME_SECTION_LIMIT:
+            with current_app.db_engine.connect() as conn:
+                existing_ids = [m["id"] for m in trending_movies]
+                placeholders = ','.join([f':id{i}' for i in range(len(existing_ids))]) if existing_ids else ''
+                params = {f'id{i}': mid for i, mid in enumerate(existing_ids)}
+                fallback_query = f"""
+                    SELECT TOP {HOME_SECTION_LIMIT}
+                        m.movieId, m.title, m.posterUrl, m.releaseYear, m.country
+                    FROM cine.Movie m
+                """
+                if existing_ids:
+                    fallback_query += f" WHERE m.movieId NOT IN ({placeholders})"
+                fallback_query += " ORDER BY m.releaseYear DESC, m.movieId DESC"
+                fallback_rows = conn.execute(text(fallback_query), params).mappings().all()
+                for row in fallback_rows:
+                    trending_movies.append({
+                        "id": row.movieId,
+                        "title": row.title,
+                        "poster": get_poster_or_dummy(row.posterUrl, row.title),
+                        "releaseYear": row.releaseYear,
+                        "country": row.country,
+                        "ratingCount": 0,
+                        "avgRating": 0.0,
+                        "viewCount": 0,
+                        "genres": "",
+                    })
+
+        trending_cache['data'] = trending_movies[:HOME_SECTION_LIMIT]
+        trending_cache['timestamp'] = time.time()
+        return trending_cache['data'][:limit]
+    except Exception as e:
+        current_app.logger.error(f"Error loading trending movies: {e}", exc_info=True)
+        cached = trending_cache.get('data') or []
+        return cached[:limit]
+
+
+def _load_recent_watched(user_id, limit=HOME_SECTION_LIMIT, use_cache=True):
+    """Load recently watched movies for a user."""
+    limit = max(1, min(limit, HOME_SECTION_LIMIT))
+    cache_key_recent = f"recent_watched_{user_id}"
+    current_time = time.time()
+
+    if (
+        use_cache
+        and session.get(cache_key_recent)
+        and session.get(f'{cache_key_recent}_time')
+        and current_time - session.get(f'{cache_key_recent}_time', 0) < 300
+    ):
+        return session.get(cache_key_recent, [])[:limit]
+
+    try:
+        with current_app.db_engine.connect() as conn:
+            history_rows = conn.execute(text(f"""
+                WITH recent_history AS (
+                    SELECT TOP {limit}
+                        vh.movieId,
+                        MAX(vh.startedAt) AS lastWatchedAt,
+                        MAX(vh.finishedAt) AS lastFinishedAt,
+                        MAX(vh.progressSec) AS lastProgressSec,
+                        COUNT(vh.historyId) AS watch_count
+                    FROM cine.ViewHistory vh
+                    WHERE vh.userId = :user_id
+                    GROUP BY vh.movieId
+                    ORDER BY MAX(vh.startedAt) DESC
+                )
+                SELECT TOP {limit}
+                    rh.movieId,
+                    m.title,
+                    m.posterUrl,
+                    m.releaseYear,
+                    m.durationMin,
+                    rh.lastWatchedAt,
+                    rh.lastFinishedAt,
+                    rh.watch_count,
+                    CASE WHEN rh.lastFinishedAt IS NOT NULL THEN 1 ELSE 0 END AS isCompleted,
+                    rh.lastProgressSec
+                FROM recent_history rh
+                JOIN cine.Movie m ON rh.movieId = m.movieId
+                ORDER BY rh.lastWatchedAt DESC
+            """), {"user_id": user_id}).mappings().all()
+    except Exception as e:
+        current_app.logger.error(f"Error loading recent watched movies: {e}", exc_info=True)
+        return []
+
+    recent_watched = []
+    for row in history_rows[:limit]:
+        progress_percent = 0
+        if row["durationMin"] and row["durationMin"] > 0 and row["lastProgressSec"]:
+            progress_percent = min(100, (row["lastProgressSec"] / 60.0 / row["durationMin"]) * 100)
+        recent_watched.append({
+            "movieId": row["movieId"],
+            "id": row["movieId"],
+            "title": row["title"],
+            "posterUrl": get_poster_or_dummy(row["posterUrl"], row["title"]),
+            "poster": get_poster_or_dummy(row["posterUrl"], row["title"]),
+            "releaseYear": row["releaseYear"],
+            "genres": "",
+            "lastWatchedAt": row["lastWatchedAt"],
+            "lastFinishedAt": row["lastFinishedAt"],
+            "watchCount": int(row["watch_count"]),
+            "isCompleted": bool(row["isCompleted"]),
+            "progressPercent": round(progress_percent, 1)
+        })
+
+    if use_cache:
+        session[cache_key_recent] = recent_watched
+        session[f'{cache_key_recent}_time'] = current_time
+
+    return recent_watched[:limit]
+
+
+@main_bp.route("/api/home/trending")
+@login_required
+def api_home_trending():
+    limit = validate_limit(request.args.get('limit', HOME_SECTION_LIMIT, type=int))
+    movies = _load_trending_movies(limit=limit)
+    return jsonify({"success": True, "movies": movies})
+
+
+@main_bp.route("/api/home/recent-watched")
+@login_required
+def api_home_recent_watched():
+    limit = validate_limit(request.args.get('limit', HOME_SECTION_LIMIT, type=int))
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"success": False, "message": "Chưa đăng nhập"}), 401
+    movies = _load_recent_watched(user_id, limit=limit)
+    return jsonify({"success": True, "movies": movies})
+
+
+def precompute_homepage_caches():
+    """Background job to refresh expensive caches."""
+    latest_data = _refresh_latest_cache()
+    if latest_data:
+        current_app.logger.info("Latest movies cache warmed with %d items", len(latest_data))
+    trending_data = _load_trending_movies(force_refresh=True)
+    if trending_data:
+        current_app.logger.info("Trending movies cache warmed with %d items", len(trending_data))
 
 
 @main_bp.route("/movie/<int:movie_id>")

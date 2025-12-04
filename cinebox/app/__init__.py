@@ -35,6 +35,7 @@ def create_app():
         SQLSERVER_PWD=config.SQLSERVER_PWD,
         SQL_ENCRYPT=config.SQL_ENCRYPT,
         SQL_TRUST_CERT=config.SQL_TRUST_CERT,
+        HOME_CACHE_REFRESH_INTERVAL=300,
     )
 
     odbc_str = (
@@ -95,5 +96,7 @@ def create_app():
     # Initialize recommenders after app context is available
     with app.app_context():
         init_recommenders()
+        from .tasks import start_home_cache_warmers
+        start_home_cache_warmers(app)
 
     return app

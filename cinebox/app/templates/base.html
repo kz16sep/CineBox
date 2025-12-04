@@ -201,6 +201,8 @@
     }
 
     const previewCache = {};
+    const previewTimers = new WeakMap();
+    const PREVIEW_HOLD_DELAY = 3000;
     let activePreviewCard = null;
 
     function initQuickPreview() {
@@ -208,25 +210,77 @@
         cards.forEach(card => {
             if (card.dataset.previewBound === 'true') return;
             card.dataset.previewBound = 'true';
-            card.addEventListener('mouseenter', handlePreviewEnter);
-            card.addEventListener('mouseleave', handlePreviewLeave);
+            card.addEventListener('pointerenter', handlePreviewHoverStart);
+            card.addEventListener('pointerdown', handlePreviewPressStart);
+            card.addEventListener('pointerup', handlePreviewPressEnd);
+            card.addEventListener('pointercancel', handlePreviewPointerCancel);
+            card.addEventListener('pointerleave', handlePreviewPointerLeave);
         });
         window.CineBox.refreshPreviewTargets = initQuickPreview;
     }
 
-    function handlePreviewEnter(event) {
+    function startPreviewTimer(card) {
+        clearPreviewTimer(card);
+        const timer = setTimeout(() => {
+            previewTimers.delete(card);
+            activatePreview(card);
+        }, PREVIEW_HOLD_DELAY);
+        previewTimers.set(card, timer);
+    }
+
+    function handlePreviewHoverStart(event) {
+        const card = event.currentTarget;
+        if (event.pointerType && event.pointerType !== 'mouse' && event.pointerType !== 'pen') return;
+        startPreviewTimer(card);
+    }
+
+    function handlePreviewPressStart(event) {
         const card = event.currentTarget;
         const movieId = card.dataset.previewId;
         if (!movieId) return;
-        
+        if (event.pointerType && event.pointerType !== 'touch') return;
+        if (!event.isPrimary) return;
+        startPreviewTimer(card);
+    }
+
+    function handlePreviewPressEnd(event) {
+        const card = event.currentTarget;
+        clearPreviewTimer(card);
+    }
+
+    function handlePreviewPointerCancel(event) {
+        const card = event.currentTarget;
+        clearPreviewTimer(card);
+        if (card.dataset.previewActive === 'true') {
+            hidePreview(card);
+            if (activePreviewCard === card) {
+                activePreviewCard = null;
+            }
+        }
+    }
+
+    function handlePreviewPointerLeave(event) {
+        const card = event.currentTarget;
+        clearPreviewTimer(card);
+        if (card.dataset.previewActive === 'true') {
+            hidePreview(card);
+            if (activePreviewCard === card) {
+                activePreviewCard = null;
+            }
+        }
+    }
+
+    function activatePreview(card) {
+        const movieId = card.dataset.previewId;
+        if (!movieId) return;
         if (activePreviewCard && activePreviewCard !== card) {
             hidePreview(activePreviewCard);
         }
         activePreviewCard = card;
+        card.dataset.previewActive = 'true';
         const overlay = ensurePreviewOverlay(card);
         overlay.classList.add('active');
         overlay.innerHTML = `<div class="preview-loading">Đang tải...</div>`;
-        
         getPreviewData(movieId).then(data => {
             if (activePreviewCard !== card) return;
             renderPreviewContent(overlay, data);
@@ -235,19 +289,20 @@
         });
     }
 
-    function handlePreviewLeave(event) {
-        const card = event.currentTarget;
-        hidePreview(card);
-        if (activePreviewCard === card) {
-            activePreviewCard = null;
-        }
-    }
-
     function hidePreview(card) {
         const overlay = card.querySelector('.preview-overlay');
         if (overlay) {
             overlay.classList.remove('active');
             overlay.innerHTML = '';
+        }
+        delete card.dataset.previewActive;
+    }
+
+    function clearPreviewTimer(card) {
+        const timer = previewTimers.get(card);
+        if (timer) {
+            clearTimeout(timer);
+            previewTimers.delete(card);
         }
     }
 
