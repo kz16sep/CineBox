@@ -24,7 +24,13 @@ def login():
         with current_app.db_engine.connect() as conn:
             # Query kiểm tra đăng nhập với trạng thái user
             test_query = text("""
-                SELECT u.userId, u.email, u.status, r.roleName
+                SELECT 
+                    u.userId, 
+                    u.email, 
+                    u.status, 
+                    r.roleName,
+                    u.avatarUrl,
+                    a.username
                 FROM cine.Account a
                 JOIN cine.[User] u ON u.userId = a.userId
                 JOIN cine.Role r ON r.roleId = u.roleId
@@ -48,8 +54,13 @@ def login():
                     else:
                         session["user_id"] = int(row[0])
                         session["role"] = row[3]
-                        session["username"] = username
+                        session["username"] = row[5] or username
                         session["email"] = row[1]
+                        avatar_url = row[4]
+                        if avatar_url:
+                            session["avatar"] = avatar_url
+                        else:
+                            session.pop("avatar", None)
                         current_app.logger.info(f"Session set: user_id={session['user_id']}, role={session['role']}")
                         return redirect(url_for("main.home"))
                 else:
