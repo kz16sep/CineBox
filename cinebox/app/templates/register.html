@@ -1,6 +1,13 @@
 {% extends 'base.html' %}
 {% block title %}Đăng ký · CineBox{% endblock %}
 {% block content %}
+  <style>
+    .search { display: none !important; }
+    .auth-card .muted .highlight-link {
+      color: #fff;
+      font-weight: 700;
+    }
+  </style>
   <section class="auth-card">
   <h1>Đăng ký</h1>
   
@@ -18,11 +25,24 @@
     <label>User name</label>
     <input type="text" name="name" required placeholder="Nguyen Van (1-20 ký tự, chữ, số và khoảng trắng)" 
            pattern="^[a-zA-Z0-9\u00C0-\u017F\u1E00-\u1EFF\u0100-\u017F\u0180-\u024F\s]{1,20}$"
-           title="User name ít nhất phải có 1 ký tự và không chứa ký tự đặc biệt"/>
+           title="User name ít nhất phải có 1 ký tự và không chứa ký tự đặc biệt"
+           value="{{ request.form.get('name','') }}"/>
     <label>Email</label>
     <input type="email" name="email" required placeholder="email@domain.com" 
            pattern="[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
-           title="Email không hợp lệ"/>
+           title="Email không hợp lệ"
+           value="{{ request.form.get('email','') }}"/>
+    <label>Ngày sinh</label>
+    <input type="date" name="date_of_birth" required value="{{ request.form.get('date_of_birth','') }}"/>
+    <label>Giới tính</label>
+    <select name="gender" required>
+      {% set selected_gender = request.form.get('gender','') %}
+      <option value="" disabled {{ 'selected' if not selected_gender else '' }}>Chọn giới tính</option>
+      <option value="male" {{ 'selected' if selected_gender == 'male' else '' }}>Nam</option>
+      <option value="female" {{ 'selected' if selected_gender == 'female' else '' }}>Nữ</option>
+      <option value="other" {{ 'selected' if selected_gender == 'other' else '' }}>Khác</option>
+      <option value="prefer_not" {{ 'selected' if selected_gender == 'prefer_not' else '' }}>Không tiết lộ</option>
+    </select>
     <label>Mật khẩu</label>
     <div class="password-input-wrapper">
       <input type="password" id="password" name="password" required placeholder="Tối thiểu 8-20 ký tự: chữ hoa, chữ thường, số" 

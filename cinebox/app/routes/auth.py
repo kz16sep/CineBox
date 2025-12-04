@@ -4,6 +4,7 @@ Authentication routes: login, register, logout
 
 import re
 from flask import render_template, request, redirect, url_for, session, current_app
+from datetime import datetime
 from sqlalchemy import text
 from . import main_bp
 from .decorators import login_required
@@ -14,6 +15,7 @@ def login():
     """Login route"""
     success = request.args.get('success', '')
     error = None
+    carousel_movies = []
     
     if request.method == "POST":
         username = request.form.get("username", "").strip()
@@ -70,7 +72,28 @@ def login():
                 current_app.logger.error(f"Database error: {e}")
                 error = f"Lỗi database: {str(e)}"
     
-    return render_template("login.html", error=error, success=success)
+    # Build carousel data for login page
+    try:
+        with current_app.db_engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT TOP 4 movieId, title, backdropUrl, overview
+                FROM cine.Movie
+                ORDER BY createdAt DESC, movieId DESC
+            """)).mappings().all()
+        carousel_movies = [
+            {
+                "id": row["movieId"],
+                "title": row["title"],
+                "backdrop": row.get("backdropUrl") or "/static/img/dune2_backdrop.jpg",
+                "description": (row.get("overview") or "")[:140] or "Khám phá ngay trên CineBox."
+            }
+            for row in rows
+        ]
+    except Exception as exc:
+        current_app.logger.error(f"Error loading login carousel: {exc}")
+        carousel_movies = []
+    
+    return render_template("login.html", error=error, success=success, carousel_movies=carousel_movies)
 
 
 @main_bp.route("/register", methods=["GET", "POST"])
@@ -80,6 +103,8 @@ def register():
         name = request.form.get("name", "").strip()
         email = request.form.get("email", "").strip()
         password = request.form.get("password", "")
+        date_of_birth = request.form.get("date_of_birth", "").strip()
+        gender = request.form.get("gender", "").strip()
         
         # Validation
         errors = []
@@ -119,6 +144,21 @@ def register():
                 errors.append("Mật khẩu phải chứa ít nhất một chữ thường.")
             if not re.search(r'[0-9]', password):
                 errors.append("Mật khẩu phải chứa ít nhất một số.")
+
+        dob_value = None
+        if not date_of_birth:
+            errors.append("Vui lòng chọn ngày sinh.")
+        else:
+            try:
+                dob_value = datetime.strptime(date_of_birth, "%Y-%m-%d").date()
+            except ValueError:
+                errors.append("Ngày sinh không hợp lệ.")
+
+        allowed_genders = {"male", "female", "other", "prefer_not"}
+        if not gender:
+            errors.append("Vui lòng chọn giới tính.")
+        elif gender not in allowed_genders:
+            errors.append("Giới tính không hợp lệ.")
         
         # If there are validation errors, return them
         if errors:
@@ -153,9 +193,15 @@ def register():
                 
                 # Insert user
                 conn.execute(text("""
-                    INSERT INTO cine.[User](userId, email, avatarUrl, roleId) 
-                    VALUES (:userId, :email, NULL, :roleId)
-                """), {"userId": user_id, "email": email, "roleId": role_id})
+                    INSERT INTO cine.[User](userId, email, avatarUrl, roleId, dateOfBirth, gender) 
+                    VALUES (:userId, :email, NULL, :roleId, :dob, :gender)
+                """), {
+                    "userId": user_id,
+                    "email": email,
+                    "roleId": role_id,
+                    "dob": dob_value,
+                    "gender": gender
+                })
                 
                 # Get next available accountId
                 max_account_id = conn.execute(text("SELECT ISNULL(MAX(accountId), 0) FROM cine.[Account]")).scalar()
