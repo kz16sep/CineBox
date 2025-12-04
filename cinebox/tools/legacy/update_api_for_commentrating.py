@@ -4,7 +4,15 @@ Script để cập nhật API sử dụng CommentRating thay vì cột likes tro
 Chạy sau khi đã xóa các cột likes, dislikes, likeCount khỏi bảng Comment
 """
 
+import os
 import re
+import sys
+
+# Bảo đảm có thể import app từ project root
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.dirname(os.path.dirname(_current_dir))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 def update_interactions_file():
     file_path = "app/routes/interactions.py"

@@ -111,7 +111,7 @@ routes/
 - Tất cả routes phải import `main_bp` từ `.` (relative import)
 - Sử dụng decorators từ `.decorators` module
 - Sử dụng helpers từ `.common` module
-- Import helpers từ parent package: `from ..movie_query_helpers import ...`
+- Import helpers từ parent package: `from ..helpers.movie_query_helpers import ...`
 - Sau khi di chuyển hết, có thể xóa hoặc backup `routes.py` cũ
 
 ## Testing

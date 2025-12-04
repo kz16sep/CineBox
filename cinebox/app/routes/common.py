@@ -190,7 +190,7 @@ def get_cold_start_recommendations(user_id, conn):
     """
     try:
         from sqlalchemy import text
-        from app.movie_query_helpers import get_movies_genres, get_movie_rating_stats
+        from app.helpers.movie_query_helpers import get_movies_genres, get_movie_rating_stats
         
         recommendations = []
         all_movie_ids = []
@@ -280,8 +280,8 @@ def create_rating_based_recommendations(user_id, movies, db_engine=None):
         if db_engine is None:
             db_engine = current_app.db_engine
         
-        from app.movie_query_helpers import get_movies_interaction_stats
-        from app.recommendation_helpers import calculate_user_interaction_score, sort_recommendations
+        from app.helpers.movie_query_helpers import get_movies_interaction_stats
+        from app.helpers.recommendation_helpers import calculate_user_interaction_score, sort_recommendations
         
         movie_ids = [movie["id"] for movie in movies]
         all_interaction_stats = get_movies_interaction_stats(movie_ids, db_engine)

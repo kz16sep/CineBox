@@ -36,7 +36,7 @@ class ContentBasedRecommender:
         """
         try:
             # Validate và sanitize limit để tránh SQL injection
-            from app.sql_helpers import validate_limit, safe_top_clause
+            from app.helpers.sql_helpers import validate_limit, safe_top_clause
             validated_limit = validate_limit(limit, max_limit=100, default=5)
             top_clause = safe_top_clause(validated_limit, max_limit=100)
             
@@ -103,7 +103,7 @@ class ContentBasedRecommender:
         """
         try:
             # Validate và sanitize limit để tránh SQL injection
-            from app.sql_helpers import validate_limit, safe_top_clause
+            from app.helpers.sql_helpers import validate_limit, safe_top_clause
             validated_limit = validate_limit(limit, max_limit=100, default=5)
             # Tính toán limit * 2 một cách an toàn
             fallback_limit = min(validated_limit * 2, 200)  # Cap at 200
@@ -306,7 +306,7 @@ class ContentBasedRecommender:
             List[Dict]: Danh sách phim được recommend với thông tin chi tiết
         """
         try:
-            from app.sql_helpers import validate_limit, safe_top_clause
+            from app.helpers.sql_helpers import validate_limit, safe_top_clause
             validated_limit = validate_limit(limit, max_limit=100, default=10)
             top_clause = safe_top_clause(validated_limit * 2, max_limit=200)  # Lấy nhiều hơn để merge
             

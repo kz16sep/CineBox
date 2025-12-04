@@ -35,7 +35,7 @@ from .common import get_poster_or_dummy  # Import shared utilities
 ```python
 # Sau khi setup sys.path
 from recommenders.content_based import ContentBasedRecommender
-from app.movie_query_helpers import get_movie_rating_stats
+from app.helpers.movie_query_helpers import get_movie_rating_stats
 ```
 
 ### Import từ routes package (từ bên ngoài):

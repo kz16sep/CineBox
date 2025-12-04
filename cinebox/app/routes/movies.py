@@ -31,9 +31,9 @@ _cinebox_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 if _cinebox_dir not in sys.path:
     sys.path.insert(0, _cinebox_dir)
 
-from app.movie_query_helpers import get_movie_rating_stats, get_movies_genres
-from app.recommendation_helpers import hybrid_recommendations
-from app.sql_helpers import validate_limit, safe_top_clause
+from app.helpers.movie_query_helpers import get_movie_rating_stats, get_movies_genres
+from app.helpers.recommendation_helpers import hybrid_recommendations
+from app.helpers.sql_helpers import validate_limit, safe_top_clause
 
 # TMDB API configuration
 TMDB_API_KEY = "410065906e9552ec1e24efe8c5393791"
