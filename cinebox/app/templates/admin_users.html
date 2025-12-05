@@ -10,24 +10,34 @@
   <!-- Thanh tìm kiếm -->
   <div class="admin-search-bar">
     <form method="GET" action="{{ url_for('main.admin_users') }}" class="search-form">
-      <div class="search-input-group">
-        <input 
-          type="text" 
-          name="q" 
-          value="{{ search_query or '' }}"
-          placeholder="Tìm kiếm theo ID hoặc email..." 
-          class="search-input"
-        />
-        <button type="submit" class="search-btn">
-          <span>🔍</span>
-        </button>
-        {% if search_query %}
-        <a href="{{ url_for('main.admin_users') }}" class="clear-search-btn">✕</a>
-        {% endif %}
+      <div class="search-controls">
+        <div class="search-input-group">
+          <input 
+            type="text" 
+            name="q" 
+            value="{{ search_query or '' }}"
+            placeholder="Tìm kiếm theo ID, email hoặc username..." 
+            class="search-input"
+          />
+          <button type="submit" class="search-btn">
+            <span>🔍</span>
+          </button>
+          {% if search_query %}
+          <a href="{{ url_for('main.admin_users', status=status_filter if status_filter != 'all' else None) }}" class="clear-search-btn">✕</a>
+          {% endif %}
+        </div>
+        <div class="search-filter-group">
+          <label for="status-filter">Trạng thái</label>
+          <select id="status-filter" name="status" class="status-filter-select" onchange="this.form.submit()">
+            <option value="all" {% if status_filter == 'all' %}selected{% endif %}>Tất cả</option>
+            <option value="active" {% if status_filter == 'active' %}selected{% endif %}>Hoạt động</option>
+            <option value="inactive" {% if status_filter == 'inactive' %}selected{% endif %}>Không hoạt động</option>
+          </select>
+        </div>
       </div>
     </form>
     <div class="search-hint">
-      💡 <strong>Hướng dẫn tìm kiếm:</strong> Nhập ID số (ví dụ: 1, 2, 3) hoặc email để tìm kiếm người dùng
+      💡 <strong>Hướng dẫn:</strong> Nhập ID (ví dụ: 101), email hoặc username để tìm người dùng. Dùng bộ lọc trạng thái để xem nhanh tài khoản bị chặn/đã kích hoạt.
     </div>
   </div>
 
@@ -41,6 +51,18 @@
     <div class="stat-item">
       <span class="stat-label">Kết quả tìm kiếm:</span>
       <span class="stat-value">{{ users|length }}</span>
+    </div>
+    {% endif %}
+    {% if status_filter != 'all' %}
+    <div class="stat-item">
+      <span class="stat-label">Đang lọc trạng thái:</span>
+      <span class="stat-value">
+        {% if status_filter == 'active' %}
+          Hoạt động
+        {% else %}
+          Không hoạt động
+        {% endif %}
+      </span>
     </div>
     {% endif %}
   </div>
@@ -90,9 +112,14 @@
           </td>
           <td class="user-actions">
             {% if user.roleName != 'Admin' %}
-              <form method="post" action="{{ url_for('main.admin_user_toggle_status', user_id=user.userId) }}" 
-                    style="display:inline" 
-                    onsubmit="return confirm('Bạn có chắc muốn thay đổi trạng thái tài khoản {{ user.email }}?');">
+              <form 
+                method="post" 
+                action="{{ url_for('main.admin_user_toggle_status', user_id=user.userId) }}" 
+                style="display:inline" 
+                class="toggle-status-form"
+                data-user-email="{{ user.email }}"
+                data-current-status="{{ user.status }}"
+              >
                 <button class="btn btn-sm btn-toggle" type="submit" 
                         title="{% if user.status == 'active' %}Chặn tài khoản{% else %}Kích hoạt tài khoản{% endif %}">
                   {% if user.status == 'active' %}
@@ -141,7 +168,7 @@
     
     <div class="pagination-controls">
       {% if pagination.has_prev %}
-        <a href="{{ url_for('main.admin_users', page=pagination.prev_num, q=search_query) }}" 
+        <a href="{{ url_for('main.admin_users', page=pagination.prev_num, q=search_query, status=status_filter) }}" 
            class="btn-pagination">← Trang trước</a>
       {% else %}
         <span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">← Trang trước</span>
@@ -152,7 +179,7 @@
       </span>
       
       {% if pagination.has_next %}
-        <a href="{{ url_for('main.admin_users', page=pagination.next_num, q=search_query) }}" 
+        <a href="{{ url_for('main.admin_users', page=pagination.next_num, q=search_query, status=status_filter) }}" 
            class="btn-pagination">Trang sau →</a>
       {% else %}
         <span class="btn-pagination" style="opacity: 0.5; cursor: not-allowed;">Trang sau →</span>
@@ -160,6 +187,19 @@
     </div>
   </div>
   {% endif %}
+  <div id="statusConfirmModal" class="status-confirm-modal" aria-hidden="true">
+    <div class="status-confirm-dialog">
+      <button type="button" class="status-confirm-close" data-confirm="cancel" aria-label="Đóng thông báo">×</button>
+      <div class="status-confirm-icon" data-confirm-icon>⚠️</div>
+      <h3 class="status-confirm-title" data-confirm-title>Thay đổi trạng thái?</h3>
+      <p class="status-confirm-message" data-confirm-message>...</p>
+      <p class="status-confirm-note" data-confirm-note>...</p>
+      <div class="status-confirm-actions">
+        <button type="button" class="btn status-confirm-cancel" data-confirm="cancel">Hủy</button>
+        <button type="button" class="btn status-confirm-accept" data-confirm="accept">Xác nhận</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <style>
@@ -190,8 +230,19 @@
 }
 
 .search-form {
-  max-width: 500px;
+  max-width: 760px;
   margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.search-controls {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
 .search-input-group {
@@ -247,6 +298,42 @@
 .clear-search-btn:hover {
   color: #fff;
   background: rgba(255, 255, 255, 0.1);
+}
+
+.search-filter-group {
+  min-width: 180px;
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+}
+
+.search-filter-group label {
+  font-size: 0.85rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.status-filter-select {
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 10px;
+  color: #fff;
+  font-size: 0.95rem;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.status-filter-select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
 }
 
 .search-hint {
@@ -467,9 +554,136 @@
   font-weight: 600;
 }
 
+.status-confirm-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 9, 18, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.25s ease, visibility 0.25s ease;
+  z-index: 999;
+}
+
+.status-confirm-modal.show {
+  opacity: 1;
+  visibility: visible;
+}
+
+.status-confirm-dialog {
+  background: linear-gradient(135deg, #111827, #0f172a);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  width: min(420px, 90vw);
+  padding: 32px;
+  position: relative;
+  text-align: center;
+  box-shadow: 0 25px 70px rgba(15, 23, 42, 0.6);
+}
+
+.status-confirm-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  color: #fff;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  font-size: 20px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.status-confirm-close:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.status-confirm-icon {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 16px;
+  border-radius: 20px;
+  display: grid;
+  place-items: center;
+  font-size: 34px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.status-confirm-title {
+  font-size: 1.5rem;
+  margin-bottom: 10px;
+  color: #fff;
+}
+
+.status-confirm-message {
+  color: #e2e8f0;
+  margin-bottom: 6px;
+}
+
+.status-confirm-message span {
+  color: #60a5fa;
+  font-weight: 600;
+}
+
+.status-confirm-note {
+  color: #a5b4fc;
+  font-size: 0.9rem;
+  margin-bottom: 20px;
+}
+
+.status-confirm-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.status-confirm-actions .btn {
+  flex: 1;
+  border-radius: 12px;
+  padding: 12px;
+  font-size: 1rem;
+  cursor: pointer;
+  border: none;
+}
+
+.status-confirm-cancel {
+  background: rgba(148, 163, 184, 0.2) !important;
+  color: #e2e8f0 !important;
+}
+
+.status-confirm-accept {
+  background: linear-gradient(135deg, #22c55e, #16a34a) !important;
+  color: #fff !important;
+  box-shadow: 0 10px 25px rgba(34, 197, 94, 0.35);
+}
+
+.status-confirm-accept.blocking {
+  background: linear-gradient(135deg, #f97316, #ea580c) !important;
+  box-shadow: 0 10px 25px rgba(249, 115, 22, 0.35);
+}
+
+.status-confirm-accept.activating {
+  background: linear-gradient(135deg, #22c55e, #16a34a) !important;
+  box-shadow: 0 10px 25px rgba(34, 197, 94, 0.35);
+}
+
+.status-confirm-modal::backdrop {
+  background: transparent;
+}
+
 @media (max-width: 768px) {
   .admin {
     padding: 15px;
+  }
+  
+  .search-controls {
+    flex-direction: column;
   }
   
   .admin-table-container {
@@ -492,4 +706,112 @@
   }
 }
 </style>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const modal = document.getElementById('statusConfirmModal');
+  const forms = document.querySelectorAll('.toggle-status-form');
+  if (!modal || !forms.length) return;
+
+  const titleEl = modal.querySelector('[data-confirm-title]');
+  const messageEl = modal.querySelector('[data-confirm-message]');
+  const noteEl = modal.querySelector('[data-confirm-note]');
+  const iconEl = modal.querySelector('[data-confirm-icon]');
+  const confirmBtn = modal.querySelector('[data-confirm="accept"]');
+  const cancelBtns = modal.querySelectorAll('[data-confirm="cancel"]');
+
+  const ACTION_CONFIG = {
+    block: {
+      title: 'Chặn tài khoản?',
+      note: 'Tài khoản sẽ bị vô hiệu hóa cho đến khi bạn kích hoạt lại.',
+      icon: '🚫',
+      confirmLabel: 'Chặn ngay',
+      btnClass: 'blocking',
+      verb: 'chặn'
+    },
+    activate: {
+      title: 'Kích hoạt tài khoản?',
+      note: 'Người dùng sẽ đăng nhập và sử dụng CineBox bình thường.',
+      icon: '✅',
+      confirmLabel: 'Kích hoạt',
+      btnClass: 'activating',
+      verb: 'kích hoạt'
+    }
+  };
+
+  let pendingForm = null;
+
+  function buildMessage(action, email) {
+    messageEl.textContent = '';
+    messageEl.append('Bạn sắp ');
+    const strongVerb = document.createElement('strong');
+    strongVerb.textContent = ACTION_CONFIG[action].verb;
+    messageEl.append(strongVerb, ' tài khoản ');
+    const emailSpan = document.createElement('span');
+    emailSpan.textContent = email || 'người dùng này';
+    messageEl.append(emailSpan, '.');
+  }
+
+  function openModal(action, email) {
+    const config = ACTION_CONFIG[action];
+    titleEl.textContent = config.title;
+    noteEl.textContent = config.note;
+    iconEl.textContent = config.icon;
+    confirmBtn.textContent = config.confirmLabel;
+    confirmBtn.classList.remove('blocking', 'activating');
+    confirmBtn.classList.add(config.btnClass);
+    buildMessage(action, email);
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+  }
+
+  function closeModal() {
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+    pendingForm = null;
+  }
+
+  forms.forEach(form => {
+    form.addEventListener('submit', function(event) {
+      if (form.dataset.confirmed === 'true') {
+        form.dataset.confirmed = '';
+        return;
+      }
+      event.preventDefault();
+      const currentStatus = (form.dataset.currentStatus || '').toLowerCase();
+      pendingForm = form;
+      openModal(currentStatus === 'active' ? 'block' : 'activate', form.dataset.userEmail);
+    });
+  });
+
+  confirmBtn.addEventListener('click', function() {
+    if (!pendingForm) {
+      closeModal();
+      return;
+    }
+    pendingForm.dataset.confirmed = 'true';
+    if (typeof pendingForm.requestSubmit === 'function') {
+      pendingForm.requestSubmit();
+    } else {
+      pendingForm.submit();
+    }
+    closeModal();
+  });
+
+  cancelBtns.forEach(btn => {
+    btn.addEventListener('click', closeModal);
+  });
+
+  modal.addEventListener('click', function(event) {
+    if (event.target === modal) {
+      closeModal();
+    }
+  });
+
+  document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape' && modal.classList.contains('show')) {
+      closeModal();
+    }
+  });
+});
+</script>
 {% endblock %}

@@ -63,6 +63,7 @@ def login():
                             session["avatar"] = avatar_url
                         else:
                             session.pop("avatar", None)
+                        session.pop("_flashes", None)
                         current_app.logger.info(f"Session set: user_id={session['user_id']}, role={session['role']}")
                         return redirect(url_for("main.home"))
                 else:

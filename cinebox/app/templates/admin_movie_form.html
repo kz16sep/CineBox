@@ -145,6 +145,74 @@
 
       </div>
 
+      <!-- Thông tin bổ sung -->
+      <div class="form-section">
+        <h2 class="section-title">📊 Thông tin bổ sung</h2>
+        
+        <div class="form-row">
+          <div class="form-group">
+            <label for="language" class="form-label">Ngôn ngữ phát hành</label>
+            <input 
+              type="text" 
+              id="language" 
+              name="language" 
+              class="form-input" 
+              value="{{ form_data.language if form_data else (movie.language if movie else '') }}"
+              placeholder="Ví dụ: Vietnamese, English..."
+              maxlength="50"
+            />
+            <small class="form-hint">Tối đa 50 ký tự, chấp nhận chữ cái, số và ký tự , . - ( )</small>
+          </div>
+          
+          <div class="form-group">
+            <label for="runtime" class="form-label">Thời lượng (phút)</label>
+            <input 
+              type="text" 
+              id="runtime" 
+              name="runtime" 
+              class="form-input" 
+              value="{{ form_data.runtime if form_data else (movie.runtime if movie else '') }}"
+              placeholder="Ví dụ: 120"
+              pattern="[0-9]{1,3}"
+              inputmode="numeric"
+            />
+            <small class="form-hint">Regex: [0-9]{1,3} · Giá trị từ 1 - 600 phút</small>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="budget" class="form-label">Ngân sách (USD)</label>
+            <input 
+              type="text" 
+              id="budget" 
+              name="budget" 
+              class="form-input" 
+              value="{{ form_data.budget if form_data else (movie.budget if movie else '') }}"
+              placeholder="Ví dụ: 160000000"
+              pattern="[0-9]{1,12}"
+              inputmode="numeric"
+            />
+            <small class="form-hint">Regex: [0-9]{1,12} · Nhập số dương, tối đa 12 chữ số</small>
+          </div>
+
+          <div class="form-group">
+            <label for="revenue" class="form-label">Doanh thu (USD)</label>
+            <input 
+              type="text" 
+              id="revenue" 
+              name="revenue" 
+              class="form-input" 
+              value="{{ form_data.revenue if form_data else (movie.revenue if movie else '') }}"
+              placeholder="Ví dụ: 325000000"
+              pattern="[0-9]{1,12}"
+              inputmode="numeric"
+            />
+            <small class="form-hint">Regex: [0-9]{1,12} · Nhập số dương, tối đa 12 chữ số</small>
+          </div>
+        </div>
+      </div>
+
       <!-- Thông tin media -->
       <div class="form-section">
         <h2 class="section-title">🎬 Thông tin media</h2>

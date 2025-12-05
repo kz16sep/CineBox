@@ -7,11 +7,82 @@ from sqlalchemy import text
 from . import main_bp
 from .decorators import admin_required, login_required
 import threading
+import queue
 import re
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import MinMaxScaler
+from typing import Optional
+
+SIMILARITY_CHUNK_SIZE = 800
+similarity_job_queue = queue.Queue()
+similarity_worker_thread = None
+
+
+def enqueue_similarity_job(movie_id: int, movie_title: Optional[str] = None):
+    """
+    Đưa job tính similarity vào hàng đợi nền và cập nhật progress ở trạng thái chờ
+    """
+    from .common import similarity_progress
+
+    similarity_progress[movie_id] = {
+        'status': 'queued',
+        'progress': 0,
+        'message': '⏳ Đang xếp hàng để tính similarity...',
+        'movieTitle': movie_title
+    }
+    similarity_job_queue.put(movie_id)
+    _ensure_similarity_worker()
+
+
+def _ensure_similarity_worker(app=None):
+    """
+    Khởi tạo background worker nếu chưa chạy
+    """
+    global similarity_worker_thread
+    if similarity_worker_thread and similarity_worker_thread.is_alive():
+        return
+
+    app = app or current_app._get_current_object()
+    similarity_worker_thread = threading.Thread(
+        target=_similarity_worker_loop,
+        args=(app,),
+        daemon=True
+    )
+    similarity_worker_thread.start()
+
+
+def _similarity_worker_loop(app):
+    """
+    Worker chạy nền, liên tục lấy movieId từ queue và tính similarity
+    """
+    from .common import similarity_progress
+
+    while True:
+        movie_id = similarity_job_queue.get()
+        try:
+            with app.app_context():
+                current_app.logger.info(f"[SimilarityWorker] Starting job for movie {movie_id}")
+                _calculate_movie_similarity(movie_id)
+                current_app.logger.info(f"[SimilarityWorker] Finished job for movie {movie_id}")
+        except Exception as worker_error:
+            current_app.logger.error(f"[SimilarityWorker] Error for movie {movie_id}: {worker_error}", exc_info=True)
+            similarity_progress[movie_id] = {
+                'status': 'error',
+                'progress': 0,
+                'message': f'❌ Lỗi worker: {worker_error}',
+                'movieTitle': similarity_progress.get(movie_id, {}).get('movieTitle')
+            }
+        finally:
+            similarity_job_queue.task_done()
+
+
+@main_bp.record_once
+def _register_similarity_worker(state):
+    app = state.app
+    with app.app_context():
+        _ensure_similarity_worker(app)
 
 
 @main_bp.route("/admin")
@@ -78,7 +149,8 @@ def api_similarity_progress(movie_id):
     progress = similarity_progress.get(movie_id, {
         'status': 'not_found',
         'progress': 0,
-        'message': 'Không tìm thấy thông tin tính similarity'
+        'message': 'Không tìm thấy thông tin tính similarity',
+        'movieTitle': None
     })
     
     return jsonify(progress)
@@ -181,6 +253,10 @@ def admin_users():
     page = request.args.get('page', 1, type=int)
     per_page = 20
     search_query = request.args.get('q', '').strip()
+    status_filter = (request.args.get('status', 'all') or 'all').strip().lower()
+    if status_filter not in {'all', 'active', 'inactive'}:
+        status_filter = 'all'
+    status_condition = " AND u.status = :status_filter" if status_filter != 'all' else ""
     
     try:
         with current_app.db_engine.connect() as conn:
@@ -191,17 +267,28 @@ def admin_users():
                 if is_numeric:
                     # Tìm kiếm theo ID (exact match)
                     user_id = int(search_query)
-                    total_count = conn.execute(text("""
+                    count_params = {"user_id": user_id}
+                    if status_filter != 'all':
+                        count_params["status_filter"] = status_filter
+                    total_count = conn.execute(text(f"""
                         SELECT COUNT(*) 
                         FROM cine.[User] u
                         JOIN cine.Role r ON r.roleId = u.roleId
                         WHERE u.userId = :user_id
-                    """), {"user_id": user_id}).scalar()
+                        {status_condition}
+                    """), count_params).scalar()
                     
                     total_pages = (total_count + per_page - 1) // per_page
                     offset = (page - 1) * per_page
                     
-                    users = conn.execute(text("""
+                    query_params = {
+                        "user_id": user_id,
+                        "offset": offset,
+                        "per_page": per_page
+                    }
+                    if status_filter != 'all':
+                        query_params["status_filter"] = status_filter
+                    users = conn.execute(text(f"""
                         SELECT u.userId, u.email, u.status, u.createdAt, u.lastLoginAt, r.roleName,
                                a.username
                         FROM (
@@ -209,29 +296,39 @@ def admin_users():
                                    ROW_NUMBER() OVER (ORDER BY u.createdAt DESC) as rn
                             FROM cine.[User] u
                             WHERE u.userId = :user_id
+                            {status_condition}
                         ) t
                         JOIN cine.Role r ON r.roleId = t.roleId
                         LEFT JOIN cine.Account a ON a.userId = t.userId
                         WHERE t.rn > :offset AND t.rn <= :offset + :per_page
-                    """), {
-                        "user_id": user_id,
-                        "offset": offset,
-                        "per_page": per_page
-                    }).mappings().all()
+                    """), query_params).mappings().all()
                 else:
                     # Tìm kiếm theo email hoặc username
-                    total_count = conn.execute(text("""
+                    count_params = {"query": f"%{search_query}%"}
+                    if status_filter != 'all':
+                        count_params["status_filter"] = status_filter
+                    total_count = conn.execute(text(f"""
                         SELECT COUNT(*) 
                         FROM cine.[User] u
                         JOIN cine.Role r ON r.roleId = u.roleId
                         LEFT JOIN cine.Account a ON a.userId = u.userId
-                        WHERE u.email LIKE :query OR a.username LIKE :query
-                    """), {"query": f"%{search_query}%"}).scalar()
+                        WHERE (u.email LIKE :query OR a.username LIKE :query)
+                        {status_condition}
+                    """), count_params).scalar()
                     
                     total_pages = (total_count + per_page - 1) // per_page
                     offset = (page - 1) * per_page
                     
-                    users = conn.execute(text("""
+                    query_params = {
+                        "query": f"%{search_query}%",
+                        "exact_query": f"{search_query}%",
+                        "start_query": f"{search_query}%",
+                        "offset": offset,
+                        "per_page": per_page
+                    }
+                    if status_filter != 'all':
+                        query_params["status_filter"] = status_filter
+                    users = conn.execute(text(f"""
                         SELECT u.userId, u.email, u.status, u.createdAt, u.lastLoginAt, r.roleName,
                                a.username
                         FROM (
@@ -249,35 +346,43 @@ def admin_users():
                                    ) as rn
                             FROM cine.[User] u
                             LEFT JOIN cine.Account a ON a.userId = u.userId
-                            WHERE u.email LIKE :query OR a.username LIKE :query
+                            WHERE (u.email LIKE :query OR a.username LIKE :query)
+                            {status_condition}
                         ) t
                         JOIN cine.Role r ON r.roleId = t.roleId
                         LEFT JOIN cine.Account a ON a.userId = t.userId
                         WHERE t.rn > :offset AND t.rn <= :offset + :per_page
-                    """), {
-                        "query": f"%{search_query}%",
-                        "exact_query": f"{search_query}%",
-                        "start_query": f"{search_query}%",
-                        "offset": offset,
-                        "per_page": per_page
-                    }).mappings().all()
+                    """), query_params).mappings().all()
             else:
                 # Lấy user mới nhất với phân trang
-                total_count = conn.execute(text("SELECT COUNT(*) FROM cine.[User]")).scalar()
+                count_params = {}
+                if status_filter != 'all':
+                    count_params["status_filter"] = status_filter
+                total_count = conn.execute(text(f"""
+                    SELECT COUNT(*) 
+                    FROM cine.[User] u
+                    WHERE 1=1
+                    {status_condition}
+                """), count_params).scalar()
                 
                 total_pages = (total_count + per_page - 1) // per_page
                 offset = (page - 1) * per_page
                 
-                users = conn.execute(text("""
+                query_params = {"offset": offset, "per_page": per_page}
+                if status_filter != 'all':
+                    query_params["status_filter"] = status_filter
+                users = conn.execute(text(f"""
                     SELECT u.userId, u.email, u.status, u.createdAt, u.lastLoginAt, r.roleName,
                            a.username
                     FROM cine.[User] u
                     JOIN cine.Role r ON r.roleId = u.roleId
                     LEFT JOIN cine.Account a ON a.userId = u.userId
+                    WHERE 1=1
+                    {status_condition}
                     ORDER BY u.createdAt DESC, u.userId DESC
                     OFFSET :offset ROWS
                     FETCH NEXT :per_page ROWS ONLY
-                """), {"offset": offset, "per_page": per_page}).mappings().all()
+                """), query_params).mappings().all()
             
             pagination = {
                 "page": page,
@@ -293,14 +398,16 @@ def admin_users():
         return render_template("admin_users.html", 
                              users=users, 
                              pagination=pagination,
-                             search_query=search_query)
+                             search_query=search_query,
+                             status_filter=status_filter)
     except Exception as e:
         current_app.logger.error(f"Error loading admin users: {e}", exc_info=True)
         flash(f"Lỗi khi tải danh sách người dùng: {str(e)}", "error")
         return render_template("admin_users.html", 
                              users=[], 
                              pagination=None,
-                             search_query=search_query)
+                             search_query=search_query,
+                             status_filter=status_filter)
 
 
 @main_bp.route("/admin/users/<int:user_id>/toggle-status", methods=["POST"])
@@ -334,7 +441,7 @@ def admin_user_toggle_status(user_id):
             """), {"id": user_id, "status": new_status})
         
         status_text = "không hoạt động" if new_status == "inactive" else "hoạt động"
-        flash(f"✅ Đã thay đổi trạng thái {user_info.email} thành {status_text}!", "success")
+        flash(f"Đã thay đổi trạng thái {user_info.email} thành {status_text}!", "success")
     except Exception as e:
         current_app.logger.error(f"Error toggling user status: {e}", exc_info=True)
         flash(f"❌ Lỗi khi thay đổi trạng thái: {str(e)}", "error")
@@ -368,20 +475,12 @@ def admin_user_delete(user_id):
             # Xóa user (cascade sẽ xóa account và rating)
             conn.execute(text("DELETE FROM cine.[User] WHERE userId = :id"), {"id": user_id})
             
-            flash(f"✅ Đã xóa tài khoản {user_info.email} thành công!", "success")
+            flash(f"Đã xóa tài khoản {user_info.email} thành công!", "success")
     except Exception as e:
         current_app.logger.error(f"Error deleting user: {e}", exc_info=True)
         flash(f"❌ Lỗi khi xóa người dùng: {str(e)}", "error")
     
     return redirect(url_for("main.admin_users"))
-
-
-def _calculate_movie_similarity_with_context(app, movie_id: int):
-    """
-    Wrapper function để chạy similarity calculation với Flask app context
-    """
-    with app.app_context():
-        _calculate_movie_similarity(movie_id)
 
 
 def _calculate_movie_similarity(movie_id: int):
@@ -391,18 +490,147 @@ def _calculate_movie_similarity(movie_id: int):
     """
     from .common import similarity_progress
     
-    try:
-        # Khởi tạo progress
-        similarity_progress[movie_id] = {
-            'status': 'running',
-            'progress': 0,
-            'message': 'Đang bắt đầu tính similarity...'
-        }
-        current_app.logger.info(f"Starting similarity calculation for movie {movie_id}")
+    def update_progress(progress_value: int, message: str, status: str = 'running', movie_title: Optional[str] = None):
+        entry = similarity_progress.get(movie_id, {}).copy()
+        entry['status'] = status
+        entry['progress'] = max(0, min(100, int(progress_value)))
+        entry['message'] = message
+        if movie_title:
+            entry['movieTitle'] = movie_title
+        similarity_progress[movie_id] = entry
+
+    def load_genres_for_movies(conn, ids):
+        if not ids:
+            return {}
+        placeholders = ','.join([f':gid{i}' for i in range(len(ids))])
+        params = {f'gid{i}': int(mid) for i, mid in enumerate(ids)}
+        genre_rows = conn.execute(text(f"""
+            SELECT mg.movieId, g.name
+            FROM cine.MovieGenre mg
+            JOIN cine.Genre g ON mg.genreId = g.genreId
+            WHERE mg.movieId IN ({placeholders})
+        """), params).fetchall()
+        genres_map = {}
+        for movie_id_value, genre_name in genre_rows:
+            genres_map.setdefault(int(movie_id_value), []).append(genre_name)
+        return genres_map
+
+    def build_movies_data(rows, genres_map):
+        movies_data = []
+        for row in rows:
+            movie_id_value = int(row.movieId)
+            year = row.releaseYear or 2000
+            title = row.title or ''
+            title_with_year = f"{title} ({year})" if year and f"({year})" not in title else title
+            genre_list = genres_map.get(movie_id_value, [])
+            genres_text = " ".join(genre_list)
+            movies_data.append({
+                'movieId': movie_id_value,
+                'title_for_vector': title_with_year,
+                'genres_text': genres_text,
+                'year': year,
+                'avgRating': float(row.avgRating or 0.0),
+                'ratingCount': int(row.ratingCount or 0)
+            })
+        return movies_data
+
+    def compute_similarity_scores(new_meta, movies_data):
+        if not movies_data:
+            return np.array([])
         
-        with current_app.db_engine.connect() as conn:
-            # Lấy thông tin phim mới
-            new_movie = conn.execute(text("""
+        doc_genres = [new_meta['genres_text']] + [m['genres_text'] for m in movies_data]
+        if any(doc.strip() for doc in doc_genres):
+            genres_vectorizer = TfidfVectorizer(max_features=500, min_df=1)
+            genres_matrix = genres_vectorizer.fit_transform(doc_genres)
+            genres_sim = cosine_similarity(genres_matrix[0:1], genres_matrix[1:])[0]
+        else:
+            genres_sim = np.zeros(len(movies_data))
+
+        title_docs = [new_meta['title_for_vector']] + [m['title_for_vector'] for m in movies_data]
+        title_vectorizer = TfidfVectorizer(max_features=500, min_df=1)
+        title_matrix = title_vectorizer.fit_transform(title_docs)
+        title_sim = cosine_similarity(title_matrix[0:1], title_matrix[1:])[0]
+
+        years = np.array([[new_meta['year']]] + [[m['year']] for m in movies_data], dtype=float)
+        year_scaler = MinMaxScaler()
+        years_scaled = year_scaler.fit_transform(years)
+        year_sim = 1 - np.abs(years_scaled[0] - years_scaled[1:]).flatten()
+        year_sim = np.clip(year_sim, 0, 1)
+
+        popularity = np.array([[np.log1p(new_meta['ratingCount'])]] + [[np.log1p(m['ratingCount'])] for m in movies_data], dtype=float)
+        pop_scaler = MinMaxScaler()
+        pop_scaled = pop_scaler.fit_transform(popularity)
+        pop_sim = 1 - np.abs(pop_scaled[0] - pop_scaled[1:]).flatten()
+        pop_sim = np.clip(pop_sim, 0, 1)
+
+        ratings = np.array([[new_meta['avgRating']]] + [[m['avgRating']] for m in movies_data], dtype=float)
+        rating_scaler = MinMaxScaler()
+        rating_scaled = rating_scaler.fit_transform(ratings)
+        rating_sim = 1 - np.abs(rating_scaled[0] - rating_scaled[1:]).flatten()
+        rating_sim = np.clip(rating_sim, 0, 1)
+
+        final_scores = (
+            genres_sim * 0.60 +
+            title_sim * 0.20 +
+            year_sim * 0.07 +
+            pop_sim * 0.07 +
+            rating_sim * 0.06
+        )
+        return final_scores
+
+    def build_similarity_pairs(movies_data, scores):
+        pairs = []
+        for idx, score in enumerate(scores):
+            if score <= 0.05:
+                continue
+            other_movie_id = movies_data[idx]['movieId']
+            similarity_value = float(score)
+            pairs.append({
+                "movieId1": movie_id,
+                "movieId2": other_movie_id,
+                "similarity": similarity_value
+            })
+            pairs.append({
+                "movieId1": other_movie_id,
+                "movieId2": movie_id,
+                "similarity": similarity_value
+            })
+        return pairs
+
+    def save_similarity_pairs(conn, similarities_to_save):
+        if not similarities_to_save:
+            return
+        batch_size = 100
+        for i in range(0, len(similarities_to_save), batch_size):
+            batch = similarities_to_save[i:i + batch_size]
+            values_clauses = []
+            params = {}
+            for idx, sim in enumerate(batch):
+                prefix = f"p{idx}"
+                values_clauses.append(f"(:{prefix}_id1, :{prefix}_id2, :{prefix}_sim)")
+                params[f"{prefix}_id1"] = int(sim["movieId1"])
+                params[f"{prefix}_id2"] = int(sim["movieId2"])
+                params[f"{prefix}_sim"] = float(sim["similarity"])
+            values_str = ", ".join(values_clauses)
+            conn.execute(text(f"""
+                MERGE cine.MovieSimilarity AS target
+                USING (
+                    SELECT movieId1, movieId2, similarity
+                    FROM (VALUES {values_str}) AS v(movieId1, movieId2, similarity)
+                ) AS source
+                ON target.movieId1 = source.movieId1 AND target.movieId2 = source.movieId2
+                WHEN MATCHED THEN
+                    UPDATE SET similarity = source.similarity
+                WHEN NOT MATCHED THEN
+                    INSERT (movieId1, movieId2, similarity)
+                    VALUES (source.movieId1, source.movieId2, source.similarity);
+            """), params)
+    
+    try:
+        update_progress(1, 'Đang khởi tạo tiến trình...')
+
+        with current_app.db_engine.connect() as info_conn:
+            new_movie = info_conn.execute(text("""
                 SELECT m.movieId, m.title, m.releaseYear, m.overview,
                        AVG(CAST(r.value AS FLOAT)) AS avgRating,
                        COUNT(r.value) AS ratingCount
@@ -411,25 +639,18 @@ def _calculate_movie_similarity(movie_id: int):
                 WHERE m.movieId = :movie_id
                 GROUP BY m.movieId, m.title, m.releaseYear, m.overview
             """), {"movie_id": movie_id}).mappings().first()
-            
+
             if not new_movie:
-                current_app.logger.error(f"Movie {movie_id} not found")
-                similarity_progress[movie_id] = {
-                    'status': 'error',
-                    'progress': 0,
-                    'message': 'Không tìm thấy phim'
-                }
+                update_progress(0, 'Không tìm thấy phim', status='error')
                 return
-            
-            # Cập nhật progress: 10%
-            similarity_progress[movie_id] = {
-                'status': 'running',
-                'progress': 10,
-                'message': 'Đang lấy thông tin phim...'
-            }
-            
-            # Lấy genres của phim mới
-            new_genres = conn.execute(text("""
+
+            movie_title = new_movie["title"]
+            title_with_year = movie_title
+            movie_year = new_movie.get("releaseYear")
+            if movie_year and f"({movie_year})" not in movie_title:
+                title_with_year = f"{movie_title} ({movie_year})"
+
+            new_genres = info_conn.execute(text("""
                 SELECT g.name 
                 FROM cine.Genre g
                 JOIN cine.MovieGenre mg ON g.genreId = mg.genreId
@@ -437,301 +658,115 @@ def _calculate_movie_similarity(movie_id: int):
             """), {"movie_id": movie_id}).fetchall()
             new_genres_list = [g[0] for g in new_genres]
             new_genres_text = " ".join(new_genres_list)
-            
-            # Format title với year (nếu có)
-            title = new_movie["title"]
-            year = new_movie.get("releaseYear")
-            if year and f"({year})" not in title:
-                title = f"{title} ({year})"
-            
-            # Cập nhật progress: 20%
-            similarity_progress[movie_id] = {
-                'status': 'running',
-                'progress': 20,
-                'message': 'Đang tìm phim để so sánh...'
-            }
-            
-            # Lấy danh sách phim khác để so sánh (ưu tiên phim có genres chung)
-            # TOP 1000 phim để tối ưu tốc độ (giảm từ 3000 xuống 1000)
-            # Nếu phim mới có genres, chỉ lấy phim có ít nhất 1 genre chung
+
+            update_progress(5, 'Đang thu thập dữ liệu', movie_title=movie_title)
+
+            genre_filter = ""
             if new_genres_list:
-                # Có genres: chỉ lấy phim có genres chung
-                all_movies = conn.execute(text("""
-                    SELECT TOP 1000
+                genre_filter = """
+                    AND EXISTS (
+                        SELECT 1 
+                        FROM cine.MovieGenre mg1
+                        JOIN cine.MovieGenre mg2 ON mg1.genreId = mg2.genreId
+                        WHERE mg1.movieId = m.movieId 
+                        AND mg2.movieId = :movie_id
+                    )
+                """
+
+            count_query = text(f"""
+                SELECT COUNT(*) 
+                FROM cine.Movie m
+                WHERE m.movieId != :movie_id
+                {genre_filter}
+            """)
+            candidate_count = info_conn.execute(count_query, {"movie_id": movie_id}).scalar() or 0
+
+            if candidate_count == 0:
+                update_progress(100, 'Không có phim nào để so sánh', status='completed', movie_title=movie_title)
+                current_app.logger.warning(f"No candidate movies for similarity calculation of {movie_id}")
+                return
+
+            update_progress(8, f'Đang chuẩn bị {candidate_count} phim để so sánh', movie_title=movie_title)
+
+            candidate_query = text(f"""
+                WITH candidate_movies AS (
+                    SELECT 
                         m.movieId, m.title, m.releaseYear, m.overview,
                         AVG(CAST(r.value AS FLOAT)) AS avgRating,
                         COUNT(r.value) AS ratingCount,
                         (SELECT COUNT(*) 
                          FROM cine.MovieGenre mg1 
-                         JOIN cine.Genre g1 ON mg1.genreId = g1.genreId
+                         JOIN cine.MovieGenre mg2 ON mg1.genreId = mg2.genreId
                          WHERE mg1.movieId = m.movieId 
-                         AND g1.name IN (SELECT g2.name 
-                                          FROM cine.Genre g2
-                                          JOIN cine.MovieGenre mg2 ON g2.genreId = mg2.genreId
-                                          WHERE mg2.movieId = :movie_id)
+                         AND mg2.movieId = :movie_id
                         ) AS common_genres_count
                     FROM cine.Movie m
                     LEFT JOIN cine.Rating r ON m.movieId = r.movieId
                     WHERE m.movieId != :movie_id
-                    AND EXISTS (
-                        SELECT 1 
-                        FROM cine.MovieGenre mg1
-                        JOIN cine.Genre g1 ON mg1.genreId = g1.genreId
-                        JOIN cine.MovieGenre mg2 ON g1.genreId = mg2.genreId
-                        WHERE mg1.movieId = m.movieId 
-                        AND mg2.movieId = :movie_id
-                    )
+                    {genre_filter}
                     GROUP BY m.movieId, m.title, m.releaseYear, m.overview
-                    ORDER BY common_genres_count DESC, avgRating DESC, ratingCount DESC
-                """), {"movie_id": movie_id}).mappings().all()
-            else:
-                # Không có genres: lấy phim phổ biến
-                all_movies = conn.execute(text("""
-                    SELECT TOP 1000
-                        m.movieId, m.title, m.releaseYear, m.overview,
-                        AVG(CAST(r.value AS FLOAT)) AS avgRating,
-                        COUNT(r.value) AS ratingCount,
-                        0 AS common_genres_count
-                    FROM cine.Movie m
-                    LEFT JOIN cine.Rating r ON m.movieId = r.movieId
-                    WHERE m.movieId != :movie_id
-                    GROUP BY m.movieId, m.title, m.releaseYear, m.overview
-                    ORDER BY avgRating DESC, ratingCount DESC
-                """), {"movie_id": movie_id}).mappings().all()
-            
-            if not all_movies:
-                current_app.logger.warning(f"No movies found for similarity calculation")
-                return
-            
-            # Batch query genres cho tất cả phim cùng lúc (tối ưu tốc độ)
-            # Chia nhỏ thành batch để tránh vượt quá giới hạn parameters của SQL Server (2100)
-            movie_ids = [m["movieId"] for m in all_movies]
-            if not movie_ids:
-                current_app.logger.warning(f"No movies found for similarity calculation")
-                return
-            
-            # Query genres cho tất cả phim, chia thành batch 1000 phim mỗi lần
-            BATCH_SIZE = 1000
-            genres_results = []
-            for i in range(0, len(movie_ids), BATCH_SIZE):
-                batch_ids = movie_ids[i:i + BATCH_SIZE]
-                placeholders = ','.join([f':id{j}' for j in range(len(batch_ids))])
-                params_genres = {f'id{j}': int(mid) for j, mid in enumerate(batch_ids)}
-                batch_results = conn.execute(text(f"""
-                    SELECT mg.movieId, g.name
-                    FROM cine.MovieGenre mg
-                    JOIN cine.Genre g ON mg.genreId = g.genreId
-                    WHERE mg.movieId IN ({placeholders})
-                """), params_genres).fetchall()
-                genres_results.extend(batch_results)
-            
-            # Cập nhật progress: 40%
-            similarity_progress[movie_id] = {
-                'status': 'running',
-                'progress': 40,
-                'message': 'Đang chuẩn bị dữ liệu...'
-            }
-            
-            # Group genres by movieId
-            genres_by_movie = {}
-            for movie_id_item, genre_name in genres_results:
-                if movie_id_item not in genres_by_movie:
-                    genres_by_movie[movie_id_item] = []
-                genres_by_movie[movie_id_item].append(genre_name)
-            
-            # Chuẩn bị dữ liệu cho tính toán
-            movies_data = []
-            for movie in all_movies:
-                movie_id = movie["movieId"]
-                genres_list = genres_by_movie.get(movie_id, [])
-                genres_text = " ".join(genres_list)
-                
-                # Format title với year
-                movie_title = movie["title"]
-                movie_year = movie.get("releaseYear")
-                if movie_year and f"({movie_year})" not in movie_title:
-                    movie_title = f"{movie_title} ({movie_year})"
-                
-                movies_data.append({
-                    "movieId": movie_id,
-                    "title": movie_title,
-                    "genres": genres_text,
-                    "year": movie_year or 2000,
-                    "avgRating": float(movie.get("avgRating") or 0),
-                    "ratingCount": int(movie.get("ratingCount") or 0)
-                })
-            
-            # Cập nhật progress: 50%
-            similarity_progress[movie_id] = {
-                'status': 'running',
-                'progress': 50,
-                'message': 'Đang tính similarity...'
-            }
-            
-            # Tính similarity
-            # Giảm max_features để tăng tốc độ tính toán (1000 -> 500)
-            # 1. Genres similarity (60%)
-            all_genres = [new_genres_text] + [m["genres"] for m in movies_data]
-            genres_vectorizer = TfidfVectorizer(max_features=500, min_df=1)  # Giảm từ 1000 xuống 500
-            genres_matrix = genres_vectorizer.fit_transform(all_genres)
-            genres_sim = cosine_similarity(genres_matrix[0:1], genres_matrix[1:])[0]
-            
-            # 2. Title similarity (20%)
-            all_titles = [title] + [m["title"] for m in movies_data]
-            title_vectorizer = TfidfVectorizer(max_features=500, min_df=1)  # Giảm từ 1000 xuống 500
-            title_matrix = title_vectorizer.fit_transform(all_titles)
-            title_sim = cosine_similarity(title_matrix[0:1], title_matrix[1:])[0]
-            
-            # 3. Year similarity (7%)
-            years = np.array([[year or 2000]] + [[m["year"]] for m in movies_data])
-            year_scaler = MinMaxScaler()
-            years_scaled = year_scaler.fit_transform(years)
-            year_sim = 1 - np.abs(years_scaled[0] - years_scaled[1:]).flatten()
-            year_sim = np.clip(year_sim, 0, 1)
-            
-            # 4. Popularity similarity (7%) - dựa trên ratingCount
-            popularity = np.array([[np.log1p(0)]] + [[np.log1p(m["ratingCount"])] for m in movies_data])
-            pop_scaler = MinMaxScaler()
-            pop_scaled = pop_scaler.fit_transform(popularity)
-            pop_sim = 1 - np.abs(pop_scaled[0] - pop_scaled[1:]).flatten()
-            pop_sim = np.clip(pop_sim, 0, 1)
-            
-            # 5. Rating similarity (6%) - dựa trên avgRating
-            ratings = np.array([[new_movie.get("avgRating") or 0]] + [[m["avgRating"]] for m in movies_data])
-            rating_scaler = MinMaxScaler()
-            rating_scaled = rating_scaler.fit_transform(ratings)
-            rating_sim = 1 - np.abs(rating_scaled[0] - rating_scaled[1:]).flatten()
-            rating_sim = np.clip(rating_sim, 0, 1)
-            
-            # Cập nhật progress: 70%
-            similarity_progress[movie_id] = {
-                'status': 'running',
-                'progress': 70,
-                'message': 'Đang kết hợp similarity scores...'
-            }
-            
-            # Combine với weights: Genres (60%), Title (20%), Year (7%), Popularity (7%), Rating (6%)
-            # Cùng weights với improved_train.py để đảm bảo tính nhất quán
-            final_similarities = (
-                genres_sim * 0.60 +      # Genres: 60%
-                title_sim * 0.20 +       # Title: 20%
-                year_sim * 0.07 +        # Year: 7%
-                pop_sim * 0.07 +         # Popularity: 7%
-                rating_sim * 0.06        # Rating: 6%
-            )
-            
-            # Lấy top 20 phim tương tự nhất
-            top_n = 20
-            top_indices = np.argsort(final_similarities)[::-1][:top_n]
-            
-            # Lưu vào database (chỉ lưu top 20 phim tương tự)
-            similarities_to_save = []
-            for i in top_indices:
-                sim_score = final_similarities[i]
-                if sim_score > 0.05:  # Threshold
-                    other_movie_id = movies_data[i]["movieId"]
-                    # Lưu cả 2 chiều (movieId1, movieId2) và (movieId2, movieId1)
-                    similarities_to_save.append({
-                        "movieId1": movie_id,
-                        "movieId2": other_movie_id,
-                        "similarity": float(sim_score)
-                    })
-                    similarities_to_save.append({
-                        "movieId1": other_movie_id,
-                        "movieId2": movie_id,
-                        "similarity": float(sim_score)
-                    })
-            
-            # Cập nhật progress: 80%
-            similarity_progress[movie_id] = {
-                'status': 'running',
-                'progress': 80,
-                'message': 'Đang lưu vào database...'
-            }
-            
-            # Batch insert vào database (tối ưu bằng bulk insert với VALUES nhiều dòng)
-            if similarities_to_save:
-                # Tối ưu: dùng bulk MERGE với VALUES nhiều dòng thay vì từng dòng
-                batch_size = 100  # Batch size cho bulk insert
-                inserted_count = 0
-                
-                for i in range(0, len(similarities_to_save), batch_size):
-                    batch = similarities_to_save[i:i+batch_size]
-                    
-                    # Tạo VALUES clause cho bulk insert
-                    values_clauses = []
-                    params = {}
-                    for idx, sim in enumerate(batch):
-                        param_prefix = f"m{idx}"
-                        values_clauses.append(f"(:{param_prefix}_id1, :{param_prefix}_id2, :{param_prefix}_sim)")
-                        params[f"{param_prefix}_id1"] = sim["movieId1"]
-                        params[f"{param_prefix}_id2"] = sim["movieId2"]
-                        params[f"{param_prefix}_sim"] = sim["similarity"]
-                    
-                    # Bulk MERGE với VALUES nhiều dòng
-                    try:
-                        values_str = ", ".join(values_clauses)
-                        conn.execute(text(f"""
-                            MERGE cine.MovieSimilarity AS target
-                            USING (
-                                SELECT movieId1, movieId2, similarity
-                                FROM (VALUES {values_str}) AS v(movieId1, movieId2, similarity)
-                            ) AS source
-                            ON target.movieId1 = source.movieId1 AND target.movieId2 = source.movieId2
-                            WHEN MATCHED THEN
-                                UPDATE SET similarity = source.similarity
-                            WHEN NOT MATCHED THEN
-                                INSERT (movieId1, movieId2, similarity)
-                                VALUES (source.movieId1, source.movieId2, source.similarity);
-                        """), params)
-                        inserted_count += len(batch)
-                    except Exception as e:
-                        # Fallback: insert từng dòng nếu bulk insert fail
-                        current_app.logger.warning(f"Bulk insert failed, falling back to individual inserts: {e}")
-                        for sim in batch:
-                            try:
-                                conn.execute(text("""
-                                    MERGE cine.MovieSimilarity AS target
-                                    USING (SELECT :movieId1 AS movieId1, :movieId2 AS movieId2, :similarity AS similarity) AS source
-                                    ON target.movieId1 = source.movieId1 AND target.movieId2 = source.movieId2
-                                    WHEN MATCHED THEN
-                                        UPDATE SET similarity = source.similarity
-                                    WHEN NOT MATCHED THEN
-                                        INSERT (movieId1, movieId2, similarity)
-                                        VALUES (source.movieId1, source.movieId2, source.similarity);
-                                """), {
-                                    "movieId1": sim["movieId1"],
-                                    "movieId2": sim["movieId2"],
-                                    "similarity": sim["similarity"]
-                                })
-                                inserted_count += 1
-                            except Exception as e2:
-                                current_app.logger.error(f"Error saving similarity {sim}: {e2}")
-                    
-                    # Commit sau mỗi batch
-                    conn.commit()
-                
-                # Cập nhật progress: 100% - Hoàn thành
-                similarity_progress[movie_id] = {
-                    'status': 'completed',
-                    'progress': 100,
-                    'message': f'✅ Đã tính similarity cho {len(similarities_to_save)//2} phim liên quan'
-                }
-                current_app.logger.info(f"✅ Calculated and saved {len(similarities_to_save)} similarity pairs (top {top_n} movies) for movie {movie_id}")
-            else:
-                similarity_progress[movie_id] = {
-                    'status': 'completed',
-                    'progress': 100,
-                    'message': 'Không tìm thấy phim tương tự (similarity < 0.05)'
-                }
-                current_app.logger.warning(f"No similarities above threshold for movie {movie_id}")
-                
-    except Exception as e:
-        similarity_progress[movie_id] = {
-            'status': 'error',
-            'progress': 0,
-            'message': f'❌ Lỗi: {str(e)}'
+                )
+                SELECT *
+                FROM candidate_movies
+                ORDER BY 
+                    CASE WHEN :has_genres = 1 THEN common_genres_count ELSE 1 END DESC,
+                    avgRating DESC,
+                    ratingCount DESC
+            """)
+
+            candidate_params = {"movie_id": movie_id, "has_genres": 1 if new_genres_list else 0}
+
+        read_conn = current_app.db_engine.connect().execution_options(stream_results=True)
+        candidate_result = read_conn.execute(candidate_query, candidate_params)
+
+        processed = 0
+        relationships_created = 0
+
+        new_movie_meta = {
+            "genres_text": new_genres_text,
+            "title_for_vector": title_with_year,
+            "year": movie_year or 2000,
+            "avgRating": float(new_movie.get("avgRating") or 0.0),
+            "ratingCount": int(new_movie.get("ratingCount") or 0),
         }
+
+        try:
+            with current_app.db_engine.begin() as write_conn:
+                while True:
+                    chunk_rows = candidate_result.fetchmany(SIMILARITY_CHUNK_SIZE)
+                    if not chunk_rows:
+                        break
+
+                    chunk_ids = [int(row.movieId) for row in chunk_rows]
+                    genres_map = load_genres_for_movies(write_conn, chunk_ids)
+                    movies_data = build_movies_data(chunk_rows, genres_map)
+
+                    if not movies_data:
+                        processed += len(chunk_rows)
+                        continue
+
+                    scores = compute_similarity_scores(new_movie_meta, movies_data)
+                    chunk_pairs = build_similarity_pairs(movies_data, scores)
+                    if chunk_pairs:
+                        save_similarity_pairs(write_conn, chunk_pairs)
+                        relationships_created += len(chunk_pairs) // 2
+
+                    processed += len(chunk_rows)
+                    progress_value = 10 + int(75 * processed / max(1, candidate_count))
+                    update_progress(progress_value, f'Đã xử lý {processed}/{candidate_count} phim', movie_title=movie_title)
+        finally:
+            candidate_result.close()
+            read_conn.close()
+
+        update_progress(90, 'Đang hoàn tất cập nhật dữ liệu...', movie_title=movie_title)
+        update_progress(100,
+                        f'🎉 Tính similarity hoàn tất cho {relationships_created} phim liên quan',
+                        status='completed',
+                        movie_title=movie_title)
+        current_app.logger.info(f"Calculated similarity for movie {movie_id} with {relationships_created} related movies")
+
+    except Exception as e:
+        update_progress(0, f'❌ Lỗi: {str(e)}', status='error')
         current_app.logger.error(f"Error calculating similarity for movie {movie_id}: {e}", exc_info=True)
 
 
@@ -753,6 +788,10 @@ def admin_movie_create():
         poster_url = request.form.get("poster_url", "").strip()
         backdrop_url = request.form.get("backdrop_url", "").strip()
         movie_url = request.form.get("movie_url", "").strip()
+        language = request.form.get("language", "").strip()
+        budget = request.form.get("budget", "").strip()
+        revenue = request.form.get("revenue", "").strip()
+        runtime = request.form.get("runtime", "").strip()
         selected_genres = request.form.getlist("genres")
         
         # Validation
@@ -802,7 +841,45 @@ def admin_movie_create():
         if movie_url and not re.match(url_pattern, movie_url):
             errors.append("Movie URL phải là địa chỉ web hợp lệ (bắt đầu bằng http:// hoặc https://)")
         
-        # 7. Genres validation
+        # 7. Language validation (max 50 chars, chữ/số/dấu phân cách cơ bản)
+        language_value = None
+        language_pattern = r"^[A-Za-zÀ-ỹ0-9 ,.\-()]+$"
+        if language:
+            if len(language) > 50:
+                errors.append("Ngôn ngữ không được quá 50 ký tự")
+            elif not re.match(language_pattern, language):
+                errors.append("Ngôn ngữ chỉ được chứa chữ, số và các ký tự , . - ( )")
+            else:
+                language_value = language
+
+        # 8. Budget validation (số dương, tối đa 12 chữ số)
+        digits_12_pattern = r"^\d{1,12}$"
+        budget_value = None
+        if budget:
+            if not re.match(digits_12_pattern, budget):
+                errors.append("Ngân sách phải là số dương, tối đa 12 chữ số (không chứa ký tự khác)")
+            else:
+                budget_value = int(budget)
+
+        # 9. Revenue validation
+        revenue_value = None
+        if revenue:
+            if not re.match(digits_12_pattern, revenue):
+                errors.append("Doanh thu phải là số dương, tối đa 12 chữ số (không chứa ký tự khác)")
+            else:
+                revenue_value = int(revenue)
+
+        # 10. Runtime validation (1-600 phút)
+        runtime_value = None
+        if runtime:
+            if not re.match(r"^\d{1,3}$", runtime):
+                errors.append("Thời lượng chỉ được nhập số (tối đa 3 chữ số)")
+            else:
+                runtime_value = int(runtime)
+                if runtime_value < 1 or runtime_value > 600:
+                    errors.append("Thời lượng phải từ 1 đến 600 phút")
+
+        # 11. Genres validation
         if not selected_genres:
             errors.append("Vui lòng chọn ít nhất một thể loại")
         
@@ -831,9 +908,11 @@ def admin_movie_create():
                 # Bỏ imdbRating (NULL) và viewCount (mặc định = 0)
                 conn.execute(text("""
                     INSERT INTO cine.Movie (movieId, title, releaseYear, country, overview, director, cast, 
-                                          trailerUrl, posterUrl, backdropUrl, movieUrl, viewCount, createdAt)
+                                          trailerUrl, posterUrl, backdropUrl, movieUrl, language, budget, revenue, runtime, 
+                                          viewCount, createdAt)
                     VALUES (:movieId, :title, :year, :country, :overview, :director, :cast, 
-                            :trailer, :poster, :backdrop, :movieUrl, 0, GETDATE())
+                            :trailer, :poster, :backdrop, :movieUrl, :language, :budget, :revenue, :runtime,
+                            0, GETDATE())
                 """), {
                     "movieId": movie_id,
                     "title": title,
@@ -845,7 +924,11 @@ def admin_movie_create():
                     "trailer": trailer_url if trailer_url else None,
                     "poster": poster_url if poster_url else None,
                     "backdrop": backdrop_url if backdrop_url else None,
-                    "movieUrl": movie_url if movie_url else None
+                    "movieUrl": movie_url if movie_url else None,
+                    "language": language_value,
+                    "budget": budget_value,
+                    "revenue": revenue_value,
+                    "runtime": runtime_value
                 })
                 
                 # Thêm thể loại cho phim
@@ -864,19 +947,12 @@ def admin_movie_create():
                 carousel_movies_cache['data'] = None
                 carousel_movies_cache['timestamp'] = None
                 
-                # Tính similarity trong background thread (không block response)
-                # Truyền app context vào thread để tránh lỗi "Working outside of application context"
-                app = current_app._get_current_object()
-                similarity_thread = threading.Thread(
-                    target=_calculate_movie_similarity_with_context,
-                    args=(app, movie_id),
-                    daemon=True
-                )
-                similarity_thread.start()
-                current_app.logger.info(f"Started background similarity calculation for movie {movie_id}")
+                # Đưa job tính similarity vào background worker
+                enqueue_similarity_job(movie_id, title)
+                current_app.logger.info(f"Queued similarity calculation for movie {movie_id}")
                 
                 # Thông báo thành công và redirect về trang quản lý phim với movie_id để hiển thị progress
-                flash(f"✅ Thêm phim thành công (ID: {movie_id})", "success")
+                flash(f"Thêm phim thành công (ID: {movie_id})", "success")
                 return redirect(url_for("main.admin_movies", new_movie_id=movie_id))
     
         except Exception as e:
@@ -928,6 +1004,10 @@ def admin_movie_edit(movie_id):
         poster_url = request.form.get("poster_url", "").strip()
         backdrop_url = request.form.get("backdrop_url", "").strip()
         view_count = request.form.get("view_count", "0").strip()
+        language = request.form.get("language", "").strip()
+        budget = request.form.get("budget", "").strip()
+        revenue = request.form.get("revenue", "").strip()
+        runtime = request.form.get("runtime", "").strip()
         selected_genres = request.form.getlist("genres")
         
         # Validation (giống như create)
@@ -993,7 +1073,45 @@ def admin_movie_edit(movie_id):
         except ValueError:
             errors.append("Lượt xem phải là số hợp lệ")
         
-        # 9. Genres validation
+        # 9. Language validation
+        language_value = None
+        language_pattern = r"^[A-Za-zÀ-ỹ0-9 ,.\-()]+$"
+        if language:
+            if len(language) > 50:
+                errors.append("Ngôn ngữ không được quá 50 ký tự")
+            elif not re.match(language_pattern, language):
+                errors.append("Ngôn ngữ chỉ được chứa chữ, số và các ký tự , . - ( )")
+            else:
+                language_value = language
+
+        # 10. Budget validation
+        digits_12_pattern = r"^\d{1,12}$"
+        budget_value = None
+        if budget:
+            if not re.match(digits_12_pattern, budget):
+                errors.append("Ngân sách phải là số dương, tối đa 12 chữ số (không chứa ký tự khác)")
+            else:
+                budget_value = int(budget)
+
+        # 11. Revenue validation
+        revenue_value = None
+        if revenue:
+            if not re.match(digits_12_pattern, revenue):
+                errors.append("Doanh thu phải là số dương, tối đa 12 chữ số (không chứa ký tự khác)")
+            else:
+                revenue_value = int(revenue)
+
+        # 12. Runtime validation
+        runtime_value = None
+        if runtime:
+            if not re.match(r"^\d{1,3}$", runtime):
+                errors.append("Thời lượng chỉ được nhập số (tối đa 3 chữ số)")
+            else:
+                runtime_value = int(runtime)
+                if runtime_value < 1 or runtime_value > 600:
+                    errors.append("Thời lượng phải từ 1 đến 600 phút")
+
+        # 13. Genres validation
         if not selected_genres:
             errors.append("Vui lòng chọn ít nhất một thể loại")
         
@@ -1032,7 +1150,8 @@ def admin_movie_edit(movie_id):
                     SET title = :title, releaseYear = :year, country = :country, 
                         overview = :overview, director = :director, cast = :cast,
                         imdbRating = :rating, trailerUrl = :trailer, 
-                        posterUrl = :poster, backdropUrl = :backdrop, viewCount = :views
+                        posterUrl = :poster, backdropUrl = :backdrop, viewCount = :views,
+                        language = :language, budget = :budget, revenue = :revenue, runtime = :runtime
                     WHERE movieId = :id
                 """), {
                     "id": movie_id,
@@ -1046,7 +1165,11 @@ def admin_movie_edit(movie_id):
                     "trailer": trailer_url if trailer_url else None,
                     "poster": poster_url if poster_url else None,
                     "backdrop": backdrop_url if backdrop_url else None,
-                    "views": views
+                    "views": views,
+                    "language": language_value,
+                    "budget": budget_value,
+                    "revenue": revenue_value,
+                    "runtime": runtime_value
                 })
                 
                 # Xóa thể loại cũ
@@ -1060,7 +1183,7 @@ def admin_movie_edit(movie_id):
                             VALUES (:movieId, :genreId)
                         """), {"movieId": movie_id, "genreId": int(genre_id)})
                 
-                flash("✅ Cập nhật phim thành công!", "success")
+                flash("Cập nhật phim thành công!", "success")
                 return redirect(url_for("main.admin_movies"))
     
         except Exception as e:
@@ -1090,7 +1213,8 @@ def admin_movie_edit(movie_id):
             # Lấy đầy đủ thông tin phim
             movie = conn.execute(text("""
                 SELECT movieId, title, releaseYear, country, overview, director, cast,
-                       imdbRating, trailerUrl, posterUrl, backdropUrl, viewCount
+                       imdbRating, trailerUrl, posterUrl, backdropUrl, viewCount,
+                       language, budget, revenue, runtime
                 FROM cine.Movie
                 WHERE movieId = :id
             """), {"id": movie_id}).mappings().first()
@@ -1121,7 +1245,11 @@ def admin_movie_edit(movie_id):
                 'trailer_url': movie.get('trailerUrl', '') or '',
                 'poster_url': movie.get('posterUrl', '') or '',
                 'backdrop_url': movie.get('backdropUrl', '') or '',
-                'view_count': str(movie.get('viewCount', 0)) if movie.get('viewCount') else '0',
+                'view_count': str(movie.get('viewCount', 0)) if movie.get('viewCount') is not None else '0',
+                'language': movie.get('language', '') or '',
+                'budget': str(movie.get('budget', '')) if movie.get('budget') is not None else '',
+                'revenue': str(movie.get('revenue', '')) if movie.get('revenue') is not None else '',
+                'runtime': str(movie.get('runtime', '')) if movie.get('runtime') is not None else '',
                 'genres': [str(gid) for gid in current_genre_ids]
             })
             
@@ -1159,7 +1287,7 @@ def admin_movie_delete(movie_id):
             # Xóa phim
             conn.execute(text("DELETE FROM cine.Movie WHERE movieId = :id"), {"id": movie_id})
             
-            flash(f"✅ Đã xóa phim '{movie.title}' thành công!", "success")
+            flash(f"Đã xóa phim '{movie.title}' thành công!", "success")
     except Exception as e:
         current_app.logger.error(f"Error deleting movie: {e}", exc_info=True)
         flash(f"❌ Lỗi khi xóa phim: {str(e)}", "error")

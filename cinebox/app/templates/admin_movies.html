@@ -48,6 +48,8 @@
   </div>
   {% endif %}
   
+  <div id="similarity-toast-container" class="similarity-toast-container"></div>
+  
   <!-- Thanh tìm kiếm -->
   <div class="admin-search-bar">
     <form method="GET" action="{{ url_for('main.admin_movies') }}" class="search-form">
@@ -418,6 +420,56 @@
   font-weight: 600;
 }
 
+.similarity-toast-container {
+  position: fixed;
+  top: 100px;
+  right: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 1200;
+  pointer-events: none;
+}
+
+.similarity-toast {
+  min-width: 280px;
+  max-width: 360px;
+  background: rgba(15, 23, 42, 0.95);
+  border-radius: 14px;
+  padding: 14px 18px;
+  color: #fff;
+  font-size: 0.95rem;
+  box-shadow: 0 15px 35px rgba(15, 23, 42, 0.35);
+  border-left: 4px solid var(--primary);
+  animation: toastSlideIn 0.35s ease-out;
+  pointer-events: auto;
+}
+
+.similarity-toast.success {
+  border-color: #22c55e;
+}
+
+.similarity-toast.error {
+  border-color: #ef4444;
+}
+
+.similarity-toast.hide {
+  opacity: 0;
+  transform: translateX(30px);
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
 @media (max-width: 768px) {
   .admin {
     padding: 15px;
@@ -452,22 +504,49 @@
   const progressBar = document.getElementById('similarity-progress-bar');
   const progressText = document.getElementById('similarity-progress-text');
   const progressMessage = document.getElementById('similarity-progress-message');
+  const toastContainer = document.getElementById('similarity-toast-container');
   
   let pollInterval;
   let checkCount = 0;
   const maxChecks = 300; // Tối đa 5 phút (300 * 1 giây)
+  let completedToastShown = false;
+  let errorToastShown = false;
+
+  function showSimilarityToast(message, type = 'success') {
+    if (!toastContainer) return;
+    const toast = document.createElement('div');
+    toast.className = `similarity-toast ${type}`;
+    toast.textContent = message;
+    toastContainer.appendChild(toast);
+    setTimeout(() => {
+      toast.classList.add('hide');
+      setTimeout(() => toast.remove(), 400);
+    }, 6000);
+  }
   
   function updateProgress(data) {
     const progress = data.progress || 0;
     const status = data.status || 'running';
     const message = data.message || '';
+    const movieTitle = data.movieTitle || 'phim vừa thêm';
     
-    progressBar.style.width = progress + '%';
-    progressText.textContent = progress + '%';
-    progressMessage.textContent = message;
+    if (progressBar) {
+      const visualProgress = status === 'queued' && progress < 5 ? 5 : progress;
+      progressBar.style.width = visualProgress + '%';
+      progressText.textContent = visualProgress + '%';
+    }
+    if (progressMessage) {
+      progressMessage.textContent = message;
+    }
     
     if (status === 'completed') {
-      progressBar.style.background = 'linear-gradient(90deg, #10b981, #059669)';
+      if (progressBar) {
+        progressBar.style.background = 'linear-gradient(90deg, #10b981, #059669)';
+      }
+      if (!completedToastShown) {
+        showSimilarityToast(`Đã tính xong similarity cho ${movieTitle}`, 'success');
+        completedToastShown = true;
+      }
       clearInterval(pollInterval);
       // Ẩn progress bar sau 3 giây
       setTimeout(() => {
@@ -480,7 +559,13 @@
         }
       }, 3000);
     } else if (status === 'error') {
-      progressBar.style.background = 'linear-gradient(90deg, #ef4444, #dc2626)';
+      if (progressBar) {
+        progressBar.style.background = 'linear-gradient(90deg, #ef4444, #dc2626)';
+      }
+      if (!errorToastShown) {
+        showSimilarityToast(`Lỗi similarity: ${message}`, 'error');
+        errorToastShown = true;
+      }
       clearInterval(pollInterval);
     }
   }
