@@ -1354,7 +1354,7 @@ def _retrain_cf_model_internal():
         cinebox_dir = os.path.dirname(app_dir)
         
         # Script path - same as routes_old.py
-        script_path = os.path.join(cinebox_dir, 'model_collaborative', 'train_model.py')
+        script_path = os.path.join(cinebox_dir, 'model_collaborative', 'train_collaborative.py')
         script_path = os.path.abspath(script_path)
         
         current_app.logger.info(f"Script path: {script_path}")

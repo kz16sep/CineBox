@@ -11,8 +11,8 @@ _cinebox_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 if _cinebox_dir not in sys.path:
     sys.path.insert(0, _cinebox_dir)
 
-from recommenders.content_based import ContentBasedRecommender
-from recommenders.enhanced_cf import EnhancedCFRecommender
+from recommenders.content_based_recommender import ContentBasedRecommender
+from recommenders.collaborative_recommender import EnhancedCFRecommender
 
 # Global recommender instances
 content_recommender = None
