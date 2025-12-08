@@ -2,6 +2,7 @@
 API routes for recommendations
 """
 
+import random
 from flask import jsonify, request, session, current_app
 from sqlalchemy import text
 from . import main_bp
@@ -261,6 +262,11 @@ def get_personalized_recommendations():
                         
             except Exception as fallback_error:
                 current_app.logger.error(f"Fallback recommendations error: {fallback_error}")
+        
+        # Random shuffle recommendations để không theo score tăng dần
+        if recommendations:
+            random.shuffle(recommendations)
+            current_app.logger.info(f"Shuffled {len(recommendations)} recommendations for randomization")
         
         # Kiểm tra số lượng rating của user để thông báo
         user_rating_count = 0
