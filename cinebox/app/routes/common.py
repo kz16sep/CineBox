@@ -4,6 +4,7 @@ Common utilities, helpers, and shared code for routes
 
 import sys
 import os
+import threading
 from flask import current_app
 
 # Add parent directory to path for imports (cinebox directory)
@@ -80,8 +81,18 @@ def get_poster_or_dummy(poster_url, title):
 
 
 # --- CF retrain dirty-flag helpers ---
-def set_cf_dirty(db_engine=None):
-    """Set CF model dirty flag"""
+# Global state for debounced retrain
+_retrain_timer = None
+_retrain_lock = threading.Lock()
+
+def set_cf_dirty(db_engine=None, trigger_immediate_retrain=True):
+    """
+    Set CF model dirty flag và trigger retrain ngay (với debounce)
+    
+    Args:
+        db_engine: Database engine (optional)
+        trigger_immediate_retrain: Nếu True, trigger retrain ngay với debounce (mặc định: True)
+    """
     try:
         if db_engine is None:
             db_engine = current_app.db_engine
@@ -98,8 +109,126 @@ def set_cf_dirty(db_engine=None):
                 WHEN MATCHED THEN UPDATE SET [value] = 'true'
                 WHEN NOT MATCHED THEN INSERT ([key],[value]) VALUES (s.[key], s.[value]);
             """))
+        
+        # Trigger immediate retrain với debounce nếu được yêu cầu
+        if trigger_immediate_retrain:
+            _trigger_debounced_retrain()
+            
     except Exception as e:
         current_app.logger.error(f"Error setting cf_dirty: {e}")
+
+
+def _trigger_debounced_retrain():
+    """
+    Trigger retrain với debounce (chờ 30 giây sau tương tác cuối cùng)
+    Tránh retrain quá nhiều lần khi có nhiều tương tác liên tiếp
+    """
+    global _retrain_timer
+    
+    try:
+        from flask import current_app
+        import threading
+        import time
+        import os
+        from datetime import datetime
+        
+        with _retrain_lock:
+            # Hủy timer cũ nếu có
+            if _retrain_timer is not None:
+                _retrain_timer.cancel()
+            
+            # Tạo timer mới (30 giây debounce)
+            # Lưu app context để sử dụng trong timer
+            from flask import has_app_context, has_request_context
+            app = current_app._get_current_object() if has_app_context() else None
+            
+            def retrain_after_delay():
+                try:
+                    # Sử dụng app context nếu có
+                    if app:
+                        with app.app_context():
+                            _execute_retrain()
+                    else:
+                        # Fallback: gọi trực tiếp HTTP
+                        _execute_retrain_http()
+                except Exception as e:
+                    if app and has_app_context():
+                        current_app.logger.error(f"Error in debounced retrain: {e}", exc_info=True)
+            
+            def _execute_retrain():
+                """Execute retrain với app context"""
+                # Kiểm tra lại xem có cần retrain không
+                state = get_cf_state()
+                dirty = (state.get('cf_dirty') == 'true')
+                
+                if not dirty:
+                    current_app.logger.info("CF model no longer dirty, skipping retrain")
+                    return
+                
+                # Kiểm tra thời gian từ lần retrain cuối
+                last = state.get('cf_last_retrain')
+                allow = True
+                if last:
+                    try:
+                        last_dt = datetime.fromisoformat(last)
+                        from datetime import timedelta
+                        from config import get_config
+                        config = get_config()
+                        min_interval = getattr(config, 'RETRAIN_INTERVAL_MINUTES', 30)
+                        allow = datetime.utcnow() - last_dt >= timedelta(minutes=min_interval)
+                    except Exception:
+                        allow = True
+                
+                if not allow:
+                    current_app.logger.info("Too soon since last retrain, skipping")
+                    return
+                
+                # Trigger retrain
+                current_app.logger.info("🚀 Triggering immediate CF model retrain after interaction...")
+                _execute_retrain_http()
+            
+            def _execute_retrain_http():
+                """Execute retrain via HTTP"""
+                import requests
+                from config import get_config
+                config = get_config()
+                base = config.WORKER_BASE_URL if hasattr(config, 'WORKER_BASE_URL') else 'http://localhost:5000'
+                secret = os.environ.get('INTERNAL_RETRAIN_SECRET', 'internal-retrain-secret-key-change-in-production')
+                
+                try:
+                    resp = requests.post(
+                        f"{base}/api/retrain_cf_model_internal",
+                        json={"secret": secret},
+                        headers={"X-Internal-Secret": secret},
+                        timeout=300
+                    )
+                    
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data and data.get('success'):
+                            if app:
+                                with app.app_context():
+                                    clear_cf_dirty_and_set_last(datetime.utcnow().isoformat())
+                            if has_app_context():
+                                current_app.logger.info("✅ Immediate retrain completed successfully")
+                        else:
+                            if has_app_context():
+                                current_app.logger.warning(f"Immediate retrain failed: {data.get('message') if data else 'Unknown error'}")
+                    else:
+                        if has_app_context():
+                            current_app.logger.warning(f"Immediate retrain HTTP error: {resp.status_code}")
+                except Exception as e:
+                    if has_app_context():
+                        current_app.logger.error(f"Error calling retrain endpoint: {e}", exc_info=True)
+            
+            # Tạo timer với 30 giây debounce
+            _retrain_timer = threading.Timer(30.0, retrain_after_delay)
+            _retrain_timer.daemon = True
+            _retrain_timer.start()
+            current_app.logger.info("⏱️ Scheduled immediate retrain in 30 seconds (debounced)")
+            
+    except Exception as e:
+        current_app.logger.error(f"Error triggering debounced retrain: {e}")
 
 
 def get_cf_state(db_engine=None):

@@ -743,33 +743,38 @@ def _load_recent_watched(user_id, limit=HOME_SECTION_LIMIT, use_cache=True):
 
     try:
         with current_app.db_engine.connect() as conn:
+            # Lấy 12 phim đã xem mới nhất (loại bỏ trùng lặp, mỗi phim chỉ xuất hiện 1 lần)
+            # Lấy theo lần xem mới nhất của mỗi phim
             history_rows = conn.execute(text(f"""
-                WITH recent_history AS (
-                    SELECT TOP {limit}
+                WITH ranked_history AS (
+                    SELECT 
                         vh.movieId,
-                        MAX(vh.startedAt) AS lastWatchedAt,
-                        MAX(vh.finishedAt) AS lastFinishedAt,
-                        MAX(vh.progressSec) AS lastProgressSec,
-                        COUNT(vh.historyId) AS watch_count
+                        vh.startedAt AS lastWatchedAt,
+                        vh.finishedAt AS lastFinishedAt,
+                        vh.progressSec AS lastProgressSec,
+                        m.title,
+                        m.posterUrl,
+                        m.releaseYear,
+                        m.durationMin,
+                        CASE WHEN vh.finishedAt IS NOT NULL THEN 1 ELSE 0 END AS isCompleted,
+                        ROW_NUMBER() OVER (PARTITION BY vh.movieId ORDER BY vh.startedAt DESC) AS rn
                     FROM cine.ViewHistory vh
+                    JOIN cine.Movie m ON vh.movieId = m.movieId
                     WHERE vh.userId = :user_id
-                    GROUP BY vh.movieId
-                    ORDER BY MAX(vh.startedAt) DESC
                 )
                 SELECT TOP {limit}
-                    rh.movieId,
-                    m.title,
-                    m.posterUrl,
-                    m.releaseYear,
-                    m.durationMin,
-                    rh.lastWatchedAt,
-                    rh.lastFinishedAt,
-                    rh.watch_count,
-                    CASE WHEN rh.lastFinishedAt IS NOT NULL THEN 1 ELSE 0 END AS isCompleted,
-                    rh.lastProgressSec
-                FROM recent_history rh
-                JOIN cine.Movie m ON rh.movieId = m.movieId
-                ORDER BY rh.lastWatchedAt DESC
+                    movieId,
+                    lastWatchedAt,
+                    lastFinishedAt,
+                    lastProgressSec,
+                    title,
+                    posterUrl,
+                    releaseYear,
+                    durationMin,
+                    isCompleted
+                FROM ranked_history
+                WHERE rn = 1
+                ORDER BY lastWatchedAt DESC
             """), {"user_id": user_id}).mappings().all()
     except Exception as e:
         current_app.logger.error(f"Error loading recent watched movies: {e}", exc_info=True)
@@ -790,7 +795,7 @@ def _load_recent_watched(user_id, limit=HOME_SECTION_LIMIT, use_cache=True):
             "genres": "",
             "lastWatchedAt": row["lastWatchedAt"],
             "lastFinishedAt": row["lastFinishedAt"],
-            "watchCount": int(row["watch_count"]),
+            "watchCount": 1,  # Mỗi record là 1 lần xem
             "isCompleted": bool(row["isCompleted"]),
             "progressPercent": round(progress_percent, 1)
         })
