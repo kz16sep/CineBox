@@ -3,6 +3,7 @@ Movie browsing routes: home, detail, watch, search, genre, all movies
 """
 
 import time
+import random
 import threading
 import re
 import requests
@@ -756,6 +757,7 @@ def _load_recent_watched(user_id, limit=HOME_SECTION_LIMIT, use_cache=True):
                         m.posterUrl,
                         m.releaseYear,
                         m.durationMin,
+                        COUNT(*) OVER (PARTITION BY vh.movieId) AS watchCount,
                         CASE WHEN vh.finishedAt IS NOT NULL THEN 1 ELSE 0 END AS isCompleted,
                         ROW_NUMBER() OVER (PARTITION BY vh.movieId ORDER BY vh.startedAt DESC) AS rn
                     FROM cine.ViewHistory vh
@@ -771,6 +773,7 @@ def _load_recent_watched(user_id, limit=HOME_SECTION_LIMIT, use_cache=True):
                     posterUrl,
                     releaseYear,
                     durationMin,
+                    watchCount,
                     isCompleted
                 FROM ranked_history
                 WHERE rn = 1
@@ -795,7 +798,7 @@ def _load_recent_watched(user_id, limit=HOME_SECTION_LIMIT, use_cache=True):
             "genres": "",
             "lastWatchedAt": row["lastWatchedAt"],
             "lastFinishedAt": row["lastFinishedAt"],
-            "watchCount": 1,  # Mỗi record là 1 lần xem
+            "watchCount": row.get("watchCount") or 1,
             "isCompleted": bool(row["isCompleted"]),
             "progressPercent": round(progress_percent, 1)
         })
@@ -822,7 +825,8 @@ def api_home_recent_watched():
     user_id = session.get("user_id")
     if not user_id:
         return jsonify({"success": False, "message": "Chưa đăng nhập"}), 401
-    movies = _load_recent_watched(user_id, limit=limit)
+    # Không dùng cache để luôn cập nhật mỗi lần vào trang chủ
+    movies = _load_recent_watched(user_id, limit=limit, use_cache=False)
     return jsonify({"success": True, "movies": movies})
 
 
@@ -895,14 +899,22 @@ def detail(movie_id: int):
     # Get related movies
     related_movies = []
     try:
-        # Sử dụng content_recommender từ common (đã được khởi tạo)
+        # Lấy top 20 theo similarity rồi chọn ngẫu nhiên 8 phim để hiển thị
+        target_limit = 20
+        display_limit = 8
+
         if content_recommender:
-            related_movies_raw = content_recommender.get_related_movies(movie_id, limit=12)
+            related_movies_raw = content_recommender.get_related_movies(movie_id, limit=target_limit)
         else:
-            # Fallback: khởi tạo mới nếu chưa có
-            from recommenders.content_based import ContentBasedRecommender
+            # Fallback: khởi tạo mới nếu chưa có (sửa đúng module)
+            from recommenders.content_based_recommender import ContentBasedRecommender
             recommender = ContentBasedRecommender(current_app.db_engine)
-            related_movies_raw = recommender.get_related_movies(movie_id, limit=12)
+            related_movies_raw = recommender.get_related_movies(movie_id, limit=target_limit)
+        
+        sampled_movies = random.sample(
+            related_movies_raw,
+            k=min(display_limit, len(related_movies_raw))
+        ) if related_movies_raw else []
         
         related_movies = [
             {
@@ -915,7 +927,7 @@ def detail(movie_id: int):
                 "similarity": movie.get("similarity", 0),
                 "genres": movie.get("genres", "")
             }
-            for movie in related_movies_raw
+            for movie in sampled_movies
         ]
     except Exception as e:
         current_app.logger.error(f"Error getting related movies: {e}")
@@ -992,52 +1004,51 @@ def _prepare_watch_data(movie_id: int, is_trailer: bool = False):
             if tmdb_id:
                 tmdb_video = get_tmdb_videos(tmdb_id, is_trailer=False)
     
-    # Tăng view count và lưu lịch sử xem
-    if not is_trailer:
-        with current_app.db_engine.begin() as conn:
-            conn.execute(text(
-                "UPDATE cine.Movie SET viewCount = viewCount + 1 WHERE movieId = :id"
-            ), {"id": movie_id})
-            
-            user_id = session.get("user_id")
-            if user_id:
-                try:
-                    max_history_id_result = conn.execute(text("""
-                        SELECT ISNULL(MAX(historyId), 0) FROM cine.ViewHistory
-                    """)).fetchone()
-                    max_history_id = max_history_id_result[0] if max_history_id_result else 0
-                    new_history_id = max_history_id + 1
-                    
-                    conn.execute(text("""
-                        INSERT INTO cine.ViewHistory (historyId, userId, movieId, startedAt, deviceType, ipAddress, userAgent)
-                        VALUES (:history_id, :user_id, :movie_id, GETDATE(), :device_type, :ip_address, :user_agent)
-                    """), {
-                        "history_id": new_history_id,
-                        "user_id": user_id,
-                        "movie_id": movie_id,
-                        "device_type": request.headers.get('User-Agent', 'Unknown')[:50],
-                        "ip_address": request.remote_addr or "unknown",
-                        "user_agent": request.headers.get('User-Agent', 'unknown')[:500]
-                    })
-                    
-                    # Cập nhật lastLoginAt
-                    conn.execute(text("""
-                        UPDATE cine.[User] SET lastLoginAt = GETDATE() WHERE userId = :user_id
-                    """), {"user_id": user_id})
-                    
-                    # Xóa phim này khỏi recommendations đã lưu
-                    conn.execute(text("""
-                        DELETE FROM cine.PersonalRecommendation 
-                        WHERE userId = :user_id AND movieId = :movie_id
-                    """), {"user_id": user_id, "movie_id": movie_id})
-                    
-                    # Xóa khỏi ColdStartRecommendations
-                    conn.execute(text("""
-                        DELETE FROM cine.ColdStartRecommendations 
-                        WHERE userId = :user_id AND movieId = :movie_id
-                    """), {"user_id": user_id, "movie_id": movie_id})
-                except Exception as e:
-                    current_app.logger.error(f"Error saving view history: {e}")
+    # Tăng view count và lưu lịch sử xem (áp dụng cho cả trailer và xem phim)
+    with current_app.db_engine.begin() as conn:
+        conn.execute(text(
+            "UPDATE cine.Movie SET viewCount = viewCount + 1 WHERE movieId = :id"
+        ), {"id": movie_id})
+        
+        user_id = session.get("user_id")
+        if user_id:
+            try:
+                max_history_id_result = conn.execute(text("""
+                    SELECT ISNULL(MAX(historyId), 0) FROM cine.ViewHistory
+                """)).fetchone()
+                max_history_id = max_history_id_result[0] if max_history_id_result else 0
+                new_history_id = max_history_id + 1
+                
+                conn.execute(text("""
+                    INSERT INTO cine.ViewHistory (historyId, userId, movieId, startedAt, deviceType, ipAddress, userAgent)
+                    VALUES (:history_id, :user_id, :movie_id, GETDATE(), :device_type, :ip_address, :user_agent)
+                """), {
+                    "history_id": new_history_id,
+                    "user_id": user_id,
+                    "movie_id": movie_id,
+                    "device_type": request.headers.get('User-Agent', 'Unknown')[:50],
+                    "ip_address": request.remote_addr or "unknown",
+                    "user_agent": request.headers.get('User-Agent', 'unknown')[:500]
+                })
+                
+                # Cập nhật lastLoginAt
+                conn.execute(text("""
+                    UPDATE cine.[User] SET lastLoginAt = GETDATE() WHERE userId = :user_id
+                """), {"user_id": user_id})
+                
+                # Xóa phim này khỏi recommendations đã lưu
+                conn.execute(text("""
+                    DELETE FROM cine.PersonalRecommendation 
+                    WHERE userId = :user_id AND movieId = :movie_id
+                """), {"user_id": user_id, "movie_id": movie_id})
+                
+                # Xóa khỏi ColdStartRecommendations
+                conn.execute(text("""
+                    DELETE FROM cine.ColdStartRecommendations 
+                    WHERE userId = :user_id AND movieId = :movie_id
+                """), {"user_id": user_id, "movie_id": movie_id})
+            except Exception as e:
+                current_app.logger.error(f"Error saving view history: {e}")
     
     # Lấy genres
     with current_app.db_engine.connect() as conn:
@@ -1141,12 +1152,20 @@ def _prepare_watch_data(movie_id: int, is_trailer: bool = False):
     # Lấy phim liên quan
     related_movies = []
     try:
+        target_limit = 20
+        display_limit = 8
+
         if content_recommender:
-            related_movies_raw = content_recommender.get_related_movies(movie_id, limit=12)
+            related_movies_raw = content_recommender.get_related_movies(movie_id, limit=target_limit)
         else:
-            from recommenders.content_based import ContentBasedRecommender
+            from recommenders.content_based_recommender import ContentBasedRecommender
             recommender = ContentBasedRecommender(current_app.db_engine)
-            related_movies_raw = recommender.get_related_movies(movie_id, limit=12)
+            related_movies_raw = recommender.get_related_movies(movie_id, limit=target_limit)
+        
+        sampled_movies = random.sample(
+            related_movies_raw,
+            k=min(display_limit, len(related_movies_raw))
+        ) if related_movies_raw else []
         
         related_movies = [
             {
@@ -1159,7 +1178,7 @@ def _prepare_watch_data(movie_id: int, is_trailer: bool = False):
                 "similarity": movie.get("similarity", 0.0),
                 "genres": movie.get("genres", "")
             }
-            for movie in related_movies_raw
+            for movie in sampled_movies
         ]
     except Exception as e:
         current_app.logger.error(f"Error getting related movies: {e}")
