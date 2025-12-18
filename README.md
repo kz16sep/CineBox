@@ -39,7 +39,7 @@ CineBox là đồ án tốt nghiệp xây dựng hệ thống gợi ý phim sử
 **File:** `app/templates/home.html`
 
 <p align="center">
-  <img src="docs/screenshots/home.png" alt="Home Page" width="800">
+  <img width="1396" height="893" alt="home" src="https://github.com/user-attachments/assets/adab0dd8-9d0c-4bfe-a5bf-c53b04ab8e0e" />
 </p>
 
 **Chức năng:**
@@ -56,7 +56,7 @@ CineBox là đồ án tốt nghiệp xây dựng hệ thống gợi ý phim sử
 **Files:** `app/templates/login.html`, `app/templates/register.html`
 
 <p align="center">
-  <img src="docs/screenshots/login.png" alt="Login Page" width="800">
+  <img width="1305" height="888" alt="login" src="https://github.com/user-attachments/assets/005cde21-1b9b-4072-9128-6803dafac0ac" />
 </p>
 
 **Chức năng:**
@@ -71,7 +71,7 @@ CineBox là đồ án tốt nghiệp xây dựng hệ thống gợi ý phim sử
 **File:** `app/templates/detail.html`
 
 <p align="center">
-  <img src="docs/screenshots/detail.png" alt="Movie Detail Page" width="800">
+  <img width="849" height="896" alt="detail" src="https://github.com/user-attachments/assets/43c4d7ff-64dc-4813-981e-711e60fdd402" />
 </p>
 
 **Chức năng:**
@@ -92,7 +92,7 @@ CineBox là đồ án tốt nghiệp xây dựng hệ thống gợi ý phim sử
 **File:** `app/templates/watch.html`
 
 <p align="center">
-  <img src="docs/screenshots/watch.png" alt="Watch Page" width="800">
+  <img width="853" height="896" alt="watch" src="https://github.com/user-attachments/assets/49ade4c5-7877-4d02-a2ad-e5371b763aff" />
 </p>
 
 **Chức năng:**
@@ -107,7 +107,7 @@ CineBox là đồ án tốt nghiệp xây dựng hệ thống gợi ý phim sử
 **File:** `app/templates/search.html`
 
 <p align="center">
-  <img src="docs/screenshots/search.png" alt="Search Page" width="800">
+  <img width="1555" height="916" alt="search" src="https://github.com/user-attachments/assets/7f3ef9ae-ffb6-4968-a1b2-89a62609df78" />
 </p>
 
 **Chức năng:**
@@ -132,7 +132,7 @@ CineBox là đồ án tốt nghiệp xây dựng hệ thống gợi ý phim sử
 **File:** `app/templates/account.html`
 
 <p align="center">
-  <img src="docs/screenshots/account.png" alt="Account Page" width="800">
+ <img width="832" height="899" alt="account" src="https://github.com/user-attachments/assets/3f2e8aa8-bc89-4713-bb78-3370ebec800b" />
 </p>
 
 **Chức năng:**
@@ -172,7 +172,7 @@ CineBox là đồ án tốt nghiệp xây dựng hệ thống gợi ý phim sử
 **Files:** `app/templates/admin_*.html`
 
 <p align="center">
-  <img src="docs/screenshots/admin_dashboard.png" alt="Admin Dashboard" width="800">
+  <img width="837" height="897" alt="admin_dashboard" src="https://github.com/user-attachments/assets/46104869-26c3-47dd-905c-f50ffa7bf8a9" />
 </p>
 
 **Chức năng:**
